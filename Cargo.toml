@@ -1,0 +1,28 @@
+[package]
+name = "olive-browser"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+description = "A lightweight Rust browser foundation: HTML parsing and an arena DOM"
+license = "Apache-2.0"
+repository = "https://github.com/mtzahor/olive-browser"
+readme = "README.md"
+
+[lib]
+name = "olive_html"
+
+[[bin]]
+name = "olive"
+path = "src/main.rs"
+
+[dependencies]
+html5ever = "0.39.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
