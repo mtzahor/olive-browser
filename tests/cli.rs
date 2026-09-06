@@ -49,7 +49,10 @@ fn help_and_version() {
             .unwrap()
             .contains("Usage:")
     );
-    assert_eq!(run(b"", &["--version"]).stdout, b"olive 0.0.1\n");
+    assert_eq!(
+        run(b"", &["--version"]).stdout,
+        format!("olive {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+    );
 }
 
 #[test]

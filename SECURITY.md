@@ -1,15 +1,21 @@
-# Security boundary in 0.0.1
+# Security boundary in 0.0.2
 
-Olive 0.0.1 parses local or stdin UTF-8 HTML into an inert DOM. It does not load
-external resources, resolve URLs, execute JavaScript, enforce CSP, or render
-HTML. Script content and event-handler attributes remain in the DOM as data;
+Olive 0.0.2 parses local or stdin UTF-8 HTML into an inert DOM. The optional GUI
+renders a basic text presentation of that DOM. It does not load external
+resources, resolve URLs, execute JavaScript, enforce CSP, or apply page CSS.
+Script content and event-handler attributes remain in the DOM as data;
 **the parser is not an HTML sanitizer**.
 
-The CLI accepts at most 1 MiB. Library callers can configure this limit.
+The GUI and CLI accept at most 1 MiB. Library callers can configure this limit.
 Recovery diagnostics are capped at 64 by default and 512 bytes per message.
 Tree output escapes terminal control characters and limits indentation.
 Olive's flat arena avoids ownership cycles and recursive DOM drop, and all
 first-party Rust targets forbid unsafe code.
+
+The GUI adds a 200,000-character / 5,000-block display limit, reads files on one
+background worker, and retains the previous page if a new file cannot be read.
+Its font and native UI dependencies expand the trust boundary beyond the parser.
+Links do not navigate; page-controlled resources are never opened.
 
 These controls do not provide a hard memory ceiling or processing deadline.
 DOM construction expands input, parser recovery can be expensive, allocations
