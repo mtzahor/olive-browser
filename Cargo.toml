@@ -1,12 +1,13 @@
 [package]
 name = "olive-browser"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.85"
 description = "A lightweight Rust browser foundation: HTML parsing and an arena DOM"
 license = "Apache-2.0"
 repository = "https://github.com/mtzahor/olive-browser"
 readme = "README.md"
+default-run = "olive"
 
 [lib]
 name = "olive_html"
@@ -15,8 +16,19 @@ name = "olive_html"
 name = "olive"
 path = "src/main.rs"
 
+[[bin]]
+name = "olive-gui"
+path = "src/gui/main.rs"
+required-features = ["gui"]
+
+[features]
+default = []
+gui = ["dep:eframe", "dep:rfd"]
+
 [dependencies]
 html5ever = "0.39.0"
+eframe = { version = "0.36.1", optional = true, default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+rfd = { version = "0.17.2", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
