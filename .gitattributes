@@ -1,0 +1,2 @@
+# HTML conformance fixtures must retain their exact upstream bytes on every OS.
+tests/fixtures/html5lib/*.dat -text
