@@ -245,6 +245,13 @@ impl eframe::App for OliveApp {
                         .unwrap_or_else(|| "Local HTML viewer".into());
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
+                        if loaded.page.css_ignored > 0 {
+                            ui.label(RichText::new("Some CSS is unsupported").size(11.0).weak())
+                                .on_hover_text(format!(
+                                    "{} CSS rules or declarations were ignored.",
+                                    loaded.page.css_ignored
+                                ));
+                        }
                         if loaded.corrections > 0 {
                             ui.label(
                                 RichText::new("Opened with HTML corrections")
@@ -263,7 +270,14 @@ impl eframe::App for OliveApp {
                 });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(PAPER))
+            .frame(
+                egui::Frame::new().fill(
+                    self.loaded
+                        .as_ref()
+                        .and_then(|loaded| loaded.page.background)
+                        .unwrap_or(PAPER),
+                ),
+            )
             .show(ui, |ui| {
                 if let Some(error) = &self.error {
                     egui::Frame::new()
@@ -278,7 +292,7 @@ impl eframe::App for OliveApp {
                         });
                 }
                 if let Some(loaded) = &mut self.loaded {
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::both()
                         .id_salt(("document", self.generation))
                         .auto_shrink([false, false])
                         .show(ui, |ui| {

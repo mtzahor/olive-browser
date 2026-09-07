@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>A little more color — Olive Browser</title>
+  <style>
+    html { font-size: 17px; }
+    body { background: #f2f0e8; color: #303b2a; line-height: 1.55; }
+    main { max-width: 680px; margin: 0 auto; }
+    .eyebrow { color: #6c7e42; font-size: 12px; font-weight: 700; margin: 0 0 14px; }
+    h1 { font-size: 42px; line-height: 1.12; font-weight: 700; margin: 0 0 18px; }
+    .intro { color: #68715f; font-size: 19px; margin: 0 0 28px; }
+    .card { background: #fffef9; border: 1px solid #d6dbc9; border-radius: 12px; padding: 24px; margin: 0 0 18px; }
+    h2 { font-size: 23px; margin: 0 0 12px; }
+    .card > p { margin: 0 0 12px; }
+    .card .accent { color: #66812c; font-weight: 700; }
+    .note { background: #e5ecd4; color: #415327; padding: 14px 18px; border-radius: 7px; margin: 18px 0 0; }
+    #cascade { color: #516d2c; }
+    .muted { color: #78816e; font-size: 14px; }
+    code { font-size: 14px; background: #edf0e4; }
+    pre { white-space: pre-wrap; font-size: 14px; background: #edf0e4; padding: 16px; margin: 16px 0 0; border-radius: 7px; }
+    footer { text-align: center; color: #78816e; font-size: 12px; margin: 26px 0 0; }
+    .hidden-example { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">OLIVE BROWSER / 0.0.3</p>
+    <h1>A little more color.<br>A little more Olive.</h1>
+    <p class="intro">The same lightweight reader, now with CSS.<br>Typography, color, and room to breathe.</p>
+    <section class="card">
+      <h2>Styles that belong together</h2>
+      <p>These nested boxes use <span class="accent">real CSS rules</span> for their backgrounds, borders, padding, and spacing. Resize the window and the content flows with it.</p>
+      <div class="note">Text inherits its color and font settings. Each box keeps its own background and spacing.</div>
+    </section>
+    <section class="card">
+      <h2>The cascade, in action</h2>
+      <p id="cascade">An ID selector gives this paragraph its olive green.</p>
+      <p style="color: #965d32; font-style: italic">An inline style makes this sentence warm and italic.</p>
+      <p class="muted">Styles can come from a style element or a style attribute.</p>
+      <pre> .card { padding: 24px; }
+ .card .accent { color: #66812c; }
+ #cascade { color: #516d2c; }</pre>
+    </section>
+    <div class="hidden-example">This entire subtree is hidden by CSS.</div>
+    <footer>Local HTML. Rust at heart. An open browser, one step at a time.</footer>
+  </main>
+</body>
+</html>

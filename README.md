@@ -1,7 +1,7 @@
 # Olive Browser 🫒
 
 An open, lightweight browser project written in Rust, with security as a design
-goal. **Version 0.0.2 adds a simple native GUI for opening and reading local HTML files.**
+goal. **Version 0.0.3 adds a CSS parser and styled rendering to the native HTML viewer.**
 
 ## Try it
 
@@ -11,7 +11,7 @@ GUI, then:
 ```sh
 cargo run --locked --features gui --bin olive-gui
 # Optionally open a document at launch:
-cargo run --locked --features gui --bin olive-gui -- examples/reading.html
+cargo run --locked --features gui --bin olive-gui -- examples/styled.html
 ```
 
 Click **Open HTML…**, press **Cmd+O** on macOS / **Ctrl+O** elsewhere, or drop a
@@ -95,7 +95,7 @@ through `Element::template_contents`; ordinary descendant traversal excludes
 those fragments. `Document::write_tree` includes them. `node_count()` counts all
 allocated nodes, including nodes detached during HTML error recovery.
 
-## Rendering in 0.0.2
+## Rendering in 0.0.3
 
 The GUI calls `olive_html::parse_reader`, walks the resulting DOM, and builds a
 small text presentation. It does not delegate HTML to a webview or reparse the
@@ -105,16 +105,77 @@ text, line breaks, preformatted/code text, block quotes, and horizontal rules.
 Links are styled but do not navigate. Images show their alt text; tables flow
 as text rows. Text can be selected and copied.
 
-This is a basic semantic viewer, not a CSS layout engine. Stylesheets and style
-attributes are ignored. Scripts, templates, hidden subtrees, embedded documents,
-and foreign SVG/MathML trees are not displayed. No URLs, images, fonts from the
-page, or other external resources are loaded. Form controls are not interactive.
+### CSS support
 
-File reading, parsing, and DOM conversion run on one background worker. The UI
-keeps only the presentation of the current file, reuses text layout between
-repaints, and sleeps when idle. The existing 1 MiB input limit remains in place.
-Preview output is additionally limited to 200,000 text characters and 5,000
-blocks, with a visible notice when truncated, to bound text-layout work.
+Embedded `<style>` elements and inline `style` attributes feed an optional Rust
+CSS engine. Tokenization and declaration/rule recovery use
+[Servo's cssparser 0.37.0](https://docs.rs/cssparser/0.37.0/cssparser/), which
+implements [CSS Syntax Level 3](https://www.w3.org/TR/css-syntax-3/).
+Olive implements a bounded subset of selectors, the
+[author cascade and inheritance](https://www.w3.org/TR/css-cascade-5/), and block
+layout. This milestone does not claim full CSS conformance.
+
+| Area | Supported |
+| --- | --- |
+| Sources | HTML style elements, plain `screen`/`all` media types, inline styles |
+| Selectors | Type, universal `*`, class, ID, compounds, comma groups, descendant and child `>` combinators; CSS identifier escapes |
+| Cascade | HTML defaults, author specificity, source order, inline precedence, `!important`, `inherit`, `initial`, `unset` |
+| Text | `color`, `font-size`, numeric/normal/bold `font-weight`, `font-style`, `font-family` fallback, `line-height`, underline/line-through `text-decoration`, `text-align` left/center/right |
+| Whitespace | `normal`, `pre`, `pre-wrap`, `nowrap` (wrapping mode is chosen per text block) |
+| Boxes | `display: block/inline/none`, `width`, `max-width`, minimum content `height`, margin/padding shorthands and sides, horizontal auto margins |
+| Painting | `background-color` and color-only `background`, uniform solid `border`, `border-width/style/color`, single-value `border-radius` |
+| Values | `px`, `em`, `rem`, percentages for widths/spacing/font sizes, unitless zero, named/hex sRGB colors, `rgb()`/`rgba()`, `transparent`, `currentColor` |
+
+Nested block backgrounds and borders surround their children, and widths reflow
+on resize. Text remains selectable. Long unwrapped lines and wide boxes scroll
+horizontally. The example [styled.html](examples/styled.html) demonstrates the
+supported features; [reading.html](examples/reading.html) exercises HTML defaults.
+The HTML/body background also colors the document viewport.
+
+The layout is deliberately limited: margins add without collapsing; boxes use
+content-box sizing and grow to fit their content even with a declared height.
+Inline elements support text formatting and text backgrounds, not inline box
+padding/borders. Font names choose between the bundled proportional and
+monospace fonts; arbitrary system/web fonts are not loaded. Font sizes are
+clamped to 1–256 logical pixels, lengths to ±10,000, line height to 1–1,024, and
+painted corner radii to 255. These are preview limits, not CSS conformance rules.
+
+Linked stylesheets and all at-rules (including imports, media-query blocks and
+font faces), pseudo/attribute/sibling selectors, CSS nesting, variables,
+`calc()`, flex/grid, positioning, floats, images, gradients and animations are
+not implemented. Unsupported selectors reject their whole selector group;
+unsupported or malformed declarations are skipped without discarding valid
+neighbors. The status bar reports skipped CSS. Scripts, templates, `hidden`
+subtrees, embedded documents and foreign SVG/MathML trees stay undisplayed even
+when author CSS tries to show them. Links and form controls remain inert.
+No URLs or external resources are loaded.
+
+File reading, HTML/CSS parsing, and DOM conversion run on one background worker.
+The UI keeps only the presentation of the current file, reuses text layouts
+between repaints, and sleeps when idle. The 1 MiB input limit remains in place.
+Preview output is limited to 200,000 text characters, 5,000 text/rule blocks and
+10,000 block boxes. CSS has a 256 KiB combined stylesheet/inline budget, 2,048
+rules, 128 declarations per rule or style attribute, 64 selectors per group,
+32 compounds per selector, and 64 simple selectors per compound. Matching uses
+a shared two-million-step budget per document. A visible notice reports display
+or CSS processing limits; excess content/styles may be omitted.
+
+The library exposes `olive_html::css` with `--features css` independently of the
+GUI (also tested on Rust 1.85):
+
+```rust
+# #[cfg(feature = "css")]
+# {
+use olive_html::css::Stylesheet;
+let sheet = Stylesheet::parse("p { color: olive; padding: 1em; }");
+assert_eq!(sheet.rule_count(), 1);
+# }
+```
+
+Use `Stylesheet::from_document` to collect embedded styles and `compute` for
+elements in parent-before-child order, sharing one `StyleBudget` per document.
+The GUI enables this feature automatically. The default HTML-only build keeps
+its existing dependency footprint and CLI behavior.
 
 ## HTML parser standard and scope
 
@@ -149,13 +210,14 @@ parsing as a public API, and legacy character-encoding detection. A `<meta chars
 UTF-8 input contract. Scripting is always disabled,
 so `<noscript>` is parsed accordingly.
 
-CSS layout, graphical resources, networking, JavaScript, and process isolation
-belong to future milestones.
+Full CSS layout, graphical resources, networking, JavaScript, and process
+isolation belong to future milestones.
 
 ## Design
 
 - All Olive implementation code is Rust, with `unsafe_code = "forbid"`.
-- One parser dependency: `html5ever`. The optional GUI adds `eframe`/egui using
+- The default HTML parser depends on `html5ever`; the optional CSS engine adds
+  `cssparser`. The optional GUI adds `eframe`/egui using
   its OpenGL backend and `rfd` for native file dialogs. A webview, WGPU backend,
   and link-opening integration are not enabled. Transitive dependencies are
   locked; the unsafe-code prohibition applies to Olive, not its dependencies.
@@ -179,6 +241,7 @@ cargo build --release --locked --all-features
 cargo doc --locked --no-deps --all-features
 # Parser-only compatibility check:
 cargo +1.85.0 test --locked
+cargo +1.85.0 test --locked --features css
 ```
 
 Tests cover parser behavior, CLI input/error handling, resource limits,
@@ -187,9 +250,10 @@ The conformance harness compares all **112 document trees** in a pinned html5lib
 fixture; [fixture provenance and license](tests/fixtures/html5lib/README.md) are
 included. This is a subset of conformance tests, not the full WPT suite.
 
-GUI tests focus on DOM-to-presentation behavior, display limits, and file-load
-errors. CI builds the GUI and runs tests on Linux, macOS, and Windows, checks
-formatting and Clippy, and checks the parser on Rust 1.85. Native interaction
+CSS tests cover selectors, cascade, inheritance, values, recovery and resource
+limits. GUI tests cover styled DOM conversion, nested box geometry and paint
+order, whitespace, reflow/layout reuse, display limits and file-load errors. CI builds the GUI and runs tests on Linux, macOS, and Windows, checks
+formatting and Clippy, and checks the HTML/CSS parsers on Rust 1.85. Native interaction
 (file selection, scrolling, resizing, and cancellation) also needs a manual
 smoke test on a desktop. Dependency updates should refresh the
 lockfile and re-run parser and conformance tests before merging.
