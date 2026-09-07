@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Olive Browser icon</title>
+  <desc>A browser window framing an olive leaf.</desc>
+
+  <!-- A warm, paper-like tile keeps the mark legible in light and dark docks. -->
+  <rect width="1024" height="1024" rx="220" fill="#F4F2E8"/>
+  <rect x="56" y="56" width="912" height="912" rx="202" fill="#2F3927"/>
+  <rect x="88" y="88" width="848" height="848" rx="174" fill="#F8F7F0"/>
+
+  <!-- Browser chrome. -->
+  <path d="M88 262h848v-80c0-52.01-42.19-94-94.2-94H182.2C130.19 88 88 129.99 88 182v80Z" fill="#5C7137"/>
+  <circle cx="160" cy="176" r="18" fill="#DCE6C9"/>
+  <circle cx="220" cy="176" r="18" fill="#DCE6C9"/>
+  <circle cx="280" cy="176" r="18" fill="#DCE6C9"/>
+  <rect x="388" y="144" width="410" height="64" rx="32" fill="#809655" opacity=".72"/>
+  <circle cx="430" cy="176" r="11" fill="#EAF0DF"/>
+  <path d="M477 176h278" stroke="#EAF0DF" stroke-width="14" stroke-linecap="round" opacity=".92"/>
+
+  <!-- The page becomes a soft compass/globe, tying browsing to discovery. -->
+  <circle cx="512" cy="585" r="248" fill="#E4EBCD"/>
+  <circle cx="512" cy="585" r="248" fill="none" stroke="#B7C992" stroke-width="18"/>
+  <path d="M294 585h436M512 337c-70 70-104 153-104 248s34 178 104 248M512 337c70 70 104 153 104 248s-34 178-104 248" fill="none" stroke="#B7C992" stroke-width="14" stroke-linecap="round" opacity=".86"/>
+  <path d="M333 459c52-55 111-84 179-91M691 459c-52-55-111-84-179-91" fill="none" stroke="#B7C992" stroke-width="14" stroke-linecap="round" opacity=".86"/>
+
+  <!-- Olive leaf: a single, high-contrast silhouette for small-size recognition. -->
+  <path d="M412 742c-26-78-15-162 35-235 48-69 119-116 223-143-8 105-42 188-101 247-57 57-111 92-157 131Z" fill="#5C7137"/>
+  <path d="M411 742c65-84 123-151 176-200 40-37 75-65 105-88" fill="none" stroke="#F4F2E8" stroke-width="18" stroke-linecap="round"/>
+  <path d="M410 742c-52 23-91 42-118 58" fill="none" stroke="#2F3927" stroke-width="20" stroke-linecap="round"/>
+  <path d="M331 799c-16 10-33 20-51 31" fill="none" stroke="#2F3927" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- A small warm accent makes the mark feel alive without competing with the leaf. -->
+  <circle cx="778" cy="760" r="22" fill="#D79A57"/>
+</svg>

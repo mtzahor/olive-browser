@@ -1,4 +1,7 @@
-use crate::render::{INK, OLIVE, Page};
+use crate::{
+    icon,
+    render::{INK, OLIVE, Page},
+};
 use eframe::egui::{self, Color32, FontFamily, RichText};
 use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport, run_document};
 use olive_html::{ParseOptions, parse_reader, parse_utf8};
@@ -20,6 +23,7 @@ struct LoadedPage {
 }
 
 pub struct OliveApp {
+    icon: egui::TextureHandle,
     loaded: Option<LoadedPage>,
     pending: Option<Receiver<Result<LoadedPage, String>>>,
     error: Option<String>,
@@ -55,7 +59,13 @@ impl OliveApp {
         style.spacing.item_spacing = egui::vec2(12.0, 8.0);
         ctx.set_global_style(style);
         ctx.set_theme(egui::Theme::Light);
+        let icon = ctx.load_texture(
+            "olive-browser-icon",
+            egui::ColorImage::from(icon::data()),
+            egui::TextureOptions::LINEAR,
+        );
         let mut app = Self {
+            icon,
             loaded: None,
             pending: None,
             error: None,
@@ -244,6 +254,7 @@ impl eframe::App for OliveApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(38.0, 38.0)));
                     ui.label(
                         RichText::new("Olive")
                             .size(25.0)

@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
+mod icon;
 mod render;
 
 use eframe::egui;
@@ -10,6 +11,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 760.0])
             .with_min_inner_size([480.0, 360.0])
+            .with_icon(icon::data())
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
