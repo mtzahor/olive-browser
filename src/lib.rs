@@ -1,7 +1,8 @@
 //! Olive Browser's inert HTML document parser.
 //!
 //! Parsing follows html5ever's implementation of the WHATWG HTML Living Standard.
-//! This crate builds a DOM; it does not execute scripts, fetch URLs, or render pages.
+//! HTML parsing builds an inert DOM. The optional `js` module explicitly executes
+//! JavaScript; the optional GUI renders pages. No URLs are fetched.
 //!
 //! ```
 //! use olive_html::{parse, NodeKind};
@@ -17,6 +18,9 @@
 
 #[cfg(feature = "css")]
 pub mod css;
+
+#[cfg(feature = "js")]
+pub mod js;
 
 mod dom;
 mod parser;

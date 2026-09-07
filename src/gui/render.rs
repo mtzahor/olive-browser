@@ -24,6 +24,7 @@ struct Style {
     css: ComputedStyle,
     indent: usize,
     inline_background: Color32,
+    target: Option<NodeId>,
 }
 impl Style {
     fn format(self) -> TextFormat {
@@ -63,6 +64,7 @@ struct Block {
     rule: bool,
     style: ComputedStyle,
     layout: Option<(f32, f32, Arc<egui::Galley>)>,
+    target: Option<NodeId>,
 }
 #[derive(Clone, Copy)]
 enum Command {
@@ -158,6 +160,7 @@ impl Page {
                             tag,
                             "head"
                                 | "script"
+                                | "noscript"
                                 | "style"
                                 | "template"
                                 | "title"
@@ -170,6 +173,9 @@ impl Page {
                     }
                     style.css =
                         sheet.compute(doc, id, style.css, builder.page.root_font, &mut budget);
+                    if element.attribute("onclick").is_some() {
+                        style.target = Some(id);
+                    }
                     if style.css.display == Display::None {
                         continue;
                     }
@@ -273,7 +279,8 @@ impl Page {
                 .iter()
                 .any(|s| s.background.3 > 0 || s.border_solid || s.height != Length::Auto)
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<NodeId> {
+        let mut clicked = None;
         let start = ui.cursor().min;
         let width = ui.available_width().max(1.0);
         let mut stack = vec![BoxLayout::root(start, width)];
@@ -346,7 +353,19 @@ impl Page {
                         egui::pos2(x + offset, parent.cursor),
                         galley.size(),
                     );
-                    text_ui.put(rect, egui::Label::new(galley).selectable(true));
+                    let response = text_ui.put(
+                        rect,
+                        egui::Label::new(galley).selectable(true).sense(
+                            if block.target.is_some() {
+                                egui::Sense::click()
+                            } else {
+                                egui::Sense::hover()
+                            },
+                        ),
+                    );
+                    if response.clicked() {
+                        clicked = block.target;
+                    }
                     parent.cursor += rect.height();
                     right = right.max(rect.right());
                 }
@@ -363,6 +382,7 @@ impl Page {
                 "This document reached the CSS processing limit. Some styles are not shown."
             });
         }
+        clicked
     }
 }
 
@@ -523,6 +543,7 @@ impl Builder {
         }
         if self.current.job.text.is_empty() {
             self.current.style = style.css;
+            self.current.target = style.target;
             self.current.job.halign = match style.css.text_align {
                 TextAlign::Left => egui::Align::Min,
                 TextAlign::Center => egui::Align::Center,
@@ -579,6 +600,17 @@ mod tests {
     }
     fn texts(page: &Page) -> Vec<&str> {
         page.blocks.iter().map(|b| b.job.text.as_str()).collect()
+    }
+
+    #[test]
+    fn javascript_mutations_feed_text_and_css_rendering() {
+        let doc = parse("<!doctype html><style>.done {color:red}</style><p id=p>before</p><noscript>fallback</noscript><script>const p=document.getElementById('p'); p.textContent='after'; p.className='done'; document.title='Changed';</script>").unwrap().document;
+        let (doc, report) = olive_html::js::run_document(doc, Default::default());
+        assert!(report.diagnostics.is_empty());
+        let page = Page::from_document(&doc);
+        assert_eq!(texts(&page), ["after"]);
+        assert_eq!(page.title, "Changed");
+        assert_eq!(page.blocks[0].job.sections[0].format.color, Color32::RED);
     }
 
     #[test]
@@ -652,7 +684,9 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let mut output = ctx.run_ui(input, |ui| page.show(ui));
+            let mut output = ctx.run_ui(input, |ui| {
+                page.show(ui);
+            });
             output.textures_delta.clear();
             page.blocks[0].layout.as_ref().unwrap().2.clone()
         };
@@ -684,7 +718,9 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ui| page.show(ui),
+            |ui| {
+                page.show(ui);
+            },
         )
     }
 

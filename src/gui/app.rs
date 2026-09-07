@@ -1,6 +1,7 @@
 use crate::render::{INK, OLIVE, Page};
 use eframe::egui::{self, Color32, FontFamily, RichText};
-use olive_html::{ParseOptions, parse_reader};
+use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport, run_document};
+use olive_html::{ParseOptions, parse_reader, parse_utf8};
 use std::{
     fs::File,
     path::PathBuf,
@@ -14,12 +15,16 @@ struct LoadedPage {
     path: PathBuf,
     page: Page,
     corrections: usize,
+    scripts: ScriptReport,
+    source: Option<Vec<u8>>,
 }
 
 pub struct OliveApp {
     loaded: Option<LoadedPage>,
     pending: Option<Receiver<Result<LoadedPage, String>>>,
     error: Option<String>,
+    alert: Option<String>,
+    session: Option<DocumentSession>,
     // Each successful open gets a new scroll ID, including re-opening the same file.
     generation: u64,
 }
@@ -54,6 +59,8 @@ impl OliveApp {
             loaded: None,
             pending: None,
             error: None,
+            alert: None,
+            session: None,
             generation: 0,
         };
         if let Some(path) = path {
@@ -115,6 +122,25 @@ impl OliveApp {
                     "{title} — Olive Browser"
                 )));
                 self.loaded = Some(loaded);
+                if let Some(loaded) = self.loaded.as_mut() {
+                    if let Some(source) = loaded.source.take() {
+                        if let Ok(parsed) = parse_utf8(
+                            &source,
+                            ParseOptions {
+                                scripting_enabled: true,
+                                ..ParseOptions::default()
+                            },
+                        ) {
+                            let (document, report) =
+                                run_document(parsed.document, ScriptOptions::default());
+                            self.session = Some(DocumentSession::attach(
+                                document,
+                                ScriptOptions::default(),
+                                report,
+                            ));
+                        }
+                    }
+                }
                 self.generation = self.generation.wrapping_add(1);
                 self.pending = None;
             }
@@ -144,15 +170,26 @@ fn load_file(path: PathBuf) -> Result<LoadedPage, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Choose a regular HTML file.".into());
     }
-    let parsed = parse_reader(file, ParseOptions::default()).map_err(|e| e.to_string())?;
+    let parsed = parse_reader(
+        file,
+        ParseOptions {
+            scripting_enabled: true,
+            ..ParseOptions::default()
+        },
+    )
+    .map_err(|e| e.to_string())?;
     let corrections = parsed
         .diagnostics
         .len()
         .saturating_add(parsed.omitted_diagnostics);
+    let (document, scripts) = run_document(parsed.document, ScriptOptions::default());
+    let source = std::fs::read(&path).ok();
     Ok(LoadedPage {
         path,
-        page: Page::from_document(&parsed.document),
+        page: Page::from_document(&document),
         corrections,
+        scripts,
+        source,
     })
 }
 
@@ -245,6 +282,41 @@ impl eframe::App for OliveApp {
                         .unwrap_or_else(|| "Local HTML viewer".into());
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
+                        if loaded.scripts.attempted > 0
+                            || loaded.scripts.skipped > 0
+                            || loaded.scripts.limited
+                        {
+                            let label = if loaded.scripts.limited {
+                                "JavaScript limit reached"
+                            } else if !loaded.scripts.diagnostics.is_empty() {
+                                "JavaScript errors"
+                            } else {
+                                "JavaScript"
+                            };
+                            ui.menu_button(label, |ui| {
+                                ui.label(format!(
+                                    "{} scripts completed; {} skipped",
+                                    loaded.scripts.executed, loaded.scripts.skipped
+                                ));
+                                egui::ScrollArea::vertical()
+                                    .max_height(240.0)
+                                    .show(ui, |ui| {
+                                        for error in &loaded.scripts.diagnostics {
+                                            ui.label(&error.message);
+                                        }
+                                        for message in &loaded.scripts.console {
+                                            ui.monospace(message);
+                                        }
+                                        let omitted =
+                                            loaded.scripts.omitted_diagnostics.saturating_add(
+                                                loaded.scripts.omitted_console_messages,
+                                            );
+                                        if omitted > 0 {
+                                            ui.label(format!("{omitted} messages omitted"));
+                                        }
+                                    });
+                            });
+                        }
                         if loaded.page.css_ignored > 0 {
                             ui.label(RichText::new("Some CSS is unsupported").size(11.0).weak())
                                 .on_hover_text(format!(
@@ -308,7 +380,25 @@ impl eframe::App for OliveApp {
                                     if loaded.page.is_empty() {
                                         ui.label("This document has no visible content.");
                                     }
-                                    loaded.page.show(ui);
+                                    if let Some(target) = loaded.page.show(ui) {
+                                        if let Some(session) = self.session.as_mut() {
+                                            session.click(target);
+                                            if let Some(message) =
+                                                session.take_alerts().into_iter().next()
+                                            {
+                                                self.alert = Some(message);
+                                            }
+                                            let session = self.session.take().unwrap();
+                                            let (document, report) = session.into_parts();
+                                            loaded.page = Page::from_document(&document);
+                                            loaded.scripts = report.clone();
+                                            self.session = Some(DocumentSession::attach(
+                                                document,
+                                                ScriptOptions::default(),
+                                                report,
+                                            ));
+                                        }
+                                    }
                                 });
                         });
                 } else {
@@ -343,6 +433,21 @@ impl eframe::App for OliveApp {
                     });
                 }
             });
+        if let Some(message) = &self.alert {
+            let mut close = false;
+            egui::Window::new("JavaScript alert")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(message);
+                    if ui.button("OK").clicked() {
+                        close = true;
+                    }
+                });
+            if close {
+                self.alert = None;
+            }
+        }
         if choose {
             self.choose_file(&ctx);
         }
@@ -361,5 +466,21 @@ mod tests {
         assert!(!loaded.page.is_empty());
         assert!(load_file(root.clone()).is_err());
         assert!(load_file(root.join("missing-olive-example.html")).is_err());
+    }
+
+    #[test]
+    fn loader_executes_demo_scripts_before_building_presentation() {
+        let loaded =
+            load_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripted.html"))
+                .unwrap();
+        assert_eq!(loaded.page.title, "Olive — 39 olives harvested");
+        assert_eq!(loaded.scripts.executed, 2);
+        assert!(
+            loaded.scripts.diagnostics.is_empty(),
+            "{:?}",
+            loaded.scripts.diagnostics
+        );
+        assert!(!loaded.scripts.limited);
+        assert_eq!(loaded.scripts.console[0], "Harvest calculated: 39");
     }
 }

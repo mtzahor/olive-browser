@@ -12,6 +12,9 @@ pub struct ParseOptions {
     pub max_input_bytes: usize,
     /// Maximum retained recovery diagnostics. Default: 64.
     pub max_diagnostics: usize,
+    /// Parse `noscript` as raw text for a scripting-enabled consumer. This flag
+    /// only affects HTML tree construction; parsing never executes scripts.
+    pub scripting_enabled: bool,
 }
 
 impl Default for ParseOptions {
@@ -19,6 +22,7 @@ impl Default for ParseOptions {
         Self {
             max_input_bytes: 1024 * 1024,
             max_diagnostics: 64,
+            scripting_enabled: false,
         }
     }
 }
@@ -78,7 +82,7 @@ pub fn parse_utf8(input: &[u8], options: ParseOptions) -> Result<ParseOutput, Pa
     }
     let input = input.strip_prefix(b"\xef\xbb\xbf").unwrap_or(input);
     let mut parser_options = html5ever::ParseOpts::default();
-    parser_options.tree_builder.scripting_enabled = false;
+    parser_options.tree_builder.scripting_enabled = options.scripting_enabled;
     Ok(
         html5ever::parse_document(Sink::new(options.max_diagnostics), parser_options)
             .from_utf8()

@@ -6,6 +6,7 @@ enum Simple {
     Tag(String),
     Id(String),
     Class(String),
+    Pseudo(String),
     Universal,
 }
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +75,14 @@ impl Selector {
                         _ => return Err(input.new_custom_error(())),
                     })
                 }
+                Token::Colon => {
+                    let name = input.expect_ident()?.to_ascii_lowercase();
+                    if name != "hover" {
+                        return Err(input.new_custom_error(()));
+                    }
+                    result.specificity.1 += 1;
+                    Simple::Pseudo(name)
+                }
                 _ => return Err(input.new_custom_error(())),
             };
             simple.push(value);
@@ -126,6 +135,11 @@ impl Selector {
                 Simple::Class(class) => element
                     .attribute("class")
                     .is_some_and(|v| v.split_ascii_whitespace().any(|v| equal(v, class))),
+                // Olive has no hover state yet. Treat supported state
+                // selectors as matching the static preview so their
+                // declarations remain visible and do not trigger a CSS
+                // unsupported notice.
+                Simple::Pseudo(name) => name == "hover",
             }) {
                 continue;
             }

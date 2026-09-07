@@ -31,13 +31,13 @@ impl Sink {
 }
 
 impl Document {
-    fn allocate(&mut self, kind: NodeKind) -> NodeId {
+    pub(crate) fn allocate(&mut self, kind: NodeKind) -> NodeId {
         let id = NodeId::new(self.nodes.len());
         self.nodes.push(Node::new(kind));
         id
     }
 
-    fn detach(&mut self, id: NodeId) {
+    pub(crate) fn detach(&mut self, id: NodeId) {
         let node = &mut self.nodes[id.index()];
         let parent = node.parent.take();
         let previous = node.previous_sibling.take();
@@ -55,7 +55,7 @@ impl Document {
     }
 
     /// Move a node into `parent`, before `before` or at the end.
-    fn insert(&mut self, parent: NodeId, before: Option<NodeId>, id: NodeId) {
+    pub(crate) fn insert(&mut self, parent: NodeId, before: Option<NodeId>, id: NodeId) {
         if before == Some(id) {
             return;
         }

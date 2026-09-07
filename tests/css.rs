@@ -81,7 +81,7 @@ fn unsupported_selector_invalidates_whole_group_and_at_rules_stay_inert() {
         r#"<!doctype html><style>
         @import "file:///private.css";
         @media screen { p { color: red; } }
-        p:hover, p { color: blue; } p[data-x], p { color: green; }
+        p:visited, p { color: blue; } p[data-x], p { color: green; }
         p { font-style: italic; background: url("https://example.com/x;}.png"); color: purple; }
         </style><p id=a>x"#,
     );
@@ -89,6 +89,31 @@ fn unsupported_selector_invalidates_whole_group_and_at_rules_stay_inert() {
     assert!(s["a"].italic);
     assert_eq!(s["a"].background.3, 0);
     assert!(sheet.diagnostics.ignored >= 5);
+}
+#[test]
+fn renderable_button_css_has_no_unsupported_declarations() {
+    let (s, sheet, _) = styles(
+        r#"<!doctype html><style>
+        body { font-family: Arial, sans-serif; background-color: #f0f0f0; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px;
+          border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .button { display: inline-block; background: #0066cc; color: white; padding: 10px 20px;
+          text-decoration: none; border-radius: 5px; }
+        .button:hover { background: #004499; }
+        </style><body><div id=button class=button onclick="alert('ok')">Click</div>"#,
+    );
+    assert_eq!(sheet.diagnostics.ignored, 0);
+    assert_eq!(s["button"].display, Display::Block);
+    assert_eq!(s["button"].background, Color(0, 68, 153, 255));
+    assert_eq!(
+        s["button"].padding,
+        [
+            Length::Px(10.0),
+            Length::Px(20.0),
+            Length::Px(10.0),
+            Length::Px(20.0)
+        ]
+    );
 }
 #[test]
 fn malformed_values_do_not_replace_valid_declarations() {

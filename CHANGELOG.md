@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.4
+
+- Add optional JavaScript parsing and interpretation with Boa 0.22.0, a reusable
+  runtime/program API, and the `olive-js` execution and syntax-checking CLI.
+- Execute inline classic scripts after HTML parsing in the GUI, with a shared
+  realm and Rust DOM bindings for text, attributes and element creation/movement.
+- Dispatch rendered inline `onclick` handlers, capture `alert()` in a native
+  dialog, and keep the document preview in sync after a click.
+- Apply script changes before CSS computation, update document titles, and show
+  captured console output and script diagnostics in the status menu.
+- Accept the common button-preview CSS forms `inline-block`, `:hover`, and
+  `box-shadow` without raising the unsupported-CSS notice.
+- Bound source complexity, total VM instructions, loops, recursion, DOM work,
+  mutations, node allocations and retained output; keep external resources inert.
+- Preserve default inert HTML parsing and Rust 1.85 HTML/CSS builds. JavaScript
+  requires Rust 1.91; the GUI continues to require Rust 1.95.
+- Add JavaScript examples, language/DOM/CLI/GUI regression tests, and JavaScript CI.
+
 ## 0.0.3
 
 - Add an optional Rust CSS engine using cssparser 0.37.0 for embedded and inline

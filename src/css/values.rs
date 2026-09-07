@@ -162,8 +162,9 @@ pub(super) enum Property {
     BorderColor,
     BorderStyle,
     BorderRadius,
+    BoxShadow,
 }
-pub(super) const PROPERTIES: [Property; 26] = [
+pub(super) const PROPERTIES: [Property; 27] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -190,6 +191,7 @@ pub(super) const PROPERTIES: [Property; 26] = [
     Property::BorderColor,
     Property::BorderStyle,
     Property::BorderRadius,
+    Property::BoxShadow,
 ];
 impl Property {
     pub(super) fn inherited(self) -> bool {
@@ -372,6 +374,7 @@ pub(super) fn parse_values<'i>(
         "border-style" => &[P::BorderStyle],
         "border-color" => &[P::BorderColor],
         "border-radius" => &[P::BorderRadius],
+        "box-shadow" => &[P::BoxShadow],
         _ => return Err(input.new_custom_error(())),
     };
     if let Ok(wide) = input.try_parse(|p| -> Result<Value, Error<'i>> {
@@ -557,13 +560,17 @@ pub(super) fn parse_values<'i>(
         }),
         P::Display => Value::Display(match keyword(input)?.as_str() {
             "inline" => Display::Inline,
-            "block" | "list-item" => Display::Block,
+            "block" | "list-item" | "inline-block" => Display::Block,
             "none" => Display::None,
             _ => return Err(input.new_custom_error(())),
         }),
         P::BorderWidth => Value::Length(border_width(input)?),
         P::BorderStyle => Value::Bool(border_style(input)?),
         P::BorderRadius => Value::Length(length(input, false, false, false)?),
+        P::BoxShadow => {
+            while input.next().is_ok() {}
+            Value::Bool(true)
+        }
         P::Width | P::MaxWidth | P::Height => {
             if p == P::MaxWidth && input.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
                 Value::Length(Length::Auto)
@@ -644,6 +651,7 @@ pub(super) fn apply(
             P::BorderColor => style.border_color = source.border_color,
             P::BorderStyle => style.border_solid = source.border_solid,
             P::BorderRadius => style.border_radius = source.border_radius,
+            P::BoxShadow => {}
         }
         return;
     }
@@ -685,6 +693,7 @@ pub(super) fn apply(
         (P::BorderWidth, Value::Length(v)) => style.border_width = v,
         (P::BorderRadius, Value::Length(v)) => style.border_radius = v,
         (P::BorderStyle, Value::Bool(v)) => style.border_solid = v,
+        (P::BoxShadow, Value::Bool(_)) => {}
         _ => {}
     }
 }

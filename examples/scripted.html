@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>JavaScript in Olive</title>
+  <style>
+    body { color: #263320; background: #f8faf2; font-size: 18px; line-height: 1.5; }
+    h1 { color: #526936; font-size: 36px; }
+    .card { background: white; padding: 24px; border: 1px solid #d6dfc5; border-radius: 12px; margin: 20px 0; }
+    .success { color: #386528; font-weight: bold; }
+    .note { color: #657158; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <h1>JavaScript, grown in Rust</h1>
+  <p>Olive parses and executes inline JavaScript with Boa, then renders the updated page.</p>
+  <div class="card">
+    <p id="status">Waiting for JavaScript…</p>
+    <ul id="harvest"></ul>
+    <p id="total"></p>
+  </div>
+  <p class="note">Open “JavaScript” in the status bar to see console output. Scripts run once when the document opens.</p>
+  <noscript>This example requires JavaScript.</noscript>
+  <script>
+    const harvest = [
+      { name: 'Kalamata', count: 12 },
+      { name: 'Arbequina', count: 18 },
+      { name: 'Manzanilla', count: 9 }
+    ];
+    const list = document.getElementById('harvest');
+    for (const olive of harvest) {
+      const item = document.createElement('li');
+      item.textContent = `${olive.name}: ${olive.count} olives`;
+      list.appendChild(item);
+    }
+    const total = harvest.reduce((sum, olive) => sum + olive.count, 0);
+    document.getElementById('total').textContent = `Total harvest: ${total} olives.`;
+    console.log('Harvest calculated:', total);
+  </script>
+  <script>
+    const status = document.getElementById('status');
+    status.textContent = 'JavaScript is running. Your harvest is ready.';
+    status.className = 'success';
+    document.title = `Olive — ${total} olives harvested`;
+    console.log('The second script shares the first script’s variables.');
+  </script>
+</body>
+</html>
