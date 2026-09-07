@@ -4,7 +4,29 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Dependabot discovers every dependency in Cargo.toml and Cargo.lock,
+    # including dependencies added later. Keep routine updates together while
+    # leaving major upgrades as separate reviewable pull requests.
+    open-pull-requests-limit: 20
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # The wildcard covers every action referenced by .github/workflows.
+    open-pull-requests-limit: 20
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
