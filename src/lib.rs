@@ -15,6 +15,9 @@
 //! # Ok::<(), olive_html::ParseError>(())
 //! ```
 
+#[cfg(feature = "css")]
+pub mod css;
+
 mod dom;
 mod parser;
 mod sink;

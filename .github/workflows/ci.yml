@@ -44,3 +44,4 @@ jobs:
         with:
           toolchain: 1.85.0
       - run: cargo test --locked
+      - run: cargo test --locked --features css

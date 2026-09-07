@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.3
+
+- Add an optional Rust CSS engine using cssparser 0.37.0 for embedded and inline
+  styles, selectors, author cascade, inheritance and recoverable syntax errors.
+- Render CSS text styles, nested block backgrounds, spacing, widths, solid
+  borders, rounded corners and hidden subtrees in the native GUI.
+- Preserve text selection and cached reflow; add horizontal scrolling for wide
+  content and notices for unsupported CSS and processing limits.
+- Bound CSS input, rule/declaration/selector counts, matching work and box output.
+- Add a styled demo, CSS and GUI geometry regression tests, and Rust 1.85 CSS CI.
+- Document the supported CSS subset and the unchanged no-resource-loading boundary.
+
 ## 0.0.2
 
 - Add an optional Rust GUI with a native HTML file picker, keyboard shortcut,
