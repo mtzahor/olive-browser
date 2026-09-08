@@ -1,10 +1,13 @@
 use super::{ErrorKind, Runtime, ScriptError, ScriptOptions, bindings, truncate};
-use crate::{Document, NodeId, NodeKind};
+use crate::{Document, ExternalSource, NodeId, NodeKind};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ScriptDiagnostic {
     /// Script element, or `None` for runtime setup errors.
     pub node: Option<NodeId>,
+    /// External src or the inline script's ordinal, bounded to 256 bytes.
+    pub source: Option<String>,
     pub kind: ErrorKind,
     pub message: String,
 }
@@ -12,7 +15,7 @@ pub struct ScriptDiagnostic {
 pub struct ScriptReport {
     pub attempted: usize,
     pub executed: usize,
-    /// External scripts, modules and unsupported script types.
+    /// Unavailable external scripts, modules and unsupported script types.
     pub skipped: usize,
     pub diagnostics: Vec<ScriptDiagnostic>,
     pub omitted_diagnostics: usize,
@@ -28,6 +31,7 @@ impl ScriptReport {
         if self.diagnostics.len() < options.max_messages {
             self.diagnostics.push(ScriptDiagnostic {
                 node,
+                source: None,
                 kind: error.kind,
                 message: truncate(&error.message, options.max_output_bytes),
             });
@@ -96,6 +100,17 @@ impl DocumentSession {
     }
 
     pub fn new(document: Document, options: ScriptOptions) -> Self {
+        Self::with_sources(document, options, &HashMap::new())
+    }
+
+    /// Execute inline and preloaded classic scripts in tree order in one realm.
+    /// This is a synchronous, post-parse pass; async/defer do not change ordering.
+    /// Changed src attributes and dynamically inserted scripts are not fetched.
+    pub fn with_sources(
+        document: Document,
+        options: ScriptOptions,
+        sources: &HashMap<NodeId, ExternalSource>,
+    ) -> Self {
         let mut report = ScriptReport::default();
         // Snapshot only IDs, never sources. Later scripts can change or remove an
         // earlier-discovered element; newly-created scripts never execute this pass.
@@ -110,6 +125,18 @@ impl DocumentSession {
                             && e.name.local.as_ref() == "script"
                     })
                     && eligible_ancestry(&document, id)
+            })
+            .collect();
+        let labels: HashMap<_, _> = scripts
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| {
+                let element = document.node(id).unwrap().as_element().unwrap();
+                let label = element
+                    .attribute("src")
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("Inline script {}", index + 1));
+                (id, truncate(&label, 256))
             })
             .collect();
         let mut runtime = match Runtime::new(options) {
@@ -144,7 +171,12 @@ impl DocumentSession {
                 bindings::restore_document(&runtime.context, document);
                 continue;
             }
-            if script.attribute("src").is_some()
+            let external = script.attribute("src").and_then(|reference| {
+                sources
+                    .get(&id)
+                    .filter(|source| source.reference == reference)
+            });
+            if (script.attribute("src").is_some() && external.is_none())
                 || !classic_type(script.attribute("type"), script.attribute("language"))
             {
                 report.skipped += 1;
@@ -154,7 +186,7 @@ impl DocumentSession {
             if report.attempted >= options.max_scripts {
                 report.error(
                     Some(id),
-                    ScriptError::new(ErrorKind::Limit, "Inline script count limit exceeded"),
+                    ScriptError::new(ErrorKind::Limit, "Script count limit exceeded"),
                     options,
                 );
                 bindings::restore_document(&runtime.context, document);
@@ -162,13 +194,21 @@ impl DocumentSession {
             }
             let mut source = String::new();
             let mut oversized = false;
-            for child in document.children(id) {
-                if let NodeKind::Text(text) = &document.node(child).unwrap().kind {
-                    if text.len() > remaining.saturating_sub(source.len()) {
-                        oversized = true;
-                        break;
+            if let Some(external) = external {
+                if external.source.len() > remaining {
+                    oversized = true;
+                } else {
+                    source.push_str(&external.source);
+                }
+            } else {
+                for child in document.children(id) {
+                    if let NodeKind::Text(text) = &document.node(child).unwrap().kind {
+                        if text.len() > remaining.saturating_sub(source.len()) {
+                            oversized = true;
+                            break;
+                        }
+                        source.push_str(text);
                     }
-                    source.push_str(text);
                 }
             }
             bindings::restore_document(&runtime.context, document);
@@ -177,7 +217,7 @@ impl DocumentSession {
                     Some(id),
                     ScriptError::new(
                         ErrorKind::Limit,
-                        "Combined inline JavaScript source limit exceeded",
+                        "Combined JavaScript source limit exceeded",
                     ),
                     options,
                 );
@@ -192,6 +232,9 @@ impl DocumentSession {
             if runtime.stopped {
                 break;
             }
+        }
+        for diagnostic in &mut report.diagnostics {
+            diagnostic.source = diagnostic.node.and_then(|id| labels.get(&id).cloned());
         }
         let mut session = Self {
             runtime: Some(runtime),
@@ -314,7 +357,7 @@ impl DocumentSession {
     }
 }
 
-fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
+pub(crate) fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
     let mut next = doc.node(id).and_then(|n| n.parent());
     while let Some(parent) = next {
         if parent == doc.root() {
@@ -335,7 +378,7 @@ fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
     }
     false
 }
-fn classic_type(kind: Option<&str>, language: Option<&str>) -> bool {
+pub(crate) fn classic_type(kind: Option<&str>, language: Option<&str>) -> bool {
     let kind = match kind {
         Some(kind) => kind.trim().to_ascii_lowercase(),
         None => match language {

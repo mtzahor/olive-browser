@@ -1,9 +1,11 @@
+mod browser;
+
 use super::{ScriptOptions, preview};
 use crate::{Document, Element, NodeId, NodeKind};
 use boa_engine::{
     Context, JsData, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
     js_string,
-    object::{FunctionObjectBuilder, ObjectInitializer},
+    object::{FunctionObjectBuilder, ObjectInitializer, builtins::JsArray},
     property::Attribute,
 };
 use boa_gc::{Finalize, Trace};
@@ -18,6 +20,7 @@ struct Host {
     bytes: usize,
     nodes: usize,
     limited: bool,
+    storage: [browser::Storage; 2],
     console: Vec<String>,
     omitted: usize,
     alerts: Vec<String>,
@@ -136,6 +139,7 @@ pub(super) fn install_console(context: &mut Context, options: ScriptOptions) -> 
         bytes: options.max_dom_bytes,
         nodes: options.max_new_nodes,
         limited: false,
+        storage: Default::default(),
         console: Vec::new(),
         omitted: 0,
         alerts: Vec::new(),
@@ -215,6 +219,12 @@ pub(super) fn install_document(context: &mut Context, document: Document) -> JsR
             js_string!("createTextNode"),
             1,
         );
+    builder.function(
+        NativeFunction::from_fn_ptr(document_tags),
+        js_string!("getElementsByTagName"),
+        1,
+    );
+    accessor(&mut builder, "head", head, None);
     accessor(&mut builder, "body", body, None);
     accessor(&mut builder, "documentElement", document_element, None);
     accessor(&mut builder, "title", title, Some(set_title));
@@ -222,7 +232,8 @@ pub(super) fn install_document(context: &mut Context, document: Document) -> JsR
     context.register_global_property(js_string!("document"), document, Attribute::all())?;
     let global = context.global_object();
     context.register_global_property(js_string!("window"), global.clone(), Attribute::all())?;
-    context.register_global_property(js_string!("self"), global, Attribute::all())
+    context.register_global_property(js_string!("self"), global, Attribute::all())?;
+    browser::install(context)
 }
 
 #[derive(Debug, Trace, Finalize, JsData)]
@@ -284,6 +295,17 @@ pub(super) fn wrap(context: &mut Context, id: Option<NodeId>) -> JsResult<JsValu
                 js_string!("appendChild"),
                 1,
             );
+        builder
+            .function(
+                NativeFunction::from_fn_ptr(element_tags),
+                js_string!("getElementsByTagName"),
+                1,
+            )
+            .function(
+                NativeFunction::from_fn_ptr(insert_before),
+                js_string!("insertBefore"),
+                2,
+            );
         accessor(&mut builder, "id", get_id, Some(set_id));
         accessor(&mut builder, "className", get_class, Some(set_class));
         accessor(&mut builder, "tagName", tag_name, None);
@@ -324,6 +346,54 @@ fn get_element_by_id(_: &JsValue, args: &[JsValue], context: &mut Context) -> Js
             .find(|e| e.attribute("id") == Some(key.as_str()))?
     };
     wrap(context, id)
+}
+fn head(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    find_tag(context, "head")
+}
+fn document_tags(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let root = host(context).borrow().doc().root();
+    elements_by_tag(root, args, context)
+}
+fn element_tags(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    elements_by_tag(node_id(this)?, args, context)
+}
+fn elements_by_tag(root: NodeId, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let tag = string_arg(args, 0, context)?;
+    let ids = {
+        let mut host = host(context).borrow_mut();
+        let mut ids = Vec::new();
+        let mut visited = 0;
+        for id in host.doc().descendants(root) {
+            visited += 1;
+            if visited > host.operations {
+                break;
+            }
+            if host
+                .doc()
+                .node(id)
+                .and_then(|n| n.as_element())
+                .is_some_and(|e| {
+                    e.name.ns.as_ref() == HTML
+                        && (tag == "*" || e.name.local.as_ref().eq_ignore_ascii_case(&tag))
+                })
+            {
+                ids.push(id);
+                if ids.len() > 5000 {
+                    break;
+                }
+            }
+        }
+        host.spend(visited, 0, 0)?;
+        if ids.len() > 5000 {
+            host.spend(usize::MAX, 0, 0)?;
+        }
+        ids
+    };
+    let values = ids
+        .into_iter()
+        .map(|id| wrap(context, Some(id)))
+        .collect::<JsResult<Vec<_>>>()?;
+    Ok(JsArray::from_iter(values, context).into())
 }
 fn find_tag(context: &mut Context, tag: &str) -> JsResult<JsValue> {
     let id = host(context)
@@ -430,9 +500,30 @@ fn parent_node(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult
     wrap(context, parent)
 }
 fn append_child(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    insert_child(this, args, None, context)
+}
+fn insert_before(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let before = args
+        .get(1)
+        .filter(|value| !value.is_null_or_undefined())
+        .map(node_id)
+        .transpose()?;
+    insert_child(this, args, before, context)
+}
+fn insert_child(
+    this: &JsValue,
+    args: &[JsValue],
+    before: Option<NodeId>,
+    context: &mut Context,
+) -> JsResult<JsValue> {
     let parent = node_id(this)?;
     let child = node_id(args.first().unwrap_or(&JsValue::undefined()))?;
     let mut host = host(context).borrow_mut();
+    if before.is_some_and(|id| host.doc().node(id).unwrap().parent() != Some(parent)) {
+        return Err(JsNativeError::typ()
+            .with_message("Reference node is not a child of this parent")
+            .into());
+    }
     // Validate before changing links, including a self/ancestor insertion.
     let mut ancestor = Some(parent);
     while let Some(id) = ancestor {
@@ -449,7 +540,9 @@ fn append_child(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsRe
             .with_message("Parent must be an element")
             .into());
     }
-    host.doc_mut().insert(parent, None, child);
+    if before != Some(child) {
+        host.doc_mut().insert(parent, before, child);
+    }
     Ok(args[0].clone())
 }
 fn remove(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {

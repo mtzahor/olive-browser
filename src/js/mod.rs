@@ -13,7 +13,9 @@
 //! ```
 
 mod bindings;
-mod document;
+mod complexity;
+use complexity::check_complexity;
+pub(crate) mod document;
 pub use document::{DocumentSession, ScriptDiagnostic, ScriptReport, run_document};
 
 use boa_engine::{
@@ -25,9 +27,9 @@ use std::{fmt, io::Read, rc::Rc};
 /// Preview limits, not a heap sandbox or a wall-clock deadline.
 #[derive(Clone, Copy, Debug)]
 pub struct ScriptOptions {
-    /// Per-source and combined inline source budget; default 256 KiB.
+    /// Per-source and combined inline/external source budget; default 256 KiB.
     pub max_input_bytes: usize,
-    /// Maximum inline scripts attempted per document; default 64.
+    /// Maximum scripts attempted per document; default 64.
     pub max_scripts: usize,
     /// Maximum retained diagnostics and console messages; default 64 each.
     pub max_messages: usize,
@@ -59,6 +61,18 @@ impl Default for ScriptOptions {
             max_dom_operations: 1_000_000,
             max_dom_bytes: 256 * 1024,
             max_new_nodes: 5_000,
+        }
+    }
+}
+
+impl ScriptOptions {
+    /// Viewer profile for downloaded bundles. Execution/DOM limits are unchanged.
+    /// Standalone runtimes retain the smaller default source and script budgets.
+    pub fn browser() -> Self {
+        Self {
+            max_input_bytes: 32 * 1024 * 1024,
+            max_scripts: 256,
+            ..Self::default()
         }
     }
 }
@@ -273,44 +287,6 @@ impl Runtime {
             Ok(())
         }
     }
-}
-
-// A conservative preview guard before entering Boa's recursive parser/compiler.
-// Delimiters and punctuation inside strings/comments count too. This intentionally
-// rejects some valid large programs; it is not a second JavaScript tokenizer.
-fn check_complexity(source: &str) -> Result<(), ScriptError> {
-    let mut marks = 0usize;
-    let mut depth = 0usize;
-    let mut recursive_marks = source
-        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-        .filter(|word| {
-            matches!(
-                *word,
-                "new" | "typeof" | "void" | "delete" | "await" | "yield" | "if" | "else" | "do"
-            )
-        })
-        .take(33)
-        .count();
-    for byte in source.bytes() {
-        if byte.is_ascii_punctuation() && byte != b'_' && byte != b'$' {
-            marks += 1;
-        }
-        match byte {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if b"!~?:".contains(&byte) {
-            recursive_marks += 1;
-        }
-        if marks > 512 || depth > 32 || recursive_marks > 32 {
-            return Err(ScriptError::new(
-                ErrorKind::Limit,
-                "JavaScript source complexity limit exceeded (512 punctuation marks / 32 delimiter levels or recursive markers)",
-            ));
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn truncate(value: &str, limit: usize) -> String {

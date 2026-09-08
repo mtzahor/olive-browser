@@ -112,11 +112,15 @@ enum Visit {
     Exit { block: bool, list: bool },
 }
 impl Page {
+    #[cfg(test)]
     pub fn from_document(doc: &Document) -> Self {
         Self::with_scripts(doc, true)
     }
+    #[cfg(test)]
     pub fn with_scripts(doc: &Document, scripting_enabled: bool) -> Self {
-        let sheet = Stylesheet::from_document(doc);
+        Self::with_stylesheet(doc, scripting_enabled, Stylesheet::from_document(doc))
+    }
+    pub fn with_stylesheet(doc: &Document, scripting_enabled: bool, sheet: Stylesheet) -> Self {
         let mut budget = StyleBudget::default();
         let mut builder = Builder {
             page: Self {

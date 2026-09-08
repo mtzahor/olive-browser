@@ -4,16 +4,18 @@ use crate::{
     render::{INK, OLIVE, Page},
 };
 use eframe::egui::{self, Color32, RichText};
-use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport, run_document};
+use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
 use olive_html::{
-    ParseOptions,
+    ExternalSource, NodeId,
+    css::Stylesheet,
     net::{DocumentLoader, LoadedDocument, Location},
-    parse_utf8,
+    resources::{PageResources, ResourceReport},
 };
 use std::{
+    collections::HashMap,
     ffi::OsString,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
 };
 
 const PAPER: Color32 = Color32::from_rgb(250, 250, 246);
@@ -26,7 +28,31 @@ struct LoadedPage {
     page: Page,
     corrections: usize,
     scripts: ScriptReport,
-    source: Option<Vec<u8>>,
+    scripting_enabled: bool,
+    resources: ResourceReport,
+    session: Option<SessionHandle>,
+}
+
+struct ClickRequest {
+    target: NodeId,
+    href: Option<String>,
+}
+struct PageUpdate {
+    page: Page,
+    base: Location,
+    scripts: ScriptReport,
+    alert: Option<String>,
+    link: Option<String>,
+}
+struct SessionHandle {
+    sender: Sender<ClickRequest>,
+    receiver: Receiver<PageUpdate>,
+    busy: bool,
+}
+struct PreparedPage {
+    loaded: LoadedPage,
+    session: Option<DocumentSession>,
+    styles: HashMap<NodeId, ExternalSource>,
 }
 
 struct PendingPage {
@@ -43,7 +69,6 @@ pub struct OliveApp {
     history: History,
     error: Option<String>,
     alert: Option<String>,
-    session: Option<DocumentSession>,
     // Each successful open gets a new scroll ID, including re-opening the same file.
     generation: u64,
 }
@@ -76,7 +101,6 @@ impl OliveApp {
             history: History::default(),
             error: None,
             alert: None,
-            session: None,
             generation: 0,
         };
         if let Some(source) = source {
@@ -121,6 +145,21 @@ impl OliveApp {
     }
 
     fn open(&mut self, location: Location, navigation: Navigation, ctx: &egui::Context) {
+        let scripting = !location.is_remote()
+            || (matches!(navigation, Navigation::Reload)
+                && self.loaded.as_ref().is_some_and(|loaded| {
+                    loaded.scripting_enabled && loaded.location.same_document(&location)
+                }));
+        self.open_with_scripts(location, navigation, ctx, scripting);
+    }
+
+    fn open_with_scripts(
+        &mut self,
+        location: Location,
+        navigation: Navigation,
+        ctx: &egui::Context,
+        scripting: bool,
+    ) {
         if self.pending.is_some() {
             return;
         }
@@ -150,11 +189,21 @@ impl OliveApp {
         match std::thread::Builder::new()
             .name("olive-document-loader".into())
             .spawn(move || {
-                let result = DocumentLoader::new()
-                    .and_then(|loader| loader.load(location))
-                    .and_then(prepare_page);
-                let _ = sender.send(result);
-                ctx.request_repaint();
+                let result = (|| {
+                    let loader = DocumentLoader::new()?;
+                    let source = loader.load(location.clone())?;
+                    // Opt-in belongs to this address, never a redirected destination.
+                    let scripting = !source.location.is_remote()
+                        || (scripting && source.location.same_document(&location));
+                    prepare_page_with_loader(source, &loader, scripting)
+                })();
+                match result {
+                    Ok(prepared) => serve_page(prepared, sender, &ctx),
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        ctx.request_repaint();
+                    }
+                }
             }) {
             Ok(_) => {
                 self.pending = Some(PendingPage {
@@ -188,26 +237,6 @@ impl OliveApp {
                     "{title} — Olive Browser"
                 )));
                 self.loaded = Some(loaded);
-                self.session = None;
-                if let Some(loaded) = self.loaded.as_mut() {
-                    if let Some(source) = loaded.source.take() {
-                        if let Ok(parsed) = parse_utf8(
-                            &source,
-                            ParseOptions {
-                                scripting_enabled: true,
-                                ..ParseOptions::default()
-                            },
-                        ) {
-                            let (document, report) =
-                                run_document(parsed.document, ScriptOptions::default());
-                            self.session = Some(DocumentSession::attach(
-                                document,
-                                ScriptOptions::default(),
-                                report,
-                            ));
-                        }
-                    }
-                }
                 self.generation = self.generation.wrapping_add(1);
                 self.pending = None;
             }
@@ -232,28 +261,126 @@ impl OliveApp {
     }
 }
 
-fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
-    let scripting_enabled = !source.location.is_remote();
+fn prepare_page_with_loader(
+    source: LoadedDocument,
+    loader: &DocumentLoader,
+    scripting_enabled: bool,
+) -> Result<PreparedPage, String> {
     let parsed = source.parse(scripting_enabled)?;
     let corrections = parsed
         .diagnostics
         .len()
         .saturating_add(parsed.omitted_diagnostics);
-    let (document, scripts) = if scripting_enabled {
-        run_document(parsed.document, ScriptOptions::default())
+    let resources = PageResources::load(
+        loader,
+        &source.location,
+        &parsed.document,
+        scripting_enabled,
+    );
+    let (page, base, scripts, session) = if scripting_enabled {
+        let session = DocumentSession::with_sources(
+            parsed.document,
+            ScriptOptions::browser(),
+            &resources.scripts,
+        );
+        let (page, base) = session.with_document(|document| {
+            (
+                Page::with_stylesheet(
+                    document,
+                    true,
+                    Stylesheet::from_document_with_sources(document, &resources.styles),
+                ),
+                source.location.document_base(document),
+            )
+        });
+        (page, base, session.report().clone(), Some(session))
     } else {
-        (parsed.document, ScriptReport::default())
+        let document = parsed.document;
+        let page = Page::with_stylesheet(
+            &document,
+            false,
+            Stylesheet::from_document_with_sources(&document, &resources.styles),
+        );
+        (
+            page,
+            source.location.document_base(&document),
+            ScriptReport::default(),
+            None,
+        )
     };
-    let base = source.location.document_base(&document);
-    Ok(LoadedPage {
-        location: source.location,
-        base,
-        status: source.status,
-        page: Page::with_scripts(&document, scripting_enabled),
-        corrections,
-        scripts,
-        source: scripting_enabled.then_some(source.bytes),
+    Ok(PreparedPage {
+        loaded: LoadedPage {
+            location: source.location,
+            base,
+            status: source.status,
+            page,
+            corrections,
+            scripts,
+            scripting_enabled,
+            resources: resources.report,
+            session: None,
+        },
+        session,
+        styles: resources.styles,
     })
+}
+
+// The DOM and Boa realm stay on their original worker. Only presentation data
+// crosses threads, so scripts run once and click handlers retain their globals.
+fn serve_page(
+    mut prepared: PreparedPage,
+    sender: Sender<Result<LoadedPage, String>>,
+    ctx: &egui::Context,
+) {
+    let Some(mut session) = prepared.session else {
+        let _ = sender.send(Ok(prepared.loaded));
+        ctx.request_repaint();
+        return;
+    };
+    // Page-load alerts have no dialog lifecycle in this preview.
+    session.take_alerts();
+    let location = prepared.loaded.location.clone();
+    let (click_sender, click_receiver) = mpsc::channel::<ClickRequest>();
+    let (update_sender, update_receiver) = mpsc::channel();
+    prepared.loaded.session = Some(SessionHandle {
+        sender: click_sender,
+        receiver: update_receiver,
+        busy: false,
+    });
+    if sender.send(Ok(prepared.loaded)).is_err() {
+        return;
+    }
+    ctx.request_repaint();
+    for click in click_receiver {
+        let allowed = session.click(click.target);
+        let (page, base) = session.with_document(|document| {
+            (
+                Page::with_stylesheet(
+                    document,
+                    true,
+                    Stylesheet::from_document_with_sources(document, &prepared.styles),
+                ),
+                location.document_base(document),
+            )
+        });
+        let update = PageUpdate {
+            page,
+            base,
+            scripts: session.report().clone(),
+            alert: session.take_alerts().into_iter().next(),
+            link: if allowed { click.href } else { None },
+        };
+        if update_sender.send(update).is_err() {
+            break;
+        }
+        ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
+    let scripting = !source.location.is_remote();
+    Ok(prepare_page_with_loader(source, &DocumentLoader::new()?, scripting)?.loaded)
 }
 
 fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
@@ -274,6 +401,36 @@ impl eframe::App for OliveApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive(ctx);
+        let mut link = None;
+        if let Some(loaded) = &mut self.loaded {
+            if let Some(session) = &mut loaded.session {
+                match session.receiver.try_recv() {
+                    Ok(update) => {
+                        session.busy = false;
+                        loaded.page = update.page;
+                        loaded.base = update.base;
+                        loaded.scripts = update.scripts;
+                        self.alert = update.alert;
+                        if self.pending.is_none() {
+                            link = update.link.map(|href| loaded.base.resolve(&href));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                                "{} — Olive Browser",
+                                loaded.page.title
+                            )));
+                        }
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        loaded.session = None;
+                        self.error =
+                            Some("The JavaScript worker stopped. Reload to try again.".into());
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+        }
+        if let Some(location) = link {
+            self.open_result(location, Navigation::New, ctx);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -309,6 +466,7 @@ impl eframe::App for OliveApp {
         let mut reload = shortcut(egui::Modifiers::COMMAND, egui::Key::R)
             || shortcut(egui::Modifiers::NONE, egui::Key::F5);
         let mut go = false;
+        let mut toggle_scripts = false;
         let mut link = None;
         let busy = self.pending.is_some();
         egui::Panel::top("toolbar")
@@ -402,8 +560,17 @@ impl eframe::App for OliveApp {
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
                         if loaded.location.is_remote() {
-                            ui.label(RichText::new("JavaScript disabled").size(11.0).weak())
-                                .on_hover_text("Web pages display HTML and embedded CSS. Remote scripts are disabled in this version.");
+                            toggle_scripts = ui.add_enabled(!busy, egui::Button::new(
+                                if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
+                            )).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run inside Olive's process. New addresses start with web JavaScript disabled.").clicked();
+                        }
+                        if loaded.resources.attempted > 0 || loaded.resources.limited {
+                            ui.menu_button(if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
+                                ui.label(format!("{} of {} resources loaded", loaded.resources.loaded, loaded.resources.attempted));
+                                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                                    for message in &loaded.resources.diagnostics { ui.label(message); }
+                                });
+                            });
                         }
                         if loaded.scripts.attempted > 0
                             || loaded.scripts.skipped > 0
@@ -425,6 +592,7 @@ impl eframe::App for OliveApp {
                                     .max_height(240.0)
                                     .show(ui, |ui| {
                                         for error in &loaded.scripts.diagnostics {
+                                            if let Some(source) = &error.source { ui.strong(source); }
                                             ui.label(&error.message);
                                         }
                                         for message in &loaded.scripts.console {
@@ -506,30 +674,20 @@ impl eframe::App for OliveApp {
                                     if let Some(click) = loaded.page.show(ui) {
                                         link = click.href;
                                         if let (Some(target), Some(session)) =
-                                            (click.target, self.session.as_mut())
+                                            (click.target, loaded.session.as_mut())
                                         {
-                                            if !session.click(target) {
-                                                link = None;
-                                            }
-                                            if let Some(message) =
-                                                session.take_alerts().into_iter().next()
+                                            if !session.busy
+                                                && session
+                                                    .sender
+                                                    .send(ClickRequest {
+                                                        target,
+                                                        href: link.take(),
+                                                    })
+                                                    .is_ok()
                                             {
-                                                self.alert = Some(message);
+                                                session.busy = true;
                                             }
-                                            session.with_document(|document| {
-                                                loaded.page = Page::from_document(document);
-                                                loaded.base =
-                                                    loaded.location.document_base(document);
-                                            });
-                                            if !loaded.page.title.is_empty() {
-                                                ctx.send_viewport_cmd(
-                                                    egui::ViewportCommand::Title(format!(
-                                                        "{} — Olive Browser",
-                                                        loaded.page.title
-                                                    )),
-                                                );
-                                            }
-                                            loaded.scripts = session.report().clone();
+                                            link = None;
                                         }
                                     }
                                 });
@@ -604,6 +762,15 @@ impl eframe::App for OliveApp {
                 if let Some((index, location)) = self.history.forward() {
                     self.open(location, Navigation::Traverse(index), &ctx);
                 }
+            } else if toggle_scripts {
+                if let Some(loaded) = &self.loaded {
+                    self.open_with_scripts(
+                        loaded.location.clone(),
+                        Navigation::Reload,
+                        &ctx,
+                        !loaded.scripting_enabled,
+                    );
+                }
             } else if reload {
                 if let Some(loaded) = &self.loaded {
                     self.open(loaded.location.clone(), Navigation::Reload, &ctx);
@@ -641,7 +808,6 @@ mod tests {
             pending: None,
             error: None,
             alert: None,
-            session: None,
             generation: 1,
         }
     }
@@ -685,33 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_navigation_clears_a_previous_local_script_session() {
-        let ctx = egui::Context::default();
-        let local =
-            load_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripted.html"))
-                .unwrap();
-        let mut app = app_for_test(&ctx, local);
-        app.session = Some(DocumentSession::new(
-            olive_html::parse("<p>Local").unwrap().document,
-            ScriptOptions::default(),
-        ));
-        let source = remote_source("https://example.com/remote");
-        let requested = source.location.clone();
-        let (sender, receiver) = mpsc::channel();
-        sender.send(Ok(prepare_page(source).unwrap())).unwrap();
-        app.pending = Some(PendingPage {
-            receiver,
-            requested,
-            navigation: Navigation::New,
-        });
-        app.receive(&ctx);
-        assert!(app.session.is_none());
-        assert!(app.loaded.as_ref().unwrap().location.is_remote());
-        assert!(app.pending.is_none());
-    }
-
-    #[test]
-    fn remote_pages_never_execute_or_retain_scripts() {
+    fn remote_pages_default_to_disabled_scripts() {
         let source = LoadedDocument {
             location: Location::from_input("https://example.com/page").unwrap(),
             bytes: b"<!doctype html><title>Original</title><base href='/docs/'><noscript>Readable fallback</noscript><script>document.title='Executed';</script><a href='next'>Next</a>".to_vec(),
@@ -720,7 +860,7 @@ mod tests {
         let loaded = prepare_page(source).unwrap();
         assert_eq!(loaded.page.title, "Original");
         assert_eq!(loaded.scripts.attempted, 0);
-        assert!(loaded.source.is_none());
+        assert!(loaded.session.is_none());
         assert_eq!(loaded.base.as_str(), "https://example.com/docs/");
         assert!(!loaded.page.is_empty());
     }
@@ -749,5 +889,63 @@ mod tests {
         );
         assert!(!loaded.scripts.limited);
         assert_eq!(loaded.scripts.console[0], "Harvest calculated: 39");
+    }
+    #[test]
+    fn enabled_web_session_executes_once_and_retains_globals_for_worker_clicks() {
+        let ctx = egui::Context::default();
+        let source = LoadedDocument {
+            location: Location::from_input("https://example.com/demo").unwrap(),
+            bytes: br#"<!doctype html><title>Before</title><script>
+                let count=1; document.title='Loaded '+count;
+                function increment(){count++; document.title='Clicked '+count; alert(count)}
+                </script><button id=increment onclick='increment(); return false'>Increment</button>"#.to_vec(),
+            status: Some(200), plain_text: false,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let (target_sender, target_receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let prepared =
+                prepare_page_with_loader(source, &DocumentLoader::new().unwrap(), true).unwrap();
+            let target = prepared.session.as_ref().unwrap().with_document(|doc| {
+                doc.descendants(doc.root())
+                    .find(|&id| {
+                        doc.node(id)
+                            .unwrap()
+                            .as_element()
+                            .is_some_and(|e| e.attribute("id") == Some("increment"))
+                    })
+                    .unwrap()
+            });
+            target_sender.send(target).unwrap();
+            serve_page(prepared, sender, &ctx);
+        });
+        let mut loaded = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(loaded.scripting_enabled);
+        assert_eq!(loaded.page.title, "Loaded 1");
+        let target = target_receiver.recv().unwrap();
+        let session = loaded.session.take().unwrap();
+        for count in [2, 3] {
+            session
+                .sender
+                .send(ClickRequest {
+                    target,
+                    href: Some("/must-not-navigate".into()),
+                })
+                .unwrap();
+            let update = session
+                .receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(update.page.title, format!("Clicked {count}"));
+            assert_eq!(update.scripts.executed, 1);
+            assert!(update.scripts.diagnostics.is_empty());
+            assert_eq!(update.alert, Some(count.to_string()));
+            assert!(update.link.is_none());
+        }
+        drop(session);
+        worker.join().unwrap();
     }
 }

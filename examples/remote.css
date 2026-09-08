@@ -1,0 +1,8 @@
+body { color: #263320; background: #f4f6ed; font-size: 18px; line-height: 1.5; }
+h1 { color: #526936; font-size: 38px; }
+h2 { font-size: 25px; }
+.eyebrow { color: #657158; font-size: 13px; font-weight: bold; }
+.card { background: white; padding: 24px; border: 1px solid #d6dfc5; border-radius: 12px; margin: 24px 0; }
+#count { color: #526936; font-size: 30px; font-weight: bold; }
+button { display: inline-block; color: white; background: #526936; padding: 12px 20px; border-radius: 8px; }
+.note { color: #657158; font-size: 15px; }

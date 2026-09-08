@@ -14,6 +14,19 @@ pub use url::Url;
 
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const MAX_URL_BYTES: usize = 8192;
+pub const MAX_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Resource types the viewer can explicitly request. No recursive fetching occurs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Stylesheet,
+    Script,
+}
+
+pub struct LoadedResource {
+    pub location: Location,
+    pub source: String,
+}
 
 /// A validated address. Credentials and non-local file authorities are rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +238,47 @@ impl DocumentLoader {
     }
 
     pub fn load(&self, location: Location) -> Result<LoadedDocument, String> {
+        self.load_kind(location, None, None, self.timeout, MAX_DOCUMENT_BYTES)
+    }
+
+    /// Fetch a stylesheet or classic script with the document's origin policy.
+    /// Web resources cannot read files; HTTPS resources cannot downgrade to HTTP,
+    /// including on redirects. HTTP errors and incorrect MIME types are rejected.
+    pub fn load_resource(
+        &self,
+        document: &Location,
+        location: Location,
+        kind: ResourceKind,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Result<LoadedResource, String> {
+        let loaded = self.load_kind(
+            location,
+            Some(kind),
+            Some(document),
+            timeout.min(self.timeout),
+            max_bytes.min(MAX_RESOURCE_BYTES),
+        )?;
+        Ok(LoadedResource {
+            location: loaded.location,
+            source: String::from_utf8(loaded.bytes).map_err(|e| e.to_string())?,
+        })
+    }
+
+    fn load_kind(
+        &self,
+        location: Location,
+        kind: Option<ResourceKind>,
+        document: Option<&Location>,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Result<LoadedDocument, String> {
+        if let Some(document) = document {
+            check_resource_target(document, &location)?;
+        }
+        if timeout.is_zero() {
+            return Err("Resource loading deadline reached.".into());
+        }
         if let Some(path) = location.file_path() {
             if !path
                 .metadata()
@@ -240,7 +294,11 @@ impl DocumentLoader {
             }
             return Ok(LoadedDocument {
                 location,
-                bytes: read_bounded(file)?,
+                bytes: if kind.is_some() {
+                    decode_limit(&read_limit(file, max_bytes)?, "", max_bytes)?
+                } else {
+                    read_limit(file, max_bytes)?
+                },
                 status: None,
                 plain_text: false,
             });
@@ -249,7 +307,7 @@ impl DocumentLoader {
         let started = Instant::now();
         let mut redirects = 0;
         let response = loop {
-            let remaining = self.timeout.saturating_sub(started.elapsed());
+            let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 return Err("The website took too long to respond. Try again.".into());
             }
@@ -259,7 +317,11 @@ impl DocumentLoader {
                 .timeout(remaining)
                 .header(
                     header::ACCEPT,
-                    "text/html, application/xhtml+xml, text/plain;q=0.8",
+                    match kind {
+                        Some(ResourceKind::Stylesheet) => "text/css",
+                        Some(ResourceKind::Script) => "text/javascript, application/javascript",
+                        None => "text/html, application/xhtml+xml, text/plain;q=0.8",
+                    },
                 )
                 .send()
                 .map_err(request_error)?;
@@ -273,6 +335,9 @@ impl DocumentLoader {
                     if target.0.fragment().is_none() {
                         target.0.set_fragment(location.0.fragment());
                     }
+                    if let Some(document) = document {
+                        check_resource_target(document, &target)?;
+                    }
                     location = target;
                     redirects += 1;
                     continue;
@@ -281,11 +346,17 @@ impl DocumentLoader {
             break response;
         };
         let status = Some(response.status().as_u16());
+        if kind.is_some() && !response.status().is_success() {
+            return Err(format!(
+                "Resource returned HTTP {}.",
+                response.status().as_u16()
+            ));
+        }
         let content_type = response
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("text/html")
+            .unwrap_or(if kind.is_some() { "" } else { "text/html" })
             .to_owned();
         let mime = content_type
             .split(';')
@@ -293,21 +364,45 @@ impl DocumentLoader {
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if !matches!(
-            mime.as_str(),
-            "text/html" | "application/xhtml+xml" | "text/plain"
-        ) {
+        let supported = match kind {
+            None => matches!(
+                mime.as_str(),
+                "text/html" | "application/xhtml+xml" | "text/plain"
+            ),
+            Some(ResourceKind::Stylesheet) => mime == "text/css",
+            Some(ResourceKind::Script) => matches!(
+                mime.as_str(),
+                "text/javascript"
+                    | "application/javascript"
+                    | "text/ecmascript"
+                    | "application/ecmascript"
+                    | "application/x-javascript"
+                    | "application/x-ecmascript"
+                    | "text/x-javascript"
+                    | "text/x-ecmascript"
+                    | "text/javascript1.0"
+                    | "text/javascript1.1"
+                    | "text/javascript1.2"
+                    | "text/javascript1.3"
+                    | "text/javascript1.4"
+                    | "text/javascript1.5"
+                    | "text/jscript"
+                    | "text/livescript"
+            ),
+        };
+        if !supported {
             return Err(format!(
-                "This resource has unsupported content type {mime}. Olive opens HTML and plain text."
+                "Unsupported content type: {}.",
+                if mime.is_empty() { "missing" } else { &mime }
             ));
         }
         if response
             .content_length()
-            .is_some_and(|n| n > MAX_DOCUMENT_BYTES as u64)
+            .is_some_and(|n| n > max_bytes as u64)
         {
-            return Err(size_error());
+            return Err(limit_error(max_bytes));
         }
-        let bytes = decode(&read_bounded(response)?, &content_type)?;
+        let bytes = decode_limit(&read_limit(response, max_bytes)?, &content_type, max_bytes)?;
         Ok(LoadedDocument {
             location,
             bytes,
@@ -334,23 +429,41 @@ fn request_error(error: reqwest::Error) -> String {
     message
 }
 
-fn size_error() -> String {
-    format!("Document exceeds the {MAX_DOCUMENT_BYTES}-byte limit.")
+fn check_resource_target(document: &Location, target: &Location) -> Result<(), String> {
+    if document.is_remote() && !target.is_remote() {
+        return Err("Web resources cannot open local files.".into());
+    }
+    if document.url().scheme() == "https" && target.url().scheme() != "https" {
+        return Err("HTTPS pages cannot load insecure resources.".into());
+    }
+    Ok(())
 }
 
+fn limit_error(max_bytes: usize) -> String {
+    format!("Resource exceeds the {max_bytes}-byte limit.")
+}
+
+#[cfg(test)]
 fn read_bounded(reader: impl Read) -> Result<Vec<u8>, String> {
+    read_limit(reader, MAX_DOCUMENT_BYTES)
+}
+fn read_limit(reader: impl Read, max_bytes: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader
-        .take(MAX_DOCUMENT_BYTES as u64 + 1)
+        .take(max_bytes as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("Could not read document: {e}"))?;
-    if bytes.len() > MAX_DOCUMENT_BYTES {
-        return Err(size_error());
+    if bytes.len() > max_bytes {
+        return Err(limit_error(max_bytes));
     }
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn decode(bytes: &[u8], content_type: &str) -> Result<Vec<u8>, String> {
+    decode_limit(bytes, content_type, MAX_DOCUMENT_BYTES)
+}
+fn decode_limit(bytes: &[u8], content_type: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     let declared = content_type
         .split(';')
         .skip(1)
@@ -363,8 +476,8 @@ fn decode(bytes: &[u8], content_type: &str) -> Result<Vec<u8>, String> {
         .and_then(|label| Encoding::for_label(label.as_bytes()));
     let (encoding, skip) = Encoding::for_bom(bytes).unwrap_or((declared.unwrap_or(UTF_8), 0));
     let (decoded, _) = encoding.decode_without_bom_handling(&bytes[skip..]);
-    if decoded.len() > MAX_DOCUMENT_BYTES {
-        return Err(size_error());
+    if decoded.len() > max_bytes {
+        return Err(limit_error(max_bytes));
     }
     Ok(decoded.into_owned().into_bytes())
 }

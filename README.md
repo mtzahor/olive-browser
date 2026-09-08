@@ -1,9 +1,15 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.1.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.2.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, applies a bounded CSS subset, and can run a bounded
-JavaScript subset in local documents. Web pages render with JavaScript disabled.
+JavaScript subset, including external classic scripts. Linked CSS loads automatically.
+Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
+reload the current page with scripting. Use this only for pages you trust: the
+runtime runs inside Olive's process. **Disable JavaScript** reloads without scripts.
+Reload and same-page anchors preserve the choice; new addresses, history traversal
+to another document, and redirects to a different address start with web scripting
+disabled. Local documents continue to run scripts automatically.
 
 ## Run the viewer
 
@@ -37,10 +43,47 @@ precedence over the HTTP charset; otherwise UTF-8 is used. HTML meta charset
 sniffing is not yet implemented. Responses are capped at 1 MiB after decompression
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
-This first browsing release renders text, basic boxes, and embedded/inline styles.
-Linked stylesheets, images (except alt text), external scripts, forms, downloads,
-cookies, authentication, tabs and JavaScript on web pages are not implemented.
-Sites that require those features will have limited presentation or functionality.
+The viewer renders text, basic boxes, and linked/embedded/inline styles.
+Images (except alt text), forms, downloads, cookies, authentication and tabs are
+not implemented. Sites that require a full DOM, CSS layout engine, or browser
+JavaScript APIs will have limited presentation or functionality.
+
+Linked `<link rel="stylesheet" href="…">` and classic `<script src="…">` sources
+resolve against the final document URL and first `<base href>`. Local relative
+CSS/JS files work too. Sources load once before the script pass; changed URLs and
+dynamically inserted resources do not fetch. Failed resources leave the document
+readable and appear under **Resource errors** in the status bar. Disabled web
+JavaScript does not fetch external scripts.
+
+Resource loading shares a 20-second deadline and 64-attempt limit per document,
+with at most 8 MiB of retained external CSS and 32 MiB of external JavaScript.
+Each response is capped at 8 MiB before and after character decoding. Resource
+size errors and exhausted page budgets are reported separately. CSS processing
+shares an 8 MiB input budget and retains at most 16,384 supported rules. HTTP errors, missing
+or incorrect MIME types, HTTPS-to-HTTP resource loads, and web-to-file loads are
+rejected. Stylesheets require `text/css`; scripts require a JavaScript MIME type.
+Redirects, compression, BOMs and HTTP charsets use the document loader's rules.
+Alternate, disabled and non-screen stylesheets are skipped. CSS imports, modules,
+fonts, resource integrity verification and CSP are not implemented; resources
+with a nonempty `integrity` attribute are skipped with a diagnostic.
+
+Try the linked-resource demo locally or over HTTP:
+
+```sh
+cargo run --locked --features gui --bin olive-gui -- examples/remote.html
+python3 -m http.server 8000 --bind 127.0.0.1
+# In another terminal:
+cargo run --locked --features gui --bin olive-gui -- http://localhost:8000/examples/remote.html
+```
+
+On the HTTP demo, CSS appears immediately; **Enable JavaScript** activates the
+counter. Repeated clicks use the same page-load variables and functions.
+
+To inspect downloads without executing page scripts:
+
+```sh
+cargo run --locked --all-features --example resource-report -- https://www.ynet.co.il/
+```
 
 Build a release binary with:
 
@@ -90,7 +133,8 @@ The GUI bundles Inter with Noto Sans Hebrew fallback for page text, code blocks,
 and browser controls, so Hebrew letters and vowel marks do not become missing-glyph
 rectangles. Full bidirectional paragraph layout and website font downloads are
 not yet implemented.
-CSS comes from `<style>` elements and inline `style` attributes. The supported
+CSS comes from stylesheet links, `<style>` elements and inline `style` attributes,
+with linked and embedded rules merged in document order. The supported
 subset includes:
 
 - type, class, ID, compound, descendant, child, and static `:hover` selectors;
@@ -102,9 +146,29 @@ Unsupported CSS is skipped and reported in the status bar. See the [styled
 example](examples/styled.html) for a working sample.
 
 JavaScript uses [Boa](https://docs.rs/boa_engine/0.22.0/boa_engine/) and runs
-inline classic scripts in local files after the document is parsed. The host provides a small
-DOM API: `document`, `window`, `getElementById`, `createElement`, text and
-attribute access, node insertion/removal, and captured `console` methods.
+inline and preloaded external classic scripts after the document is parsed, in
+document order in one persistent realm. `async` and `defer` attributes do not
+change this synchronous post-parse ordering. The host provides a small
+DOM API: `document`, `window`, `getElementById`, `getElementsByTagName`,
+`createElement`, text and attribute access, node insertion/removal (including
+`insertBefore`), and captured `console` methods. Tag collections are bounded
+snapshot arrays, not live HTMLCollections.
+
+Document sessions provide basic `navigator` metadata and method-based
+`localStorage`/`sessionStorage` (`getItem`, `setItem`, `removeItem`, `clear`, `key`,
+`length`). Each store holds up to 64 KiB and 128 keys in memory for that document
+only; storage does not survive reload or cross into another page. Storage writes
+also consume the shared DOM write budget. Navigator reports Olive's user agent,
+`en-US` language, no cookies and no touch points.
+
+The viewer allows 32 MiB of combined script source and 256 attempted scripts;
+standalone runtimes retain the 256 KiB / 64-script defaults. The source preflight
+bounds active expression complexity so independent statements and quoted data do
+not consume one file-wide punctuation allowance. It retains conservative checks
+for regex/division and template syntax. Complex bundles can still be rejected;
+this preview does not provide a full browser event loop, lifecycle listeners,
+timers, layout APIs or framework-compatible DOM. Script errors identify the
+external source or inline script number.
 Rendered inline `onclick` handlers can call `alert()`, which appears in the
 viewer as a dialog. There is no network, filesystem, timer, module, dynamic
 code, navigation, or asynchronous job API.
@@ -132,11 +196,15 @@ fn main() -> Result<(), olive_html::ParseError> {
 Use `parse_utf8` or `parse_reader` for custom `ParseOptions`. Enable optional
 engines with `--features css` or `--features js`; the GUI enables both.
 `olive_html::net::{Location, DocumentLoader}` provides explicit URL resolution
-and bounded HTTP(S)/file loading with `--features net`. It never fetches subresources.
+and bounded HTTP(S)/file loading with `--features net`. `load` fetches only the
+requested document; `load_resource` explicitly requests a typed CSS or JS source.
+With `net`, `css` and `js`, `resources::PageResources::load` collects page resources.
 
 `run_document` executes inline scripts in a fresh realm and returns the mutated
-document plus a `ScriptReport`. `olive_html::css::Stylesheet` parses embedded
-styles and computes styles for elements in parent-before-child order.
+document plus a `ScriptReport`. `DocumentSession::with_sources` accepts preloaded
+external scripts without networking. `Stylesheet::from_document_with_sources`
+merges preloaded links with embedded styles and computes styles for elements in
+parent-before-child order. Both engines retain their combined processing budgets.
 
 ## HTML scope and security
 
@@ -163,7 +231,8 @@ cargo doc --locked --no-deps --all-features
 
 The test suite covers HTML recovery and conformance fixtures, CSS cascade and
 layout, JavaScript execution and DOM limits, CLI behavior, GUI rendering,
-URL resolution, HTTP redirects/errors/timeouts/limits, and navigation history.
+URL resolution, HTTP redirects/errors/timeouts/limits, resource loading and ordering,
+opt-in web scripting, persistent click state, and navigation history.
 
 ## License
 

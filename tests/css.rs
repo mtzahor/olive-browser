@@ -245,12 +245,12 @@ fn case_sensitive_ids_and_classes_follow_document_mode() {
 }
 #[test]
 fn limits_bound_css_storage_and_matching_work() {
-    let large = Stylesheet::parse(&" ".repeat(256 * 1024 + 1));
+    let large = Stylesheet::parse(&" ".repeat(olive_html::css::MAX_CSS_BYTES + 1));
     assert!(large.diagnostics.limited);
     assert_eq!(large.rule_count(), 0);
-    let rules = Stylesheet::parse(&"p {color:red}".repeat(2049));
+    let rules = Stylesheet::parse(&"p {color:red}".repeat(olive_html::css::MAX_RULES + 1));
     assert!(rules.diagnostics.limited);
-    assert_eq!(rules.rule_count(), 2048);
+    assert_eq!(rules.rule_count(), olive_html::css::MAX_RULES);
     let (_, sheet, _) = styles(&format!(
         "<style>p {{{}}}</style><p>x",
         "color:red;".repeat(129)
@@ -294,4 +294,12 @@ fn deterministic_malformed_css_recovers_without_panics() {
         }
         let _ = Stylesheet::parse(&source);
     }
+}
+
+#[test]
+fn megabyte_stylesheets_keep_rules_after_large_literal_data() {
+    let source = format!("/* {} */ p {{color:red}}", "x".repeat(3 * 1024 * 1024));
+    let sheet = Stylesheet::parse(&source);
+    assert!(!sheet.diagnostics.limited);
+    assert_eq!(sheet.rule_count(), 1);
 }

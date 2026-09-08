@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0
+
+- Accommodate multi-megabyte site bundles with an 8 MiB resource ceiling, separate
+  8 MiB CSS / 32 MiB JavaScript page budgets, an aligned 8 MiB CSS parser budget
+  and 16,384-rule cap; distinguish resource-size errors from page-budget errors.
+- Add document-local, quota-bound storage methods, basic navigator metadata,
+  snapshot tag queries and insertBefore; identify script sources in diagnostics.
+- Allow independent statements and literal data without a whole-file punctuation
+  cap, while retaining expression/depth checks and conservative fallback checks
+  for ambiguous syntax. The viewer accepts up to 256 scripts / 32 MiB of source;
+  execution and DOM budgets remain unchanged.
+- Add a resource-report example that fetches resources without executing scripts.
+
+- Load remote and local linked stylesheets, preserving document-order cascade
+  with embedded CSS and inline styles.
+- Load external classic JavaScript alongside inline scripts; add per-page
+  Enable/Disable JavaScript controls for web documents, disabled by default.
+- Keep one JavaScript realm on the document worker, executing page-load scripts
+  once and retaining variables/functions for subsequent inline click handlers.
+- Resolve resources using redirects and base URLs; validate MIME/status, reject
+  mixed-content and web-to-file resource loads, and report failures without
+  discarding readable pages.
+- Bound resource count, load time and retained bytes; retain existing shared
+  CSS/JavaScript execution budgets and skip unsupported integrity-tagged sources.
+- Add a linked CSS/JS demo and transport, cascade, script-order, session and
+  resource-policy regression coverage. Imports, modules and dynamic resource
+  fetching remain unsupported.
+
 ## 0.1.0
 
 - Bundle Noto Sans Hebrew as a fallback for page text and browser controls,

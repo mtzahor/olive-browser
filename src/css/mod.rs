@@ -1,20 +1,21 @@
-//! An inert CSS subset for local documents. Tokenization and error recovery use
+//! An inert CSS subset for documents. Tokenization and error recovery use
 //! Servo's `cssparser`; Olive implements selectors, property values and cascade.
 //! No CSS construct fetches a resource. Unsupported rules/declarations are skipped.
 mod selectors;
 mod values;
 
-use crate::{Document, Element, NodeId, NodeKind};
+use crate::{Document, Element, ExternalSource, NodeId, NodeKind};
 use cssparser::{
     AtRuleParser, CowRcStr, DeclarationParser, Delimiter, Parser, ParserInput, ParserState,
     QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
 };
 use selectors::Selector;
+use std::collections::HashMap;
 pub use values::{Color, ComputedStyle, Display, Length, LineHeight, TextAlign, WhiteSpace};
 use values::{Declaration, PROPERTIES, Value};
 
-const MAX_CSS_BYTES: usize = 256 * 1024;
-const MAX_RULES: usize = 2048;
+pub const MAX_CSS_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_RULES: usize = 16_384;
 const MAX_DECLARATIONS: usize = 128;
 const MAX_SELECTORS: usize = 64;
 const MATCH_BUDGET: usize = 2_000_000;
@@ -66,28 +67,29 @@ impl Stylesheet {
     /// Collect applicable HTML `<style>` elements in document order. Template
     /// fragments, non-CSS types and media other than plain screen/all are ignored.
     pub fn from_document(doc: &Document) -> Self {
+        Self::from_document_with_sources(doc, &HashMap::new())
+    }
+
+    /// Merge loaded links and embedded styles in DOM order, sharing one CSS budget.
+    pub fn from_document_with_sources(
+        doc: &Document,
+        sources: &HashMap<NodeId, ExternalSource>,
+    ) -> Self {
         let mut sheet = Self::default();
         for id in doc.descendants(doc.root()) {
             let Some(element) = doc.node(id).and_then(|n| n.as_element()) else {
                 continue;
             };
-            if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
-                || element.name.local.as_ref() != "style"
-            {
+            if !applicable_style(element) {
                 continue;
             }
-            if element
-                .attribute("type")
-                .is_some_and(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("text/css"))
-            {
-                continue;
-            }
-            if element.attribute("media").is_some_and(|s| {
-                !s.trim().is_empty()
-                    && !s
-                        .split(',')
-                        .any(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "screen" | "all"))
-            }) {
+            if element.name.local.as_ref() == "link" {
+                if let Some(source) = sources
+                    .get(&id)
+                    .filter(|source| element.attribute("href") == Some(source.reference.as_str()))
+                {
+                    sheet.append(&source.source);
+                }
                 continue;
             }
             let source: String = doc
@@ -222,6 +224,36 @@ impl Stylesheet {
         }
         style
     }
+}
+
+/// Whether this HTML style/link applies to Olive's screen media subset.
+pub fn applicable_style(element: &Element) -> bool {
+    if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
+        || !matches!(element.name.local.as_ref(), "style" | "link")
+        || element.attribute("disabled").is_some()
+        || element
+            .attribute("type")
+            .is_some_and(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("text/css"))
+        || element.attribute("media").is_some_and(|s| {
+            !s.trim().is_empty()
+                && !s
+                    .split(',')
+                    .any(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "screen" | "all"))
+        })
+    {
+        return false;
+    }
+    if element.name.local.as_ref() == "link" {
+        let rel: Vec<_> = element
+            .attribute("rel")
+            .unwrap_or("")
+            .split_ascii_whitespace()
+            .collect();
+        return element.attribute("href").is_some()
+            && rel.iter().any(|s| s.eq_ignore_ascii_case("stylesheet"))
+            && !rel.iter().any(|s| s.eq_ignore_ascii_case("alternate"));
+    }
+    true
 }
 
 struct Rules<'a> {

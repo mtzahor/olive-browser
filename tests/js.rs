@@ -440,3 +440,154 @@ fn instruction_budget_covers_native_callbacks_and_multiple_scripts() {
     assert!(report.limited);
     assert!(report.attempted < 8);
 }
+
+#[test]
+fn preloaded_scripts_share_limits_and_ignore_changed_sources() {
+    use olive_html::{ExternalSource, js::DocumentSession};
+    use std::collections::HashMap;
+    let document = parse("<script>document.getElementById('external').setAttribute('src','changed.js')</script><script id=external src=original.js></script><script>console.log('after')</script>").unwrap().document;
+    let id = document
+        .descendants(document.root())
+        .find(|&id| {
+            document
+                .node(id)
+                .unwrap()
+                .as_element()
+                .is_some_and(|e| e.attribute("id") == Some("external"))
+        })
+        .unwrap();
+    let sources = HashMap::from([(
+        id,
+        ExternalSource {
+            reference: "original.js".into(),
+            source: "throw 'stale'".into(),
+        },
+    )]);
+    let session = DocumentSession::with_sources(document, ScriptOptions::default(), &sources);
+    assert_eq!(session.report().console, ["after"]);
+    assert_eq!(session.report().skipped, 1);
+    assert!(session.report().diagnostics.is_empty());
+
+    for options in [
+        ScriptOptions {
+            max_input_bytes: 3,
+            ..ScriptOptions::default()
+        },
+        ScriptOptions {
+            max_scripts: 1,
+            ..ScriptOptions::default()
+        },
+    ] {
+        let document = parse("<script>1;</script><script src=app.js></script>")
+            .unwrap()
+            .document;
+        let id = document
+            .descendants(document.root())
+            .find(|&id| {
+                document
+                    .node(id)
+                    .unwrap()
+                    .as_element()
+                    .is_some_and(|e| e.attribute("src").is_some())
+            })
+            .unwrap();
+        let sources = HashMap::from([(
+            id,
+            ExternalSource {
+                reference: "app.js".into(),
+                source: "2;".into(),
+            },
+        )]);
+        let session = DocumentSession::with_sources(document, options, &sources);
+        assert_eq!(session.report().executed, 1);
+        assert!(session.report().limited);
+    }
+}
+
+#[test]
+fn independent_statements_and_literal_data_do_not_exhaust_expression_budget() {
+    let mut source = "let sum=0;".to_owned();
+    source.push_str(&"sum+=1;".repeat(1200));
+    source.push_str("sum");
+    assert_eq!(runtime().eval(&source).unwrap(), "1200");
+    let source = format!("'{}'.length", "new []?!;".repeat(2000));
+    assert_eq!(runtime().eval(&source).unwrap(), "18000");
+    let source = format!("/* {} */ 1", "if {{{ !".repeat(2000));
+    assert_eq!(runtime().eval(&source).unwrap(), "1");
+    for source in [
+        "if(true);else ".repeat(3000),
+        format!("{}1{}", "(\")))\", ".repeat(100), ")".repeat(100)),
+        format!("/* ignored */ {}1", "typeof ".repeat(100)),
+        format!("`value ${{{}1}}`", "!".repeat(100)),
+    ] {
+        assert_eq!(runtime().parse(&source).unwrap_err().kind, ErrorKind::Limit);
+    }
+}
+
+#[test]
+fn document_storage_is_functional_bounded_and_isolated() {
+    let (_, report) = run(r#"<script>
+        localStorage.setItem('__proto__', 'safe');
+        localStorage.setItem('count', 7);
+        sessionStorage.setItem('count', 3);
+        console.log(window.localStorage === localStorage, localStorage.length, localStorage.key(0));
+        console.log(localStorage.getItem('count'), sessionStorage.getItem('count'), localStorage.getItem('missing'));
+        localStorage.setItem('count', 8);
+        console.log(localStorage.length, localStorage.getItem('__proto__'), localStorage.getItem('count'));
+        try { localStorage.setItem('count', 'x'.repeat(65536)); } catch(e) { console.log('quota') }
+        console.log(localStorage.getItem('count'));
+        localStorage.removeItem('__proto__');
+        console.log(localStorage.key(0), localStorage.key(1));
+        localStorage.clear();
+        console.log(localStorage.length, sessionStorage.length);
+    </script>"#);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    assert_eq!(
+        report.console,
+        [
+            "true 2 __proto__",
+            "7 3 null",
+            "2 safe 8",
+            "quota",
+            "8",
+            "count null",
+            "0 1"
+        ]
+    );
+    let (_, report) =
+        run("<script>console.log(localStorage.length, sessionStorage.length)</script>");
+    assert_eq!(report.console, ["0 0"]);
+    let (_, report) = run(r#"<script>
+        let conversions=0;
+        try { localStorage.setItem({toString(){conversions++;return 'x'}}, 'y') } catch(e) {}
+        console.log(conversions, localStorage.length);
+        for(let i=0;i<128;i++) localStorage.setItem('k'+i, 'v');
+        try { localStorage.setItem('overflow', 'v') } catch(e) { console.log('keys bounded') }
+        console.log(localStorage.length);
+    </script>"#);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    assert_eq!(report.console, ["0 0", "keys bounded", "128"]);
+}
+
+#[test]
+fn navigator_and_tag_collection_support_common_bootstrap_scripts() {
+    let (document, report) = run(r#"<head><script id=first>
+        console.log(navigator === window.navigator, navigator.language, navigator.languages[0], navigator.cookieEnabled);
+        console.log(/iphone|ipod|android/.test(navigator.userAgent.toLowerCase()));
+        var scripts=document.getElementsByTagName('SCRIPT');
+        var first=scripts[0], inserted=document.createElement('script');
+        inserted.id='inserted'; inserted.textContent="throw 'dynamic must not run'";
+        first.parentNode.insertBefore(inserted, first);
+        console.log(scripts.length, document.head.getElementsByTagName('script').length);
+        document.head.insertBefore(first, first);
+    </script></head><body><p id=p>Ready</p><script>
+        try { document.getElementById('p').insertBefore(document.createElement('b'), first) } catch(e) {console.log('wrong parent')}
+    </script>"#);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    assert_eq!(report.executed, 2);
+    assert_eq!(
+        report.console,
+        ["true en-US en-US false", "false", "2 2", "wrong parent"]
+    );
+    integrity(&document);
+}

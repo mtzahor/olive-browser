@@ -26,6 +26,18 @@ pub mod js;
 #[cfg(feature = "net")]
 pub mod net;
 
+#[cfg(all(feature = "net", feature = "css", feature = "js"))]
+pub mod resources;
+
+/// A preloaded source bound to the original href/src attribute of one DOM node.
+/// Changing that attribute does not fetch or execute a new resource.
+#[cfg(any(feature = "css", feature = "js"))]
+#[derive(Clone, Debug)]
+pub struct ExternalSource {
+    pub reference: String,
+    pub source: String,
+}
+
 mod dom;
 mod parser;
 mod sink;
