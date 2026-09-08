@@ -92,7 +92,12 @@ impl Location {
         }
         match url.scheme() {
             "http" | "https" if url.has_host() => {}
-            "file" if url.host_str().is_none() && url.to_file_path().is_ok() => {}
+            // `url` reports the empty authority as either `None` or `Some("")`
+            // depending on platform and URL crate version. Both represent a
+            // local file URL; a non-empty host remains a remote file authority.
+            "file"
+                if url.host_str().is_none_or(|host| host.is_empty())
+                    && url.to_file_path().is_ok() => {}
             "file" => return Err("Only local file URLs are supported.".into()),
             _ => return Err("Supported address schemes are http://, https:// and file://.".into()),
         }
@@ -543,6 +548,10 @@ mod tests {
         assert!(site.resolve("file:///secret.html").is_err());
         assert!(site.resolve("javascript:alert(1)").is_err());
         assert!(site.resolve(&"x".repeat(MAX_URL_BYTES + 1)).is_err());
+
+        // Windows may expose the empty file authority as `Some("")`; it is
+        // still local, unlike `file://server/...`.
+        assert!(Location::from_input("file:///secret.js").is_ok());
     }
 
     #[test]
