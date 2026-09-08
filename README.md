@@ -1,9 +1,10 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.2.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.3.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
-into an owned DOM, applies a bounded CSS subset, and can run a bounded
-JavaScript subset, including external classic scripts. Linked CSS loads automatically.
+into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
+can run a bounded JavaScript subset, including external classic scripts. Linked
+CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
 reload the current page with scripting. Use this only for pages you trust: the
 runtime runs inside Olive's process. **Disable JavaScript** reloads without scripts.
@@ -43,21 +44,24 @@ precedence over the HTTP charset; otherwise UTF-8 is used. HTML meta charset
 sniffing is not yet implemented. Responses are capped at 1 MiB after decompression
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
-The viewer renders text, basic boxes, and linked/embedded/inline styles.
-Images (except alt text), forms, downloads, cookies, authentication and tabs are
-not implemented. Sites that require a full DOM, CSS layout engine, or browser
+The viewer renders text, basic boxes, PNG and JPEG images, and linked/embedded/inline styles.
+GIF, WebP, SVG and CSS background images, forms, downloads, cookies,
+authentication and tabs are not implemented. Sites that require a full DOM, CSS
+layout engine, or browser
 JavaScript APIs will have limited presentation or functionality.
 
-Linked `<link rel="stylesheet" href="…">` and classic `<script src="…">` sources
-resolve against the final document URL and first `<base href>`. Local relative
-CSS/JS files work too. Sources load once before the script pass; changed URLs and
-dynamically inserted resources do not fetch. Failed resources leave the document
-readable and appear under **Resource errors** in the status bar. Disabled web
-JavaScript does not fetch external scripts.
+Linked `<link rel="stylesheet" href="…">`, classic `<script src="…">`, and
+`<img src="…">` sources resolve against the final document URL and first
+`<base href>`. Local relative CSS/JS/image files work too. Sources load once
+before the script pass; changed URLs and dynamically inserted resources do not
+fetch. Failed resources leave the document readable and appear under
+**Resource errors** in the status bar. Disabled web JavaScript does not fetch
+external scripts, but images still load.
 
 Resource loading shares a 20-second deadline and 64-attempt limit per document,
-with at most 8 MiB of retained external CSS and 32 MiB of external JavaScript.
-Each response is capped at 8 MiB before and after character decoding. Resource
+with at most 8 MiB of retained external CSS, 32 MiB of external JavaScript, and
+32 MiB of encoded page images. Each response is capped at 8 MiB after
+decompression; text is capped again after character decoding. Resource
 size errors and exhausted page budgets are reported separately. CSS processing
 shares an 8 MiB input budget and retains at most 16,384 supported rules. HTTP errors, missing
 or incorrect MIME types, HTTPS-to-HTTP resource loads, and web-to-file loads are
@@ -128,7 +132,10 @@ the result preview goes to stdout.
 ## Supported rendering
 
 The GUI renders headings, paragraphs, lists, emphasis, code and preformatted
-text, block quotes, rules, text alternatives for images, and selectable text.
+text, block quotes, rules, PNG and JPEG images with alt-text fallbacks, and selectable text.
+Images use their intrinsic dimensions unless numeric HTML `width`/`height` or
+the supported CSS width/height properties specify another size; oversized images
+scale down to fit the content column.
 The GUI bundles Inter with Noto Sans Hebrew fallback for page text, code blocks,
 and browser controls, so Hebrew letters and vowel marks do not become missing-glyph
 rectangles. Full bidirectional paragraph layout and website font downloads are
@@ -197,8 +204,9 @@ Use `parse_utf8` or `parse_reader` for custom `ParseOptions`. Enable optional
 engines with `--features css` or `--features js`; the GUI enables both.
 `olive_html::net::{Location, DocumentLoader}` provides explicit URL resolution
 and bounded HTTP(S)/file loading with `--features net`. `load` fetches only the
-requested document; `load_resource` explicitly requests a typed CSS or JS source.
-With `net`, `css` and `js`, `resources::PageResources::load` collects page resources.
+requested document; `load_resource` explicitly requests a typed CSS, JS, or PNG/JPEG
+image resource. With `net`, `css` and `js`, `resources::PageResources::load`
+collects page resources.
 
 `run_document` executes inline scripts in a fresh realm and returns the mutated
 document plus a `ScriptReport`. `DocumentSession::with_sources` accepts preloaded

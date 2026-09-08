@@ -21,11 +21,14 @@ pub const MAX_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
 pub enum ResourceKind {
     Stylesheet,
     Script,
+    Image,
 }
 
 pub struct LoadedResource {
     pub location: Location,
+    /// Decoded text for stylesheets and scripts, or the original bytes for images.
     pub source: String,
+    pub bytes: Vec<u8>,
 }
 
 /// A validated address. Credentials and non-local file authorities are rejected.
@@ -246,7 +249,7 @@ impl DocumentLoader {
         self.load_kind(location, None, None, self.timeout, MAX_DOCUMENT_BYTES)
     }
 
-    /// Fetch a stylesheet or classic script with the document's origin policy.
+    /// Fetch a stylesheet, classic script, or raster image with the document's origin policy.
     /// Web resources cannot read files; HTTPS resources cannot downgrade to HTTP,
     /// including on redirects. HTTP errors and incorrect MIME types are rejected.
     pub fn load_resource(
@@ -264,9 +267,16 @@ impl DocumentLoader {
             timeout.min(self.timeout),
             max_bytes.min(MAX_RESOURCE_BYTES),
         )?;
+        let bytes = loaded.bytes;
+        let source = if kind == ResourceKind::Image {
+            String::new()
+        } else {
+            String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?
+        };
         Ok(LoadedResource {
             location: loaded.location,
-            source: String::from_utf8(loaded.bytes).map_err(|e| e.to_string())?,
+            source,
+            bytes,
         })
     }
 
@@ -299,7 +309,7 @@ impl DocumentLoader {
             }
             return Ok(LoadedDocument {
                 location,
-                bytes: if kind.is_some() {
+                bytes: if kind.is_some_and(|kind| kind != ResourceKind::Image) {
                     decode_limit(&read_limit(file, max_bytes)?, "", max_bytes)?
                 } else {
                     read_limit(file, max_bytes)?
@@ -325,6 +335,7 @@ impl DocumentLoader {
                     match kind {
                         Some(ResourceKind::Stylesheet) => "text/css",
                         Some(ResourceKind::Script) => "text/javascript, application/javascript",
+                        Some(ResourceKind::Image) => "image/png, image/jpeg",
                         None => "text/html, application/xhtml+xml, text/plain;q=0.8",
                     },
                 )
@@ -394,6 +405,7 @@ impl DocumentLoader {
                     | "text/jscript"
                     | "text/livescript"
             ),
+            Some(ResourceKind::Image) => matches!(mime.as_str(), "image/jpeg" | "image/png"),
         };
         if !supported {
             return Err(format!(
@@ -407,7 +419,11 @@ impl DocumentLoader {
         {
             return Err(limit_error(max_bytes));
         }
-        let bytes = decode_limit(&read_limit(response, max_bytes)?, &content_type, max_bytes)?;
+        let bytes = if kind == Some(ResourceKind::Image) {
+            read_limit(response, max_bytes)?
+        } else {
+            decode_limit(&read_limit(response, max_bytes)?, &content_type, max_bytes)?
+        };
         Ok(LoadedDocument {
             location,
             bytes,

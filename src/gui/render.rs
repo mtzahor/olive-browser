@@ -1,7 +1,7 @@
 //! Inert CSS presentation of Olive's DOM. No HTML reparsing or resource loading.
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Stroke,
+    self, Color32, ColorImage, FontFamily, FontId, Stroke, TextureHandle, TextureOptions,
     text::{LayoutJob, TextFormat},
 };
 use olive_html::{
@@ -15,6 +15,7 @@ pub const OLIVE: Color32 = Color32::from_rgb(86, 105, 51);
 const MAX_TEXT: usize = 200_000;
 const MAX_BLOCKS: usize = 5_000;
 const MAX_BOXES: usize = 10_000;
+const MAX_IMAGES: usize = 2_048;
 
 fn color(c: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(c.0, c.1, c.2, c.3)
@@ -68,6 +69,51 @@ struct Block {
     actions: Vec<(Range<usize>, Action)>,
     characters: usize,
 }
+
+/// A decoded image retained by the GUI presentation layer. The encoded bytes
+/// stay in the resource collector so the parser and network layers do not need
+/// to depend on a particular image decoder.
+#[derive(Clone)]
+pub struct ImageAsset {
+    pub reference: String,
+    pub image: Arc<ColorImage>,
+}
+
+struct RenderedImage {
+    node: NodeId,
+    reference: String,
+    image: Arc<ColorImage>,
+    alt: Option<String>,
+    style: ComputedStyle,
+    html_width: Option<f32>,
+    html_height: Option<f32>,
+    action: Action,
+}
+
+#[derive(Default)]
+pub struct ImageTextureCache {
+    textures: HashMap<(NodeId, String), TextureHandle>,
+}
+
+impl ImageTextureCache {
+    pub fn clear(&mut self) {
+        self.textures.clear();
+    }
+
+    fn texture(&mut self, ctx: &egui::Context, image: &RenderedImage) -> TextureHandle {
+        let key = (image.node, image.reference.clone());
+        if let Some(texture) = self.textures.get(&key) {
+            return texture.clone();
+        }
+        let texture = ctx.load_texture(
+            format!("olive-image-{:?}-{}", image.node, image.reference),
+            (*image.image).clone(),
+            TextureOptions::LINEAR,
+        );
+        self.textures.insert(key, texture.clone());
+        texture
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Action {
     target: Option<NodeId>,
@@ -82,6 +128,7 @@ enum Command {
     Open(usize),
     Close,
     Text(usize),
+    Image(usize),
     Anchor(usize),
 }
 #[derive(Default)]
@@ -93,6 +140,7 @@ pub struct Page {
     pub background: Option<Color32>,
     blocks: Vec<Block>,
     boxes: Vec<ComputedStyle>,
+    images: Vec<RenderedImage>,
     commands: Vec<Command>,
     box_rects: Vec<egui::Rect>,
     root_font: f32,
@@ -120,7 +168,16 @@ impl Page {
     pub fn with_scripts(doc: &Document, scripting_enabled: bool) -> Self {
         Self::with_stylesheet(doc, scripting_enabled, Stylesheet::from_document(doc))
     }
+    #[cfg(test)]
     pub fn with_stylesheet(doc: &Document, scripting_enabled: bool, sheet: Stylesheet) -> Self {
+        Self::with_stylesheet_and_images(doc, scripting_enabled, sheet, &HashMap::new())
+    }
+    pub fn with_stylesheet_and_images(
+        doc: &Document,
+        scripting_enabled: bool,
+        sheet: Stylesheet,
+        images: &HashMap<NodeId, ImageAsset>,
+    ) -> Self {
         let mut budget = StyleBudget::default();
         let mut builder = Builder {
             page: Self {
@@ -273,7 +330,19 @@ impl Page {
                             });
                         }
                         "img" => {
-                            if let Some(alt) =
+                            let rendered = element.attribute("src").and_then(|reference| {
+                                images.get(&id).filter(|asset| asset.reference == reference)
+                            });
+                            if let Some(asset) = rendered {
+                                builder.image(
+                                    id,
+                                    style,
+                                    asset,
+                                    element.attribute("alt").filter(|alt| !alt.is_empty()),
+                                    html_dimension(element.attribute("width")),
+                                    html_dimension(element.attribute("height")),
+                                );
+                            } else if let Some(alt) =
                                 element.attribute("alt").filter(|alt| !alt.is_empty())
                             {
                                 builder.text(&format!("[Image: {alt}]"), style);
@@ -312,15 +381,29 @@ impl Page {
     }
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
+            && self.images.is_empty()
             && !self
                 .boxes
                 .iter()
                 .any(|s| s.background.3 > 0 || s.border_solid || s.height != Length::Auto)
     }
+    #[cfg(test)]
+    pub fn image_count(&self) -> usize {
+        self.images.len()
+    }
     pub fn scroll_to_fragment(&mut self, fragment: Option<String>) {
         self.scroll_to = Some(fragment.unwrap_or_default());
     }
+    #[cfg(test)]
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PageClick> {
+        let mut textures = ImageTextureCache::default();
+        self.show_with_textures(ui, &mut textures)
+    }
+    pub fn show_with_textures(
+        &mut self,
+        ui: &mut egui::Ui,
+        textures: &mut ImageTextureCache,
+    ) -> Option<PageClick> {
         let mut clicked = None;
         let mut scroll_to = self.scroll_to.take();
         let start = ui.cursor().min;
@@ -446,6 +529,67 @@ impl Page {
                     parent.cursor += rect.height();
                     right = right.max(rect.right());
                 }
+                Command::Image(index) => {
+                    let parent = stack.last_mut().unwrap();
+                    let image = &self.images[index];
+                    let placement = image_placement(image, parent, self.root_font);
+                    let outer = placement.outer;
+                    let content = placement.content;
+                    let texture = textures.texture(ui.ctx(), image);
+                    if image.style.background.3 > 0 {
+                        ui.painter().rect_filled(
+                            outer,
+                            placement.radius,
+                            color(image.style.background),
+                        );
+                    }
+                    ui.painter().image(
+                        texture.id(),
+                        content,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                    if placement.border > 0.0 {
+                        ui.painter().rect_stroke(
+                            outer,
+                            placement.radius,
+                            Stroke::new(placement.border, color(image.style.border_color)),
+                            egui::epaint::StrokeKind::Inside,
+                        );
+                    }
+                    let response = ui.interact(
+                        outer,
+                        egui::Id::new(("olive-image", image.node, &image.reference)),
+                        if image.action != Action::default() {
+                            egui::Sense::click()
+                        } else {
+                            egui::Sense::hover()
+                        },
+                    );
+                    if response.hovered() {
+                        if image.action != Action::default() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        let href = image
+                            .action
+                            .link
+                            .and_then(|id| self.links.get(&id))
+                            .cloned();
+                        if response.clicked() {
+                            clicked = Some(PageClick {
+                                target: image.action.target,
+                                href: href.clone(),
+                            });
+                        }
+                        if let Some(href) = href {
+                            response.on_hover_text(href);
+                        } else if let Some(alt) = &image.alt {
+                            response.on_hover_text(alt);
+                        }
+                    }
+                    parent.cursor = outer.bottom() + placement.margin_bottom;
+                    right = right.max(outer.right());
+                }
             }
         }
         let bottom = stack[0].cursor.max(start.y);
@@ -481,6 +625,100 @@ fn action_at(block: &Block, galley: &egui::Galley, position: egui::Vec2) -> Opti
         offset += row.glyphs.len() + usize::from(row.ends_with_newline);
     }
     None
+}
+
+fn html_dimension(value: Option<&str>) -> Option<f32> {
+    let value = value?.trim();
+    let value = value.parse::<f32>().ok()?;
+    value.is_finite().then_some(value.clamp(1.0, 10_000.0))
+}
+
+struct ImagePlacement {
+    outer: egui::Rect,
+    content: egui::Rect,
+    border: f32,
+    radius: u8,
+    margin_bottom: f32,
+}
+
+fn image_placement(image: &RenderedImage, parent: &BoxLayout, root: f32) -> ImagePlacement {
+    let style = image.style;
+    let resolve = |value: Length| value.resolve(parent.width, style.font_size, root);
+    let margin = style.margin.map(resolve);
+    let padding = style.padding.map(resolve);
+    let border = if style.border_solid {
+        resolve(style.border_width).max(0.0)
+    } else {
+        0.0
+    };
+    let horizontal_sides = padding[1] + padding[3] + border * 2.0;
+    let vertical_sides = padding[0] + padding[2] + border * 2.0;
+    let available = (parent.width - margin[1] - margin[3] - horizontal_sides).max(1.0);
+    let intrinsic = egui::vec2(image.image.size[0] as f32, image.image.size[1] as f32);
+    let width_value = if style.width == Length::Auto {
+        image.html_width
+    } else {
+        Some(resolve(style.width))
+    };
+    let height_value = if style.height == Length::Auto {
+        image.html_height
+    } else {
+        Some(resolve(style.height))
+    };
+    let mut content_width = width_value.unwrap_or(intrinsic.x).max(1.0);
+    let mut content_height = height_value.unwrap_or(intrinsic.y).max(1.0);
+    if width_value.is_some() && height_value.is_none() {
+        content_height = (content_width * intrinsic.y / intrinsic.x).max(1.0);
+    } else if width_value.is_none() && height_value.is_some() {
+        content_width = (content_height * intrinsic.x / intrinsic.y).max(1.0);
+    }
+    let max_width = if style.max_width == Length::Auto {
+        available
+    } else {
+        available.min(resolve(style.max_width).max(1.0))
+    };
+    if content_width > max_width {
+        let scale = max_width / content_width;
+        content_width = max_width;
+        if height_value.is_none() {
+            content_height *= scale;
+        }
+    }
+    let outer_width = content_width + horizontal_sides;
+    let auto_left = style.margin[3] == Length::Auto;
+    let auto_right = style.margin[1] == Length::Auto;
+    let spare = (parent.width - outer_width - margin[1] - margin[3]).max(0.0);
+    let alignment = if auto_left {
+        spare / if auto_right { 2.0 } else { 1.0 }
+    } else if !auto_right && parent.style.text_align == TextAlign::Center {
+        spare / 2.0
+    } else if !auto_right && parent.style.text_align == TextAlign::Right {
+        spare
+    } else {
+        0.0
+    };
+    let left = parent.content_left + margin[3] + alignment;
+    let top = parent.cursor + margin[0];
+    let content_top = top + border + padding[0];
+    let content = egui::Rect::from_min_size(
+        egui::pos2(left + border + padding[3], content_top),
+        egui::vec2(content_width, content_height),
+    );
+    let outer = egui::Rect::from_min_size(
+        egui::pos2(left, top),
+        egui::vec2(outer_width, content_height + vertical_sides),
+    );
+    let radius = style
+        .border_radius
+        .resolve(0.0, style.font_size, root)
+        .clamp(0.0, 255.0) as u8;
+    ImagePlacement {
+        outer,
+        content,
+        border,
+        radius,
+        margin_bottom: margin[2],
+    }
 }
 
 struct BoxLayout {
@@ -620,6 +858,36 @@ impl Builder {
         } else {
             self.page.truncated = true;
         }
+    }
+    fn image(
+        &mut self,
+        node: NodeId,
+        style: Style,
+        asset: &ImageAsset,
+        alt: Option<&str>,
+        html_width: Option<f32>,
+        html_height: Option<f32>,
+    ) {
+        self.flush();
+        if self.page.images.len() >= MAX_IMAGES {
+            self.page.truncated = true;
+            return;
+        }
+        let index = self.page.images.len();
+        self.page.images.push(RenderedImage {
+            node,
+            reference: asset.reference.clone(),
+            image: asset.image.clone(),
+            alt: alt.map(str::to_owned),
+            style: style.css,
+            html_width,
+            html_height,
+            action: Action {
+                target: style.target,
+                link: style.link,
+            },
+        });
+        self.page.commands.push(Command::Image(index));
     }
     fn flush(&mut self) {
         if !self.current.job.text.is_empty() {
@@ -820,6 +1088,49 @@ mod tests {
             "<!doctype html><style>hidden css</style><body><script>hidden js</script><template>hidden template</template><div hidden><p>secret</p></div><p>visible <img src='file:///secret' alt='an olive'></p><iframe src='https://example.com'>frame</iframe>",
         );
         assert_eq!(texts(&page), ["visible [Image: an olive]"]);
+    }
+
+    #[test]
+    fn renders_predecoded_images_with_intrinsic_and_html_dimensions() {
+        let document = parse(
+            "<p>Before</p><p><a href='/image'><img src='olive.png' alt='Olive' width='120'></a></p><p>After</p>",
+        )
+        .unwrap()
+        .document;
+        let image_id = document
+            .descendants(document.root())
+            .find(|&id| {
+                document
+                    .node(id)
+                    .and_then(|node| node.as_element())
+                    .is_some_and(|element| element.name.local.as_ref() == "img")
+            })
+            .unwrap();
+        let mut images = HashMap::new();
+        images.insert(
+            image_id,
+            ImageAsset {
+                reference: "olive.png".into(),
+                image: Arc::new(ColorImage::filled([4, 2], Color32::WHITE)),
+            },
+        );
+        let mut page = Page::with_stylesheet_and_images(
+            &document,
+            false,
+            Stylesheet::from_document(&document),
+            &images,
+        );
+        assert!(!page.is_empty());
+        assert_eq!(page.images.len(), 1);
+        assert_eq!(page.images[0].image.size, [4, 2]);
+        assert!(
+            page.commands
+                .iter()
+                .any(|command| matches!(command, Command::Image(_)))
+        );
+        let mut output = draw(&mut page, 400.0);
+        assert!(!output.textures_delta.set.is_empty());
+        output.textures_delta.clear();
     }
 
     #[test]

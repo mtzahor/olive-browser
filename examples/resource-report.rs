@@ -23,6 +23,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{} bytes: {}", source.source.len(), source.reference);
         }
     }
+    let mut images: Vec<_> = resources.images.values().collect();
+    images.sort_by_key(|image| &image.reference);
+    for image in images {
+        println!("{} bytes: {}", image.bytes.len(), image.reference);
+    }
     for diagnostic in &resources.report.diagnostics {
         eprintln!("{diagnostic}");
     }

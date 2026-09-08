@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Add bounded PNG/JPEG image loading for `<img src>` from local files and HTTP(S),
+  including relative URLs, `<base href>`, HTTPS/origin checks, and resource
+  diagnostics.
+- Decode images with dimension, allocation, encoded-byte, and per-page pixel
+  limits; retain alt-text fallback for missing, invalid, or unsupported images.
+- Render intrinsic and numeric HTML/CSS image sizes, transparent pixels,
+  backgrounds, borders, rounded corners, and clickable images inside links.
+
 ## 0.2.0
 
 - Accommodate multi-megabyte site bundles with an 8 MiB resource ceiling, separate

@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "olive-browser"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -2716,10 +2716,12 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "html5ever",
+ "image",
  "percent-encoding",
  "reqwest",
  "rfd",
  "url",
+ "zune-jpeg",
 ]
 
 [[package]]

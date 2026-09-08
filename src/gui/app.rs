@@ -1,9 +1,10 @@
 use crate::{
     icon,
     navigation::{History, Navigation},
-    render::{INK, OLIVE, Page},
+    render::{INK, ImageAsset, ImageTextureCache, OLIVE, Page},
 };
 use eframe::egui::{self, Color32, RichText};
+use image::{ImageReader, Limits};
 use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
 use olive_html::{
     ExternalSource, NodeId,
@@ -14,12 +15,16 @@ use olive_html::{
 use std::{
     collections::HashMap,
     ffi::OsString,
+    io::Cursor,
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
 };
 
 const PAPER: Color32 = Color32::from_rgb(250, 250, 246);
 const CHROME: Color32 = Color32::from_rgb(239, 242, 231);
+const MAX_IMAGE_DIMENSION: u32 = 4_096;
+const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PAGE_IMAGE_PIXELS: u64 = 8 * 1024 * 1024;
 
 struct LoadedPage {
     location: Location,
@@ -53,6 +58,7 @@ struct PreparedPage {
     loaded: LoadedPage,
     session: Option<DocumentSession>,
     styles: HashMap<NodeId, ExternalSource>,
+    images: HashMap<NodeId, ImageAsset>,
 }
 
 struct PendingPage {
@@ -69,6 +75,7 @@ pub struct OliveApp {
     history: History,
     error: Option<String>,
     alert: Option<String>,
+    image_textures: ImageTextureCache,
     // Each successful open gets a new scroll ID, including re-opening the same file.
     generation: u64,
 }
@@ -101,6 +108,7 @@ impl OliveApp {
             history: History::default(),
             error: None,
             alert: None,
+            image_textures: ImageTextureCache::default(),
             generation: 0,
         };
         if let Some(source) = source {
@@ -237,6 +245,7 @@ impl OliveApp {
                     "{title} — Olive Browser"
                 )));
                 self.loaded = Some(loaded);
+                self.image_textures.clear();
                 self.generation = self.generation.wrapping_add(1);
                 self.pending = None;
             }
@@ -277,6 +286,8 @@ fn prepare_page_with_loader(
         &parsed.document,
         scripting_enabled,
     );
+    let mut resource_report = resources.report;
+    let images = decode_images(&resources.images, &mut resource_report);
     let (page, base, scripts, session) = if scripting_enabled {
         let session = DocumentSession::with_sources(
             parsed.document,
@@ -285,10 +296,11 @@ fn prepare_page_with_loader(
         );
         let (page, base) = session.with_document(|document| {
             (
-                Page::with_stylesheet(
+                Page::with_stylesheet_and_images(
                     document,
                     true,
                     Stylesheet::from_document_with_sources(document, &resources.styles),
+                    &images,
                 ),
                 source.location.document_base(document),
             )
@@ -296,10 +308,11 @@ fn prepare_page_with_loader(
         (page, base, session.report().clone(), Some(session))
     } else {
         let document = parsed.document;
-        let page = Page::with_stylesheet(
+        let page = Page::with_stylesheet_and_images(
             &document,
             false,
             Stylesheet::from_document_with_sources(&document, &resources.styles),
+            &images,
         );
         (
             page,
@@ -317,12 +330,127 @@ fn prepare_page_with_loader(
             corrections,
             scripts,
             scripting_enabled,
-            resources: resources.report,
+            resources: resource_report,
             session: None,
         },
         session,
         styles: resources.styles,
+        images,
     })
+}
+
+fn decode_images(
+    sources: &HashMap<NodeId, olive_html::resources::ExternalImage>,
+    report: &mut ResourceReport,
+) -> HashMap<NodeId, ImageAsset> {
+    let mut decoded = HashMap::new();
+    let mut pixels = 0_u64;
+    for (&id, source) in sources {
+        let result = decode_image(&source.bytes).and_then(|(image, image_pixels)| {
+            if pixels.saturating_add(image_pixels) > MAX_PAGE_IMAGE_PIXELS {
+                Err(format!(
+                    "Page image pixel budget exhausted ({} pixels total).",
+                    MAX_PAGE_IMAGE_PIXELS
+                ))
+            } else {
+                pixels += image_pixels;
+                Ok(image)
+            }
+        });
+        match result {
+            Ok(image) => {
+                decoded.insert(
+                    id,
+                    ImageAsset {
+                        reference: source.reference.clone(),
+                        image,
+                    },
+                );
+            }
+            Err(error) => {
+                let message = format!("{}: {error}", source.reference);
+                let end = message
+                    .char_indices()
+                    .nth(1024)
+                    .map_or(message.len(), |(index, _)| index);
+                report.diagnostics.push(message[..end].to_owned());
+            }
+        }
+    }
+    decoded
+}
+
+fn decode_image(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return decode_jpeg(bytes);
+    }
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| format!("could not identify image format: {error}"))?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|error| format!("could not decode image: {error}"))?;
+    let width = image.width();
+    let height = image.height();
+    let pixels = checked_image_pixels(width, height)?;
+    let rgba = image.to_rgba8();
+    Ok((color_image(width, height, rgba.as_raw()), pixels))
+}
+
+fn decode_jpeg(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
+    use zune_jpeg::{JpegDecoder, zune_core::colorspace::ColorSpace};
+
+    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
+        .jpeg_set_out_colorspace(ColorSpace::RGBA)
+        .set_use_unsafe(false);
+    let mut decoder = JpegDecoder::new_with_options(bytes, options);
+    decoder
+        .decode_headers()
+        .map_err(|error| format!("could not read image dimensions: {error}"))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| "could not read image dimensions".to_owned())?;
+    let width = u32::from(info.width);
+    let height = u32::from(info.height);
+    let pixels = checked_image_pixels(width, height)?;
+    let rgba = decoder
+        .decode()
+        .map_err(|error| format!("could not decode image: {error}"))?;
+    let expected = usize::try_from(pixels)
+        .ok()
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "decoded image is too large".to_owned())?;
+    if rgba.len() != expected {
+        return Err("JPEG decoder returned an unexpected pixel buffer".into());
+    }
+    Ok((color_image(width, height, &rgba), pixels))
+}
+
+fn checked_image_pixels(width: u32, height: u32) -> Result<u64, String> {
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(format!(
+            "image dimensions exceed the {MAX_IMAGE_DIMENSION}px limit"
+        ));
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > MAX_PAGE_IMAGE_PIXELS {
+        return Err(format!(
+            "image has too many pixels (maximum {MAX_PAGE_IMAGE_PIXELS})"
+        ));
+    }
+    Ok(pixels)
+}
+
+fn color_image(width: u32, height: u32, rgba: &[u8]) -> std::sync::Arc<egui::ColorImage> {
+    std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied(
+        [width as usize, height as usize],
+        rgba,
+    ))
 }
 
 // The DOM and Boa realm stay on their original worker. Only presentation data
@@ -355,10 +483,11 @@ fn serve_page(
         let allowed = session.click(click.target);
         let (page, base) = session.with_document(|document| {
             (
-                Page::with_stylesheet(
+                Page::with_stylesheet_and_images(
                     document,
                     true,
                     Stylesheet::from_document_with_sources(document, &prepared.styles),
+                    &prepared.images,
                 ),
                 location.document_base(document),
             )
@@ -671,7 +800,9 @@ impl eframe::App for OliveApp {
                                     if loaded.page.is_empty() {
                                         ui.label("This document has no visible content.");
                                     }
-                                    if let Some(click) = loaded.page.show(ui) {
+                                    if let Some(click) =
+                                        loaded.page.show_with_textures(ui, &mut self.image_textures)
+                                    {
                                         link = click.href;
                                         if let (Some(target), Some(session)) =
                                             (click.target, loaded.session.as_mut())
@@ -808,6 +939,7 @@ mod tests {
             pending: None,
             error: None,
             alert: None,
+            image_textures: ImageTextureCache::default(),
             generation: 1,
         }
     }
@@ -819,6 +951,15 @@ mod tests {
             status: Some(200),
             plain_text: false,
         }
+    }
+
+    #[test]
+    fn decodes_png_images_with_bounded_dimensions() {
+        let (image, pixels) =
+            decode_image(include_bytes!("../../assets/olive-browser.png")).unwrap();
+        assert_eq!(image.size, [1024, 1024]);
+        assert_eq!(pixels, 1024 * 1024);
+        assert!(decode_image(b"not an image").is_err());
     }
 
     #[test]
@@ -871,6 +1012,8 @@ mod tests {
         let loaded = load_file(root.join("examples/hello.html")).unwrap();
         assert_eq!(loaded.page.title, "Olive Browser");
         assert!(!loaded.page.is_empty());
+        let image_page = load_file(root.join("examples/reading.html")).unwrap();
+        assert_eq!(image_page.page.image_count(), 1);
         assert!(load_file(root.clone()).is_err());
         assert!(load_file(root.join("missing-olive-example.html")).is_err());
     }

@@ -299,6 +299,34 @@ fn loads_typed_resources_with_redirects_and_decoding() {
 }
 
 #[test]
+fn loads_png_image_resources_as_original_bytes() {
+    use olive_html::net::{MAX_RESOURCE_BYTES, ResourceKind};
+    let expected = include_bytes!("../assets/olive-browser.png");
+    let (location, server) = server(vec![response(
+        "200 OK",
+        "Content-Type: image/png\r\n",
+        expected,
+    )]);
+    let loaded = DocumentLoader::new()
+        .unwrap()
+        .load_resource(
+            &location,
+            location.resolve("olive.png").unwrap(),
+            ResourceKind::Image,
+            Duration::from_secs(2),
+            MAX_RESOURCE_BYTES,
+        )
+        .unwrap();
+    assert!(loaded.source.is_empty());
+    assert_eq!(loaded.bytes, expected);
+    assert!(
+        server.join().unwrap()[0]
+            .to_ascii_lowercase()
+            .contains("accept: image/png")
+    );
+}
+
+#[test]
 fn resource_errors_mime_limits_and_origin_boundaries() {
     use olive_html::net::{MAX_RESOURCE_BYTES, ResourceKind};
     let loader = DocumentLoader::new().unwrap();
@@ -479,6 +507,28 @@ mod page_resources {
         assert_eq!(resources.report.loaded, 1);
         assert!(resources.scripts.is_empty());
         assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn page_load_collects_images_when_scripts_are_disabled() {
+        let (location, server) = server(vec![response(
+            "200 OK",
+            "Content-Type: image/png\r\n",
+            include_bytes!("../assets/olive-browser.png"),
+        )]);
+        let doc = olive_html::parse("<img src=olive.png alt=Olive>")
+            .unwrap()
+            .document;
+        let resources =
+            PageResources::load(&DocumentLoader::new().unwrap(), &location, &doc, false);
+        assert_eq!(resources.report.attempted, 1);
+        assert_eq!(resources.report.loaded, 1);
+        assert_eq!(resources.images.len(), 1);
+        assert_eq!(
+            resources.images.values().next().unwrap().bytes.len(),
+            include_bytes!("../assets/olive-browser.png").len()
+        );
+        server.join().unwrap();
     }
 
     #[test]

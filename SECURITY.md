@@ -1,7 +1,8 @@
-# Security boundary in 0.2.0
+# Security boundary in 0.3.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
-The optional GUI renders text and linked/embedded/inline CSS. Local documents run
+The optional GUI renders text, bounded PNG/JPEG images, and linked/embedded/inline CSS.
+Local documents run
 inline and external classic JavaScript automatically. Web documents start with
 JavaScript disabled: no script sources are fetched and no handlers run until the
 user chooses **Enable JavaScript** for that page. Reload and same-page navigation
@@ -11,7 +12,7 @@ Enabling the `js` feature alone never
 executes HTML. The `olive` DOM inspector remains inert; `olive-js` explicitly runs
 standalone JavaScript. The optional `net` feature explicitly loads HTTP(S)
 documents, and is included in the GUI. Parsing itself never performs networking.
-The viewer explicitly fetches supported CSS/JS resources; Olive does not enforce CSP.
+The viewer explicitly fetches supported CSS/JS/image resources; Olive does not enforce CSP.
 **The parser is not an HTML sanitizer, and script execution is not sandboxed.**
 
 The GUI and HTML CLI accept at most 1 MiB. Library callers can configure this limit.
@@ -20,9 +21,9 @@ Tree output escapes terminal control characters and limits indentation.
 Olive's flat arena avoids ownership cycles and recursive DOM drop, and all
 first-party Rust targets forbid unsafe code.
 
-The GUI adds a 200,000-character / 5,000-text-block / 10,000-box display limit,
-reads files on one
-background worker, and retains the previous page if a new document cannot be read.
+The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
+display limit, reads files on one background worker, and retains the previous page
+if a new document cannot be read.
 Its CSS parser, JavaScript engine/garbage collector, font and native UI dependencies
 expand the trust boundary beyond the HTML parser.
 Links navigate only after a user click. HTTP(S) pages cannot navigate to `file:`;
@@ -46,8 +47,10 @@ addresses are allowed, including for subresources; this is not an SSRF-filtering
 
 Page resources resolve against the final document URL and first base href, with
 at most 64 attempts and a shared 20-second network deadline after document loading.
-Each resource is capped at 8 MiB after decompression and UTF-8 decoding, with
-at most 8 MiB of external CSS and 32 MiB of external JavaScript retained per page.
+Each resource is capped at 8 MiB after decompression, with at most 8 MiB of
+external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG images
+retained per page. Image decoding additionally caps each dimension at 4,096,
+decoder allocation at 32 MiB, and the page at 8,388,608 decoded pixels.
 A response that does not fit the remaining page budget is discarded; its error
 reports the page budget separately from the individual resource ceiling.
 Rejected responses also have bounded reads; count and time limits bound repeated
@@ -62,7 +65,8 @@ errors plus one budget notice are retained, at most 1,024 bytes per message.
 Resource collection is a single initial snapshot; CSS imports and dynamically
 inserted or changed resource URLs never fetch. Unsupported modules, alternate,
 disabled and non-screen stylesheets are skipped. A resource may be fetched before
-an earlier script removes its element; removed scripts do not execute.
+an earlier script removes its element; removed scripts do not execute. Unsupported
+image formats, CSS background images, and image data URLs remain inert.
 
 CSS is data only: imports, all at-rules, URL backgrounds and page fonts are ignored.
 A combined 8 MiB linked/embedded/inline CSS input budget, 16,384-rule limit,
