@@ -342,7 +342,12 @@ fn resource_errors_mime_limits_and_origin_boundaries() {
         server.join().unwrap();
     }
     let secure = Location::from_input("https://example.com").unwrap();
-    for target in ["http://127.0.0.1:1/a.js", "file:///secret.js"] {
+    let local_file = if cfg!(windows) {
+        "file:///C:/secret.js"
+    } else {
+        "file:///secret.js"
+    };
+    for target in ["http://127.0.0.1:1/a.js", local_file] {
         assert!(
             loader
                 .load_resource(

@@ -549,9 +549,14 @@ mod tests {
         assert!(site.resolve("javascript:alert(1)").is_err());
         assert!(site.resolve(&"x".repeat(MAX_URL_BYTES + 1)).is_err());
 
-        // Windows may expose the empty file authority as `Some("")`; it is
-        // still local, unlike `file://server/...`.
-        assert!(Location::from_input("file:///secret.js").is_ok());
+        // Windows file URLs require a drive-qualified path; Unix file URLs do
+        // not. Both forms have a local (empty) authority.
+        let local_file = if cfg!(windows) {
+            "file:///C:/secret.js"
+        } else {
+            "file:///secret.js"
+        };
+        assert!(Location::from_input(local_file).is_ok());
     }
 
     #[test]
