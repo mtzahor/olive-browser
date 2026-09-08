@@ -13,6 +13,7 @@ mkdir -p "$olive_bundle/Contents/MacOS" "$olive_bundle/Contents/Resources"
 cp target/release/olive-gui "$olive_bundle/Contents/MacOS/olive-gui"
 cp LICENSE "$olive_bundle/Contents/Resources/LICENSE"
 cp assets/fonts/OFL.txt "$olive_bundle/Contents/Resources/Inter-OFL.txt"
+cp assets/fonts/NotoSansHebrew-OFL.txt "$olive_bundle/Contents/Resources/NotoSansHebrew-OFL.txt"
 cp assets/olive-browser.icns "$olive_bundle/Contents/Resources/olive-browser.icns"
 cat > "$olive_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

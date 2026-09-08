@@ -8,7 +8,7 @@ use olive_html::{
     Document, NodeId, NodeKind,
     css::{Color, ComputedStyle, Display, Length, StyleBudget, Stylesheet, TextAlign, WhiteSpace},
 };
-use std::sync::Arc;
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 pub const INK: Color32 = Color32::from_rgb(38, 44, 32);
 pub const OLIVE: Color32 = Color32::from_rgb(86, 105, 51);
@@ -25,6 +25,7 @@ struct Style {
     indent: usize,
     inline_background: Color32,
     target: Option<NodeId>,
+    link: Option<NodeId>,
 }
 impl Style {
     fn format(self) -> TextFormat {
@@ -64,13 +65,24 @@ struct Block {
     rule: bool,
     style: ComputedStyle,
     layout: Option<(f32, f32, Arc<egui::Galley>)>,
+    actions: Vec<(Range<usize>, Action)>,
+    characters: usize,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Action {
     target: Option<NodeId>,
+    link: Option<NodeId>,
+}
+pub struct PageClick {
+    pub target: Option<NodeId>,
+    pub href: Option<String>,
 }
 #[derive(Clone, Copy)]
 enum Command {
     Open(usize),
     Close,
     Text(usize),
+    Anchor(usize),
 }
 #[derive(Default)]
 pub struct Page {
@@ -84,6 +96,9 @@ pub struct Page {
     commands: Vec<Command>,
     box_rects: Vec<egui::Rect>,
     root_font: f32,
+    links: HashMap<NodeId, String>,
+    anchors: Vec<String>,
+    scroll_to: Option<String>,
 }
 struct Builder {
     page: Page,
@@ -98,6 +113,9 @@ enum Visit {
 }
 impl Page {
     pub fn from_document(doc: &Document) -> Self {
+        Self::with_scripts(doc, true)
+    }
+    pub fn with_scripts(doc: &Document, scripting_enabled: bool) -> Self {
         let sheet = Stylesheet::from_document(doc);
         let mut budget = StyleBudget::default();
         let mut builder = Builder {
@@ -160,7 +178,6 @@ impl Page {
                             tag,
                             "head"
                                 | "script"
-                                | "noscript"
                                 | "style"
                                 | "template"
                                 | "title"
@@ -168,13 +185,20 @@ impl Page {
                                 | "object"
                                 | "embed"
                         )
+                        || (tag == "noscript" && scripting_enabled)
                     {
                         continue;
                     }
                     style.css =
                         sheet.compute(doc, id, style.css, builder.page.root_font, &mut budget);
-                    if element.attribute("onclick").is_some() {
+                    if scripting_enabled && element.attribute("onclick").is_some() {
                         style.target = Some(id);
+                    }
+                    if tag == "a" {
+                        if let Some(href) = element.attribute("href") {
+                            style.link = Some(id);
+                            builder.page.links.insert(id, href.to_owned());
+                        }
                     }
                     if style.css.display == Display::None {
                         continue;
@@ -193,6 +217,16 @@ impl Page {
                         style.inline_background = Color32::TRANSPARENT;
                     } else if style.css.background.3 > 0 {
                         style.inline_background = color(style.css.background);
+                    }
+                    if let Some(anchor) = element
+                        .attribute("id")
+                        .or_else(|| (tag == "a").then(|| element.attribute("name")).flatten())
+                    {
+                        builder
+                            .page
+                            .commands
+                            .push(Command::Anchor(builder.page.anchors.len()));
+                        builder.page.anchors.push(anchor.to_owned());
                     }
                     if builder.page.truncated {
                         break;
@@ -279,9 +313,22 @@ impl Page {
                 .iter()
                 .any(|s| s.background.3 > 0 || s.border_solid || s.height != Length::Auto)
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<NodeId> {
+    pub fn scroll_to_fragment(&mut self, fragment: Option<String>) {
+        self.scroll_to = Some(fragment.unwrap_or_default());
+    }
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PageClick> {
         let mut clicked = None;
+        let mut scroll_to = self.scroll_to.take();
         let start = ui.cursor().min;
+        if scroll_to.as_deref() == Some("") || scroll_to.as_deref() == Some("top") {
+            ui.scroll_to_rect(
+                egui::Rect::from_min_size(start, egui::vec2(1.0, 1.0)),
+                Some(egui::Align::Min),
+            );
+            if scroll_to.as_deref() == Some("") {
+                scroll_to = None;
+            }
+        }
         let width = ui.available_width().max(1.0);
         let mut stack = vec![BoxLayout::root(start, width)];
         self.box_rects.resize(self.boxes.len(), egui::Rect::NOTHING);
@@ -291,6 +338,16 @@ impl Page {
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
         for command in &self.commands {
             match *command {
+                Command::Anchor(index) => {
+                    if scroll_to.as_deref() == Some(self.anchors[index].as_str()) {
+                        let top = egui::pos2(start.x, stack.last().unwrap().cursor);
+                        ui.scroll_to_rect(
+                            egui::Rect::from_min_size(top, egui::vec2(1.0, 1.0)),
+                            Some(egui::Align::Min),
+                        );
+                        scroll_to = None;
+                    }
+                }
                 Command::Open(index) => {
                     let layout = BoxLayout::open(
                         index,
@@ -355,16 +412,32 @@ impl Page {
                     );
                     let response = text_ui.put(
                         rect,
-                        egui::Label::new(galley).selectable(true).sense(
-                            if block.target.is_some() {
+                        egui::Label::new(galley.clone()).selectable(true).sense(
+                            if !block.actions.is_empty() {
                                 egui::Sense::click()
                             } else {
                                 egui::Sense::hover()
                             },
                         ),
                     );
-                    if response.clicked() {
-                        clicked = block.target;
+                    if response.hovered() {
+                        if let Some(action) = ui
+                            .ctx()
+                            .pointer_hover_pos()
+                            .and_then(|pos| action_at(block, &galley, pos - rect.min))
+                        {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            let href = action.link.and_then(|id| self.links.get(&id)).cloned();
+                            if response.clicked() {
+                                clicked = Some(PageClick {
+                                    target: action.target,
+                                    href: href.clone(),
+                                });
+                            }
+                            if let Some(href) = href {
+                                response.on_hover_text(href);
+                            }
+                        }
                     }
                     parent.cursor += rect.height();
                     right = right.max(rect.right());
@@ -384,6 +457,26 @@ impl Page {
         }
         clicked
     }
+}
+
+// Hit-test actual glyphs, so adjacent links and surrounding text retain their
+// individual actions even when they share a wrapped, selectable paragraph.
+fn action_at(block: &Block, galley: &egui::Galley, position: egui::Vec2) -> Option<Action> {
+    let mut offset = 0;
+    for row in &galley.rows {
+        if row.rect().contains(position.to_pos2()) {
+            let column = row.glyphs.iter().position(|glyph| {
+                position.x >= row.pos.x + glyph.pos.x && position.x < row.pos.x + glyph.max_x()
+            })?;
+            return block
+                .actions
+                .iter()
+                .find(|(range, _)| range.contains(&(offset + column)))
+                .map(|(_, action)| *action);
+        }
+        offset += row.glyphs.len() + usize::from(row.ends_with_newline);
+    }
+    None
 }
 
 struct BoxLayout {
@@ -543,7 +636,6 @@ impl Builder {
         }
         if self.current.job.text.is_empty() {
             self.current.style = style.css;
-            self.current.target = style.target;
             self.current.job.halign = match style.css.text_align {
                 TextAlign::Left => egui::Align::Min,
                 TextAlign::Center => egui::Align::Center,
@@ -551,6 +643,18 @@ impl Builder {
             };
         }
         self.current.indent = style.indent;
+        let characters = accepted.chars().count();
+        let action = Action {
+            target: style.target,
+            link: style.link,
+        };
+        if action != Action::default() {
+            self.current.actions.push((
+                self.current.characters..self.current.characters + characters,
+                action,
+            ));
+        }
+        self.current.characters += characters;
         self.current.job.append(&accepted, 0.0, style.format());
         self.pending_space = false;
     }
@@ -600,6 +704,69 @@ mod tests {
     }
     fn texts(page: &Page) -> Vec<&str> {
         page.blocks.iter().map(|b| b.job.text.as_str()).collect()
+    }
+
+    #[test]
+    fn links_have_independent_hit_targets_inside_wrapped_unicode_text() {
+        let mut page = page(
+            "<p>Plain café <a href='/one'>first <strong>link</strong></a> between <a href='/two'>second link wraps across lines</a> end</p>",
+        );
+        let mut output = draw(&mut page, 180.0);
+        let block = &page.blocks[0];
+        let galley = &block.layout.as_ref().unwrap().2;
+        assert!(galley.rows.len() > 1);
+        let text = block.job.text.chars().collect::<Vec<_>>();
+        let mut offset = 0;
+        for row in &galley.rows {
+            for (column, glyph) in row.glyphs.iter().enumerate() {
+                let position = egui::vec2(
+                    row.pos.x + glyph.pos.x + glyph.advance_width / 2.0,
+                    row.rect().center().y,
+                );
+                let action = action_at(block, galley, position);
+                let prefix: String = text[..offset + column].iter().collect();
+                let expected = if prefix.len() >= block.job.text.find("first").unwrap()
+                    && prefix.len() < block.job.text.find(" between").unwrap()
+                {
+                    Some("/one")
+                } else if prefix.len() >= block.job.text.find("second").unwrap()
+                    && prefix.len() < block.job.text.find(" end").unwrap()
+                {
+                    Some("/two")
+                } else {
+                    None
+                };
+                // Collapsed separator whitespace may inherit either adjacent style.
+                if !glyph.chr.is_whitespace() {
+                    assert_eq!(
+                        action
+                            .and_then(|a| a.link)
+                            .and_then(|id| page.links.get(&id))
+                            .map(String::as_str),
+                        expected,
+                        "{prefix}"
+                    );
+                }
+            }
+            offset += row.glyphs.len() + usize::from(row.ends_with_newline);
+        }
+        assert!(action_at(block, galley, egui::vec2(-10.0, -10.0)).is_none());
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn remote_noscript_is_visible_and_onclick_is_inert() {
+        let document = parse("<body><noscript><p>Fallback</p></noscript><p onclick='alert(1)'>Inert</p><a href='/next' onclick='alert(2)'>Next</a><h2 id='café'>Anchor</h2><a name='legacy'></a>").unwrap().document;
+        let page = Page::with_scripts(&document, false);
+        assert!(texts(&page).contains(&"Fallback"));
+        assert!(
+            page.blocks
+                .iter()
+                .flat_map(|b| &b.actions)
+                .all(|(_, action)| action.target.is_none())
+        );
+        assert_eq!(page.links.len(), 1);
+        assert_eq!(page.anchors, ["café", "legacy"]);
     }
 
     #[test]
@@ -710,6 +877,7 @@ mod tests {
 
     fn draw(page: &mut Page, width: f32) -> egui::FullOutput {
         let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
         ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

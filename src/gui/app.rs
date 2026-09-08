@@ -1,12 +1,17 @@
 use crate::{
     icon,
+    navigation::{History, Navigation},
     render::{INK, OLIVE, Page},
 };
-use eframe::egui::{self, Color32, FontFamily, RichText};
+use eframe::egui::{self, Color32, RichText};
 use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport, run_document};
-use olive_html::{ParseOptions, parse_reader, parse_utf8};
+use olive_html::{
+    ParseOptions,
+    net::{DocumentLoader, LoadedDocument, Location},
+    parse_utf8,
+};
 use std::{
-    fs::File,
+    ffi::OsString,
     path::PathBuf,
     sync::mpsc::{self, Receiver, TryRecvError},
 };
@@ -15,17 +20,27 @@ const PAPER: Color32 = Color32::from_rgb(250, 250, 246);
 const CHROME: Color32 = Color32::from_rgb(239, 242, 231);
 
 struct LoadedPage {
-    path: PathBuf,
+    location: Location,
+    base: Location,
+    status: Option<u16>,
     page: Page,
     corrections: usize,
     scripts: ScriptReport,
     source: Option<Vec<u8>>,
 }
 
+struct PendingPage {
+    receiver: Receiver<Result<LoadedPage, String>>,
+    navigation: Navigation,
+    requested: Location,
+}
+
 pub struct OliveApp {
     icon: egui::TextureHandle,
     loaded: Option<LoadedPage>,
-    pending: Option<Receiver<Result<LoadedPage, String>>>,
+    pending: Option<PendingPage>,
+    address: String,
+    history: History,
     error: Option<String>,
     alert: Option<String>,
     session: Option<DocumentSession>,
@@ -34,20 +49,9 @@ pub struct OliveApp {
 }
 
 impl OliveApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
         let ctx = &cc.egui_ctx;
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "Inter".into(),
-            egui::FontData::from_static(include_bytes!("../../assets/fonts/InterVariable.ttf"))
-                .into(),
-        );
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .unwrap()
-            .insert(0, "Inter".into());
-        ctx.set_fonts(fonts);
+        ctx.set_fonts(crate::fonts::definitions());
         let mut style = egui::Style {
             visuals: egui::Visuals::light(),
             ..Default::default()
@@ -68,13 +72,19 @@ impl OliveApp {
             icon,
             loaded: None,
             pending: None,
+            address: String::new(),
+            history: History::default(),
             error: None,
             alert: None,
             session: None,
             generation: 0,
         };
-        if let Some(path) = path {
-            app.open(path, ctx);
+        if let Some(source) = source {
+            let location = match source.to_str() {
+                Some(input) => Location::from_input(input),
+                None => Location::from_path(PathBuf::from(source)),
+            };
+            app.open_result(location, Navigation::New, ctx);
         }
         app
     }
@@ -84,47 +94,93 @@ impl OliveApp {
             return;
         }
         let mut dialog = rfd::FileDialog::new().add_filter("HTML documents", &["html", "htm"]);
-        if let Some(parent) = self.loaded.as_ref().and_then(|loaded| loaded.path.parent()) {
-            dialog = dialog.set_directory(parent);
+        if let Some(path) = self
+            .loaded
+            .as_ref()
+            .and_then(|loaded| loaded.location.file_path())
+        {
+            if let Some(parent) = path.parent() {
+                dialog = dialog.set_directory(parent);
+            }
         }
         if let Some(path) = dialog.pick_file() {
-            self.open(path, ctx);
+            self.open_result(Location::from_path(path), Navigation::New, ctx);
         }
     }
 
-    fn open(&mut self, path: PathBuf, ctx: &egui::Context) {
+    fn open_result(
+        &mut self,
+        location: Result<Location, String>,
+        navigation: Navigation,
+        ctx: &egui::Context,
+    ) {
+        match location {
+            Ok(location) => self.open(location, navigation, ctx),
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn open(&mut self, location: Location, navigation: Navigation, ctx: &egui::Context) {
         if self.pending.is_some() {
             return;
         }
         self.error = None;
+        self.alert = None;
+        self.address = location.as_str().to_owned();
+        if !matches!(navigation, Navigation::Reload) {
+            if let Some(loaded) = self.loaded.as_mut().filter(|loaded| {
+                loaded.location.same_document(&location)
+                    && (loaded.location != location
+                        || matches!(navigation, Navigation::Traverse(_)))
+            }) {
+                loaded.page.scroll_to_fragment(location.fragment());
+                // A base href can be independent of the document URL.
+                if loaded.base.same_document(&loaded.location) {
+                    loaded.base = location.clone();
+                }
+                loaded.location = location.clone();
+                self.history.commit(location, navigation);
+                return;
+            }
+        }
         let (sender, receiver) = mpsc::channel();
+        let requested = location.clone();
         let ctx = ctx.clone();
         // The parser's DOM stays on this worker; only the owned presentation crosses threads.
         match std::thread::Builder::new()
-            .name("olive-file-loader".into())
+            .name("olive-document-loader".into())
             .spawn(move || {
-                let result = load_file(path);
+                let result = DocumentLoader::new()
+                    .and_then(|loader| loader.load(location))
+                    .and_then(prepare_page);
                 let _ = sender.send(result);
                 ctx.request_repaint();
             }) {
-            Ok(_) => self.pending = Some(receiver),
-            Err(error) => self.error = Some(format!("Could not start the file loader: {error}")),
+            Ok(_) => {
+                self.pending = Some(PendingPage {
+                    receiver,
+                    navigation,
+                    requested,
+                })
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not start the document loader: {error}"))
+            }
         }
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
-        let Some(receiver) = &self.pending else {
+        let Some(pending) = &self.pending else {
             return;
         };
-        match receiver.try_recv() {
-            Ok(Ok(loaded)) => {
+        match pending.receiver.try_recv() {
+            Ok(Ok(mut loaded)) => {
+                self.history
+                    .commit(loaded.location.clone(), pending.navigation);
+                self.address = loaded.location.as_str().to_owned();
+                loaded.page.scroll_to_fragment(loaded.location.fragment());
                 let title = if loaded.page.title.trim().is_empty() {
-                    loaded
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
+                    loaded.location.as_str().to_owned()
                 } else {
                     loaded.page.title.clone()
                 };
@@ -132,6 +188,7 @@ impl OliveApp {
                     "{title} — Olive Browser"
                 )));
                 self.loaded = Some(loaded);
+                self.session = None;
                 if let Some(loaded) = self.loaded.as_mut() {
                     if let Some(source) = loaded.source.take() {
                         if let Ok(parsed) = parse_utf8(
@@ -155,12 +212,19 @@ impl OliveApp {
                 self.pending = None;
             }
             Ok(Err(error)) => {
-                self.error = Some(error);
+                self.error = Some(format!("{}\n{error}", pending.requested.as_str()));
+                if let Some(loaded) = &self.loaded {
+                    self.address = loaded.location.as_str().to_owned();
+                }
                 self.pending = None;
             }
             Err(TryRecvError::Disconnected) => {
-                self.error =
-                    Some("The file loader stopped unexpectedly. You can open another file.".into());
+                self.error = Some(
+                    "The document loader stopped unexpectedly. You can try another address.".into(),
+                );
+                if let Some(loaded) = &self.loaded {
+                    self.address = loaded.location.as_str().to_owned();
+                }
                 self.pending = None;
             }
             Err(TryRecvError::Empty) => {}
@@ -168,38 +232,27 @@ impl OliveApp {
     }
 }
 
-fn load_file(path: PathBuf) -> Result<LoadedPage, String> {
-    if !path
-        .metadata()
-        .map_err(|e| format!("Could not open {}: {e}", path.display()))?
-        .is_file()
-    {
-        return Err("Choose a regular HTML file.".into());
-    }
-    let file = File::open(&path).map_err(|e| format!("Could not open {}: {e}", path.display()))?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("Choose a regular HTML file.".into());
-    }
-    let parsed = parse_reader(
-        file,
-        ParseOptions {
-            scripting_enabled: true,
-            ..ParseOptions::default()
-        },
-    )
-    .map_err(|e| e.to_string())?;
+fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
+    let scripting_enabled = !source.location.is_remote();
+    let parsed = source.parse(scripting_enabled)?;
     let corrections = parsed
         .diagnostics
         .len()
         .saturating_add(parsed.omitted_diagnostics);
-    let (document, scripts) = run_document(parsed.document, ScriptOptions::default());
-    let source = std::fs::read(&path).ok();
+    let (document, scripts) = if scripting_enabled {
+        run_document(parsed.document, ScriptOptions::default())
+    } else {
+        (parsed.document, ScriptReport::default())
+    };
+    let base = source.location.document_base(&document);
     Ok(LoadedPage {
-        path,
-        page: Page::from_document(&document),
+        location: source.location,
+        base,
+        status: source.status,
+        page: Page::with_scripts(&document, scripting_enabled),
         corrections,
         scripts,
-        source,
+        source: scripting_enabled.then_some(source.bytes),
     })
 }
 
@@ -242,32 +295,86 @@ impl eframe::App for OliveApp {
                 .first()
                 .map(|file| file.path().to_path_buf())
         }) {
-            self.open(path, &ctx);
+            self.open_result(Location::from_path(path), Navigation::New, &ctx);
         }
         let mut choose = false;
+        let shortcut = |modifiers, key| {
+            ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+            })
+        };
+        let focus_address = shortcut(egui::Modifiers::COMMAND, egui::Key::L);
+        let mut back = shortcut(egui::Modifiers::ALT, egui::Key::ArrowLeft);
+        let mut forward = shortcut(egui::Modifiers::ALT, egui::Key::ArrowRight);
+        let mut reload = shortcut(egui::Modifiers::COMMAND, egui::Key::R)
+            || shortcut(egui::Modifiers::NONE, egui::Key::F5);
+        let mut go = false;
+        let mut link = None;
+        let busy = self.pending.is_some();
         egui::Panel::top("toolbar")
             .exact_size(64.0)
             .frame(
                 egui::Frame::new()
                     .fill(CHROME)
-                    .inner_margin(egui::Margin::symmetric(20, 12)),
+                    .inner_margin(egui::Margin::symmetric(12, 12)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(38.0, 38.0)));
-                    ui.label(
-                        RichText::new("Olive")
-                            .size(25.0)
-                            .color(OLIVE)
-                            .variations([("wght", 650.0)]),
-                    );
-                    ui.label(RichText::new("Browser").size(14.0).weak());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        choose |= open_button(ui, self.pending.is_none());
-                        if self.pending.is_some() {
-                            ui.label("Opening…");
-                        }
-                    });
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().button_padding = egui::vec2(9.0, 10.0);
+                    ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(30.0, 30.0)))
+                        .on_hover_text("Olive Browser");
+                    back |= ui
+                        .add_enabled(
+                            !busy && self.history.back().is_some(),
+                            egui::Button::new("←"),
+                        )
+                        .on_hover_text("Back (Alt+Left)")
+                        .clicked();
+                    forward |= ui
+                        .add_enabled(
+                            !busy && self.history.forward().is_some(),
+                            egui::Button::new("→"),
+                        )
+                        .on_hover_text("Forward (Alt+Right)")
+                        .clicked();
+                    reload |= ui
+                        .add_enabled(!busy && self.loaded.is_some(), egui::Button::new("↻"))
+                        .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
+                        .clicked();
+                    let address_width = (ui.available_width() - 120.0).max(70.0);
+                    let mut output = egui::TextEdit::singleline(&mut self.address)
+                        .id(egui::Id::new("address"))
+                        .hint_text("Enter a URL or file path")
+                        .char_limit(olive_html::net::MAX_URL_BYTES)
+                        .desired_width(address_width)
+                        .margin(egui::vec2(10.0, 10.0))
+                        .show(ui);
+                    if focus_address {
+                        output.response.request_focus();
+                        output
+                            .state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(0),
+                                egui::text::CCursor::new(self.address.chars().count()),
+                            )));
+                        output.state.store(ui.ctx(), output.response.id);
+                    }
+                    go |= output.response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    go |= ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new(RichText::new("Go").color(Color32::WHITE))
+                                .fill(OLIVE),
+                        )
+                        .on_hover_text("Open address")
+                        .clicked();
+                    choose |= ui
+                        .add_enabled(!busy, egui::Button::new("Open…"))
+                        .on_hover_text("Open HTML file (Cmd/Ctrl+O)")
+                        .clicked();
                 });
             });
         egui::Panel::bottom("status")
@@ -279,20 +386,25 @@ impl eframe::App for OliveApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let label = self
-                        .loaded
-                        .as_ref()
-                        .map(|loaded| {
-                            loaded
-                                .path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned()
-                        })
-                        .unwrap_or_else(|| "Local HTML viewer".into());
+                    let label = if busy { "Opening…".to_owned() } else {
+                        self.loaded.as_ref().map(|loaded| {
+                            let transport = match loaded.location.url().scheme() {
+                                "https" => "HTTPS",
+                                "http" => "HTTP · Not encrypted",
+                                _ => "Local file",
+                            };
+                            match loaded.status {
+                                Some(status) if status >= 400 => format!("{transport} · HTTP {status}"),
+                                _ => transport.to_owned(),
+                            }
+                        }).unwrap_or_else(|| "Ready".into())
+                    };
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
+                        if loaded.location.is_remote() {
+                            ui.label(RichText::new("JavaScript disabled").size(11.0).weak())
+                                .on_hover_text("Web pages display HTML and embedded CSS. Remote scripts are disabled in this version.");
+                        }
                         if loaded.scripts.attempted > 0
                             || loaded.scripts.skipped > 0
                             || loaded.scripts.limited
@@ -368,7 +480,7 @@ impl eframe::App for OliveApp {
                         .inner_margin(16)
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new("Could not open this file")
+                                RichText::new("Could not open this page")
                                     .variations([("wght", 650.0)]),
                             );
                             ui.label(error);
@@ -391,23 +503,33 @@ impl eframe::App for OliveApp {
                                     if loaded.page.is_empty() {
                                         ui.label("This document has no visible content.");
                                     }
-                                    if let Some(target) = loaded.page.show(ui) {
-                                        if let Some(session) = self.session.as_mut() {
-                                            session.click(target);
+                                    if let Some(click) = loaded.page.show(ui) {
+                                        link = click.href;
+                                        if let (Some(target), Some(session)) =
+                                            (click.target, self.session.as_mut())
+                                        {
+                                            if !session.click(target) {
+                                                link = None;
+                                            }
                                             if let Some(message) =
                                                 session.take_alerts().into_iter().next()
                                             {
                                                 self.alert = Some(message);
                                             }
-                                            let session = self.session.take().unwrap();
-                                            let (document, report) = session.into_parts();
-                                            loaded.page = Page::from_document(&document);
-                                            loaded.scripts = report.clone();
-                                            self.session = Some(DocumentSession::attach(
-                                                document,
-                                                ScriptOptions::default(),
-                                                report,
-                                            ));
+                                            session.with_document(|document| {
+                                                loaded.page = Page::from_document(document);
+                                                loaded.base =
+                                                    loaded.location.document_base(document);
+                                            });
+                                            if !loaded.page.title.is_empty() {
+                                                ctx.send_viewport_cmd(
+                                                    egui::ViewportCommand::Title(format!(
+                                                        "{} — Olive Browser",
+                                                        loaded.page.title
+                                                    )),
+                                                );
+                                            }
+                                            loaded.scripts = session.report().clone();
                                         }
                                     }
                                 });
@@ -422,10 +544,10 @@ impl eframe::App for OliveApp {
                                 .variations([("wght", 600.0)]),
                         );
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Open an HTML file to begin.").size(18.0));
+                        ui.label(RichText::new("A small browser for the open web.").size(18.0));
                         ui.add_space(6.0);
                         ui.label(
-                            RichText::new("Choose a local file, or drop one into this window.")
+                            RichText::new("Enter a website above, or open a local HTML file.")
                                 .size(14.0)
                                 .weak(),
                         );
@@ -434,9 +556,9 @@ impl eframe::App for OliveApp {
                         ui.add_space(10.0);
                         ui.label(
                             RichText::new(if cfg!(target_os = "macos") {
-                                "⌘O to open a file"
+                                "⌘L to enter an address · ⌘O to open a file"
                             } else {
-                                "Ctrl+O to open a file"
+                                "Ctrl+L to enter an address · Ctrl+O to open a file"
                             })
                             .size(12.0)
                             .weak(),
@@ -461,6 +583,35 @@ impl eframe::App for OliveApp {
         }
         if choose {
             self.choose_file(&ctx);
+        } else if !busy {
+            if go {
+                let location = Location::from_input(&self.address);
+                let navigation = if location.as_ref().ok().is_some_and(|location| {
+                    self.loaded
+                        .as_ref()
+                        .is_some_and(|loaded| &loaded.location == location)
+                }) {
+                    Navigation::Reload
+                } else {
+                    Navigation::New
+                };
+                self.open_result(location, navigation, &ctx);
+            } else if back {
+                if let Some((index, location)) = self.history.back() {
+                    self.open(location, Navigation::Traverse(index), &ctx);
+                }
+            } else if forward {
+                if let Some((index, location)) = self.history.forward() {
+                    self.open(location, Navigation::Traverse(index), &ctx);
+                }
+            } else if reload {
+                if let Some(loaded) = &self.loaded {
+                    self.open(loaded.location.clone(), Navigation::Reload, &ctx);
+                }
+            } else if let (Some(href), Some(loaded)) = (link, &self.loaded) {
+                let location = loaded.base.resolve(&href);
+                self.open_result(location, Navigation::New, &ctx);
+            }
         }
     }
 }
@@ -468,6 +619,111 @@ impl eframe::App for OliveApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn load_file(path: PathBuf) -> Result<LoadedPage, String> {
+        DocumentLoader::new()?
+            .load(Location::from_path(path)?)
+            .and_then(prepare_page)
+    }
+
+    fn app_for_test(ctx: &egui::Context, loaded: LoadedPage) -> OliveApp {
+        let mut history = History::default();
+        history.commit(loaded.location.clone(), Navigation::New);
+        OliveApp {
+            icon: ctx.load_texture(
+                "test-icon",
+                egui::ColorImage::from(icon::data()),
+                Default::default(),
+            ),
+            address: loaded.location.as_str().into(),
+            history,
+            loaded: Some(loaded),
+            pending: None,
+            error: None,
+            alert: None,
+            session: None,
+            generation: 1,
+        }
+    }
+
+    fn remote_source(url: &str) -> LoadedDocument {
+        LoadedDocument {
+            location: Location::from_input(url).unwrap(),
+            bytes: b"<!doctype html><p>Remote</p>".to_vec(),
+            status: Some(200),
+            plain_text: false,
+        }
+    }
+
+    #[test]
+    fn failed_navigation_keeps_the_page_address_and_forward_history() {
+        let ctx = egui::Context::default();
+        let original = Location::from_input("https://example.com/first").unwrap();
+        let mut app = app_for_test(
+            &ctx,
+            prepare_page(remote_source(original.as_str())).unwrap(),
+        );
+        let next = Location::from_input("https://example.com/second").unwrap();
+        app.history.commit(next.clone(), Navigation::New);
+        app.history
+            .commit(original.clone(), Navigation::Traverse(0));
+        let requested = Location::from_input("https://missing.example/").unwrap();
+        app.address = requested.as_str().into();
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Err("Test connection failure".into())).unwrap();
+        app.pending = Some(PendingPage {
+            receiver,
+            requested,
+            navigation: Navigation::New,
+        });
+        app.receive(&ctx);
+        assert_eq!(app.loaded.as_ref().unwrap().location, original);
+        assert_eq!(app.address, original.as_str());
+        assert_eq!(app.history.forward().unwrap().1, next);
+        assert!(app.pending.is_none());
+        assert!(app.error.as_ref().unwrap().contains("missing.example"));
+    }
+
+    #[test]
+    fn remote_navigation_clears_a_previous_local_script_session() {
+        let ctx = egui::Context::default();
+        let local =
+            load_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripted.html"))
+                .unwrap();
+        let mut app = app_for_test(&ctx, local);
+        app.session = Some(DocumentSession::new(
+            olive_html::parse("<p>Local").unwrap().document,
+            ScriptOptions::default(),
+        ));
+        let source = remote_source("https://example.com/remote");
+        let requested = source.location.clone();
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok(prepare_page(source).unwrap())).unwrap();
+        app.pending = Some(PendingPage {
+            receiver,
+            requested,
+            navigation: Navigation::New,
+        });
+        app.receive(&ctx);
+        assert!(app.session.is_none());
+        assert!(app.loaded.as_ref().unwrap().location.is_remote());
+        assert!(app.pending.is_none());
+    }
+
+    #[test]
+    fn remote_pages_never_execute_or_retain_scripts() {
+        let source = LoadedDocument {
+            location: Location::from_input("https://example.com/page").unwrap(),
+            bytes: b"<!doctype html><title>Original</title><base href='/docs/'><noscript>Readable fallback</noscript><script>document.title='Executed';</script><a href='next'>Next</a>".to_vec(),
+            status: Some(200), plain_text: false,
+        };
+        let loaded = prepare_page(source).unwrap();
+        assert_eq!(loaded.page.title, "Original");
+        assert_eq!(loaded.scripts.attempted, 0);
+        assert!(loaded.source.is_none());
+        assert_eq!(loaded.base.as_str(), "https://example.com/docs/");
+        assert!(!loaded.page.is_empty());
+    }
 
     #[test]
     fn loader_accepts_an_html_file_and_reports_read_errors() {

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0
+
+- Bundle Noto Sans Hebrew as a fallback for page text and browser controls,
+  fixing missing-glyph rectangles on Yahoo's Hebrew privacy page; test regular,
+  bold, mixed Latin/Hebrew and monospace coverage with the actual GUI fonts.
+- Add HTTP/HTTPS document loading, verified TLS, redirects, gzip/deflate,
+  declared HTTP character encodings, plain text, and readable HTTP error pages.
+- Add an address bar, URL/path launch arguments, clickable links, relative and
+  base URL resolution, fragment scrolling, back/forward history, and reload.
+- Add URL loading to the DOM inspector with the optional `net` feature, included
+  in GUI builds; preserve the default offline parser and local-file support.
+- Bound requests to 20 seconds, ten redirects, 8 KiB addresses, and 1 MiB
+  decompressed/decoded documents; retain the previous page on load failure.
+- Disable remote JavaScript, display noscript fallbacks, reject unsupported
+  schemes/URL credentials, and prevent web pages from opening local files.
+- Hit-test individual links and click handlers inside wrapped paragraphs.
+- Add URL, transport, history, renderer and CLI regression tests and update the
+  documented browsing scope. External resources and forms remain unsupported.
+
 ## 0.0.4
 
 - Add optional JavaScript parsing and interpretation with Boa 0.22.0, a reusable

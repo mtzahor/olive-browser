@@ -1,10 +1,14 @@
-# Security boundary in 0.0.4
+# Security boundary in 0.1.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text and embedded/inline CSS, and now explicitly runs
-inline classic JavaScript before rendering. Enabling the `js` feature alone never
+inline classic JavaScript in local files before rendering. Web pages never execute
+scripts or inline event handlers, and do not retain a JavaScript session.
+Enabling the `js` feature alone never
 executes HTML. The `olive` DOM inspector remains inert; `olive-js` explicitly runs
-standalone JavaScript. Olive does not load external resources or enforce CSP.
+standalone JavaScript. The optional `net` feature explicitly loads HTTP(S)
+documents, and is included in the GUI. Parsing itself never performs networking.
+Olive does not load subresources or enforce CSP.
 **The parser is not an HTML sanitizer, and script execution is not sandboxed.**
 
 The GUI and HTML CLI accept at most 1 MiB. Library callers can configure this limit.
@@ -15,10 +19,27 @@ first-party Rust targets forbid unsafe code.
 
 The GUI adds a 200,000-character / 5,000-text-block / 10,000-box display limit,
 reads files on one
-background worker, and retains the previous page if a new file cannot be read.
+background worker, and retains the previous page if a new document cannot be read.
 Its CSS parser, JavaScript engine/garbage collector, font and native UI dependencies
 expand the trust boundary beyond the HTML parser.
-Links do not navigate; page-controlled resources are never opened.
+Links navigate only after a user click. HTTP(S) pages cannot navigate to `file:`;
+`javascript:`, `data:`, `ftp:`, custom protocols, remote file authorities, and
+URLs containing credentials are rejected. Redirects obey the same scheme and
+credential rules. Local file links can navigate to other local files or websites.
+
+HTTP uses reqwest with Rustls, WebPKI roots and the operating system's trusted
+certificates, with normal hostname/certificate
+verification and no certificate-bypass option. Explicit HTTP and HTTPS-to-HTTP
+redirects are allowed; the final address and transport are shown in browser chrome.
+Requests have a 10-second connection timeout, 20-second total timeout and ten-hop
+redirect limit. Responses are bounded to 1 MiB after decompression and again after
+decoding; content types other than HTML/XHTML/plain text are rejected. Plain text
+is escaped before display. URL inputs are capped at 8 KiB and history at 256 entries.
+Only one navigation load runs at a time. Navigation waits for that load to finish.
+No cookies, HTTP authentication, automatic Referer headers, persistent network
+cache, forms, downloads or automatic page/subresource requests are enabled.
+The client honors HTTP(S) proxy environment variables. Loopback and private-network
+addresses are allowed for user-directed browsing; this is not an SSRF-filtering API.
 
 CSS is data only: linked stylesheets, imports, all at-rules, URL backgrounds and
 page fonts are ignored. A combined 256 KiB CSS input budget, 2,048-rule limit,
@@ -29,13 +50,14 @@ box layout are iterative. Font sizes, geometry and line heights are clamped as
 documented in README.md. CSS can change the document area but not browser
 controls or the file picker.
 
-JavaScript uses Boa 0.22.0 in-process on the file-loading worker, with a fresh
+Local JavaScript uses Boa 0.22.0 in-process, with a fresh
 realm per document. No network/filesystem APIs, timers, module loader, dynamic
 code compilation (`eval`/function constructors), or asynchronous job execution
 are enabled. The host dispatches only inline `onclick` handlers on rendered
 elements; page code can only mutate the current document via
 the supported DOM API and append to bounded console output. Mutating an attribute
-never opens a URL. New script elements, templates, foreign trees and embedded
+never automatically opens a URL; a later user click can follow a changed link.
+New script elements, templates, foreign trees and embedded
 documents are not executed. Scripts run after full HTML parsing, not interleaved
 with it; this is not browser lifecycle or CSP conformance.
 
@@ -59,15 +81,15 @@ VM instructions do not meter parsing, compilation, allocations or time spent
 inside native built-ins such as regular expressions and large string/array
 operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents you trust;
-process isolation with enforceable memory/time limits is required before exposing
-this viewer to arbitrary active web content. The UI worker is not a security boundary.
+process isolation with enforceable memory/time limits is required before enabling
+remote JavaScript. The UI worker is not a security boundary.
 
 These controls do not provide a hard memory ceiling or processing deadline.
 DOM construction expands input, parser recovery can be expensive, allocations
 can fail, and dependencies can contain defects and unsafe code. The parser has
-not undergone an independent security audit. A network-facing browser will
-need process isolation, enforceable resource budgets, and a separate design
-for navigation and active content before it can safely browse arbitrary sites.
+not undergone an independent security audit. HTTP fetching is bounded, but HTML
+and CSS processing remain in-process. Browsing is experimental; process isolation
+and enforceable CPU/memory budgets remain necessary hardening work.
 
 ## Reporting
 

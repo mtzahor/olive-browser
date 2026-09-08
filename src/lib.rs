@@ -2,7 +2,8 @@
 //!
 //! Parsing follows html5ever's implementation of the WHATWG HTML Living Standard.
 //! HTML parsing builds an inert DOM. The optional `js` module explicitly executes
-//! JavaScript; the optional GUI renders pages. No URLs are fetched.
+//! JavaScript; the optional GUI renders pages. The optional `net` module loads
+//! HTTP(S) documents only when explicitly called. Parsing itself never fetches URLs.
 //!
 //! ```
 //! use olive_html::{parse, NodeKind};
@@ -21,6 +22,9 @@ pub mod css;
 
 #[cfg(feature = "js")]
 pub mod js;
+
+#[cfg(feature = "net")]
+pub mod net;
 
 mod dom;
 mod parser;
