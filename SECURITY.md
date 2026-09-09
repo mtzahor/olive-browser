@@ -1,4 +1,4 @@
-# Security boundary in 0.3.0
+# Security boundary in 0.4.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG images, and linked/embedded/inline CSS.
@@ -38,12 +38,25 @@ redirects are allowed; the final address and transport are shown in browser chro
 Requests have a 10-second connection timeout, 20-second total timeout and ten-hop
 redirect limit. Document responses are bounded to 1 MiB after decompression and
 again after decoding; document types other than HTML/XHTML/plain text are rejected. Plain text
-is escaped before display. URL inputs are capped at 8 KiB and history at 256 entries.
+is escaped before display. URL inputs are capped at 8 KiB and the session's
+Back/Forward stack at 256 entries.
 Only one navigation load runs at a time. Navigation waits for that load to finish.
 No cookies, HTTP authentication, automatic Referer headers, persistent network
 cache, forms, downloads or automatic document navigation are enabled.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
 addresses are allowed, including for subresources; this is not an SSRF-filtering API.
+
+The GUI saves the latest 1,000 distinct visited URLs (including query strings,
+fragments and local file paths), titles, timestamps and visit counts in a local,
+unencrypted history file. Page scripts cannot access this history. Titles are
+bounded to 1 KiB and file reads to 32 MiB; restored URLs pass the normal scheme,
+credential and local-file validation. Saves atomically replace the file and use
+owner-only file permissions on Unix. Failed writes are reported and preserve
+the previous saved file; unreadable or unsupported files are not overwritten
+until the user explicitly clears history. Remove/Clear affect saved history,
+not the current document or in-memory Back/Forward stack. There is no private
+browsing mode. Storage locations and the `OLIVE_HISTORY_FILE` override are
+documented in README.md; multiple instances sharing a file use last-writer wins.
 
 Page resources resolve against the final document URL and first base href, with
 at most 64 attempts and a shared 20-second network deadline after document loading.

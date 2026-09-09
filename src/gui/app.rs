@@ -1,4 +1,6 @@
 use crate::{
+    history::BrowsingHistory,
+    history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
     render::{INK, ImageAsset, ImageTextureCache, OLIVE, Page},
@@ -73,6 +75,8 @@ pub struct OliveApp {
     pending: Option<PendingPage>,
     address: String,
     history: History,
+    browsing_history: BrowsingHistory,
+    history_window: HistoryWindow,
     error: Option<String>,
     alert: Option<String>,
     image_textures: ImageTextureCache,
@@ -106,6 +110,8 @@ impl OliveApp {
             pending: None,
             address: String::new(),
             history: History::default(),
+            browsing_history: BrowsingHistory::load_default(),
+            history_window: HistoryWindow::default(),
             error: None,
             alert: None,
             image_textures: ImageTextureCache::default(),
@@ -186,6 +192,7 @@ impl OliveApp {
                     loaded.base = location.clone();
                 }
                 loaded.location = location.clone();
+                self.browsing_history.record(&location, &loaded.page.title);
                 self.history.commit(location, navigation);
                 return;
             }
@@ -234,6 +241,8 @@ impl OliveApp {
             Ok(Ok(mut loaded)) => {
                 self.history
                     .commit(loaded.location.clone(), pending.navigation);
+                self.browsing_history
+                    .record(&loaded.location, &loaded.page.title);
                 self.address = loaded.location.as_str().to_owned();
                 loaded.page.scroll_to_fragment(loaded.location.fragment());
                 let title = if loaded.page.title.trim().is_empty() {
@@ -539,6 +548,8 @@ impl eframe::App for OliveApp {
                         loaded.page = update.page;
                         loaded.base = update.base;
                         loaded.scripts = update.scripts;
+                        self.browsing_history
+                            .update_title(&loaded.location, &loaded.page.title);
                         self.alert = update.alert;
                         if self.pending.is_none() {
                             link = update.link.map(|href| loaded.base.resolve(&href));
@@ -590,6 +601,10 @@ impl eframe::App for OliveApp {
             })
         };
         let focus_address = shortcut(egui::Modifiers::COMMAND, egui::Key::L);
+        let mut show_history = shortcut(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::H,
+        );
         let mut back = shortcut(egui::Modifiers::ALT, egui::Key::ArrowLeft);
         let mut forward = shortcut(egui::Modifiers::ALT, egui::Key::ArrowRight);
         let mut reload = shortcut(egui::Modifiers::COMMAND, egui::Key::R)
@@ -629,7 +644,7 @@ impl eframe::App for OliveApp {
                         .add_enabled(!busy && self.loaded.is_some(), egui::Button::new("↻"))
                         .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
                         .clicked();
-                    let address_width = (ui.available_width() - 120.0).max(70.0);
+                    let address_width = (ui.available_width() - 195.0).max(60.0);
                     let mut output = egui::TextEdit::singleline(&mut self.address)
                         .id(egui::Id::new("address"))
                         .hint_text("Enter a URL or file path")
@@ -661,6 +676,14 @@ impl eframe::App for OliveApp {
                     choose |= ui
                         .add_enabled(!busy, egui::Button::new("Open…"))
                         .on_hover_text("Open HTML file (Cmd/Ctrl+O)")
+                        .clicked();
+                    show_history |= ui
+                        .button(if self.browsing_history.error().is_some() {
+                            "History !"
+                        } else {
+                            "History"
+                        })
+                        .on_hover_text("Browsing history (Cmd/Ctrl+Shift+H)")
                         .clicked();
                 });
             });
@@ -870,10 +893,18 @@ impl eframe::App for OliveApp {
                 self.alert = None;
             }
         }
+        if show_history {
+            self.history_window.toggle();
+        }
+        let history_location = self
+            .history_window
+            .show(&ctx, &mut self.browsing_history, busy);
         if choose {
             self.choose_file(&ctx);
         } else if !busy {
-            if go {
+            if let Some(location) = history_location {
+                self.open(location, Navigation::New, &ctx);
+            } else if go {
                 let location = Location::from_input(&self.address);
                 let navigation = if location.as_ref().ok().is_some_and(|location| {
                     self.loaded
@@ -927,6 +958,8 @@ mod tests {
     fn app_for_test(ctx: &egui::Context, loaded: LoadedPage) -> OliveApp {
         let mut history = History::default();
         history.commit(loaded.location.clone(), Navigation::New);
+        let mut browsing_history = BrowsingHistory::default();
+        browsing_history.record(&loaded.location, &loaded.page.title);
         OliveApp {
             icon: ctx.load_texture(
                 "test-icon",
@@ -935,6 +968,8 @@ mod tests {
             ),
             address: loaded.location.as_str().into(),
             history,
+            browsing_history,
+            history_window: HistoryWindow::default(),
             loaded: Some(loaded),
             pending: None,
             error: None,
@@ -989,6 +1024,103 @@ mod tests {
         assert_eq!(app.history.forward().unwrap().1, next);
         assert!(app.pending.is_none());
         assert!(app.error.as_ref().unwrap().contains("missing.example"));
+        assert_eq!(app.browsing_history.entries().len(), 1);
+        assert_eq!(app.browsing_history.entries()[0].url, original.as_str());
+    }
+
+    #[test]
+    fn saved_history_records_final_urls_and_successful_reload_and_traversal() {
+        let ctx = egui::Context::default();
+        let mut app = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/first")).unwrap(),
+        );
+        let requested = Location::from_input("https://example.com/redirect").unwrap();
+        let final_url = "https://example.com/final";
+        let mut source = remote_source(final_url);
+        // Readable HTTP error pages are successful navigations too.
+        source.status = Some(404);
+        source.bytes = b"<!doctype html><title>Not found</title><p>404</p>".to_vec();
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok(prepare_page(source).unwrap())).unwrap();
+        app.pending = Some(PendingPage {
+            receiver,
+            requested: requested.clone(),
+            navigation: Navigation::New,
+        });
+        app.receive(&ctx);
+        assert_eq!(app.browsing_history.entries().len(), 2);
+        let entry = &app.browsing_history.entries()[0];
+        assert_eq!(entry.url, final_url);
+        assert_eq!(entry.title, "Not found");
+        assert!(app.browsing_history.search(requested.as_str()).is_empty());
+
+        for (url, navigation) in [
+            (final_url, Navigation::Reload),
+            ("https://example.com/first", Navigation::Traverse(0)),
+        ] {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(Ok(prepare_page(remote_source(url)).unwrap()))
+                .unwrap();
+            app.pending = Some(PendingPage {
+                receiver,
+                requested: Location::from_input(url).unwrap(),
+                navigation,
+            });
+            app.receive(&ctx);
+            assert_eq!(app.browsing_history.entries().len(), 2);
+            assert_eq!(app.browsing_history.entries()[0].url, url);
+            assert_eq!(app.browsing_history.entries()[0].visits, 2);
+        }
+        assert_eq!(app.history.forward().unwrap().1.as_str(), final_url);
+        app.browsing_history.clear();
+        assert!(app.browsing_history.entries().is_empty());
+        assert_eq!(app.history.forward().unwrap().1.as_str(), final_url);
+        assert_eq!(
+            app.loaded.as_ref().unwrap().location.as_str(),
+            "https://example.com/first"
+        );
+    }
+
+    #[test]
+    fn same_document_navigation_records_visits_without_a_loader() {
+        let ctx = egui::Context::default();
+        let url = "https://example.com/page";
+        let mut app = app_for_test(&ctx, prepare_page(remote_source(url)).unwrap());
+        let anchor = Location::from_input(&format!("{url}#section")).unwrap();
+        app.open(anchor.clone(), Navigation::New, &ctx);
+        assert!(app.pending.is_none());
+        assert_eq!(app.browsing_history.entries()[0].url, anchor.as_str());
+        let (index, location) = app.history.back().unwrap();
+        app.open(location, Navigation::Traverse(index), &ctx);
+        assert!(app.pending.is_none());
+        assert_eq!(app.browsing_history.entries().len(), 2);
+        assert_eq!(app.browsing_history.entries()[0].url, url);
+        assert_eq!(app.browsing_history.entries()[0].visits, 2);
+        app.browsing_history.remove(anchor.as_str());
+        assert_eq!(app.history.forward().unwrap().1, anchor);
+    }
+
+    #[test]
+    fn disconnected_load_does_not_record_a_visit() {
+        let ctx = egui::Context::default();
+        let mut app = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/first")).unwrap(),
+        );
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        app.pending = Some(PendingPage {
+            receiver,
+            requested: Location::from_input("https://example.com/disconnected").unwrap(),
+            navigation: Navigation::New,
+        });
+        app.receive(&ctx);
+        assert!(app.pending.is_none());
+        assert!(app.error.is_some());
+        assert_eq!(app.browsing_history.entries().len(), 1);
+        assert!(app.browsing_history.search("disconnected").is_empty());
     }
 
     #[test]

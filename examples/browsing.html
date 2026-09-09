@@ -1,25 +1,27 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>Olive 0.1.0 — Browsing</title>
+<title>Olive 0.4.0 — Browsing history</title>
 <style>
   body { color: #262c20; background: #fafaf6; font-family: sans-serif; }
   h1, h2 { color: #566933; }
   .card { padding: 24px; margin: 20px 0; border: 1px solid #d1dfb6; border-radius: 12px; background: #eff2e7; }
 </style>
 <h1>Olive is online.</h1>
-<p>Version 0.1.0 opens HTTP and HTTPS pages, follows links, and keeps browsing history.</p>
+<p>Version 0.4.0 remembers the pages you visit, even after you close Olive.</p>
 <div class="card">
   <h2>Take a look around</h2>
   <p>Open <a href="https://example.com">Example Domain over HTTPS</a>, or visit <a href="http://example.com">the HTTP address</a>.</p>
   <p>Try a relative link to <a href="reading.html">the reading example</a>, then use the Back button to return.</p>
   <p>Jump to <a href="#details">the details below</a>.</p>
+  <p>Open History in the toolbar to search your saved pages, revisit one, or remove an entry.</p>
 </div>
 <h2>A few useful shortcuts</h2>
 <p>Cmd/Ctrl+L selects the address. Cmd/Ctrl+R reloads. Alt+Left and Alt+Right move through history.</p>
+<p>Cmd/Ctrl+Shift+H opens saved history. The latest 1,000 addresses are kept on this computer, with titles, visit counts, and last-visited times.</p>
 <div style="height:600px"></div>
 <h2 id="details">You followed a fragment link.</h2>
 <p>Links can point to a section of the current page without making another network request.</p>
-<p>Web pages currently show HTML, embedded CSS, and image alt text. Remote scripts, external resources, and forms are not supported yet.</p>
+<p>Reloading or revisiting an address updates its history entry. Clearing saved history leaves the current page and Back/Forward available.</p>
 <p><a href="#">Back to the top</a></p>
 </html>

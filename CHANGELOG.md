@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Add saved browsing history for the latest 1,000 distinct URLs, with page titles,
+  last-visited timestamps and visit counts retained across launches.
+- Add a searchable History window, available from the toolbar or
+  Cmd/Ctrl+Shift+H, with reopen, remove and confirmed clear-all controls.
+- Record committed navigations, reloads and Back/Forward visits, including local
+  files and same-page anchors; use final redirect URLs and exclude failed loads.
+- Save history with atomic replacement in the platform's application data
+  directory, support `OLIVE_HISTORY_FILE` for isolated profiles, and keep browsing
+  available on storage errors. Preserve unreadable history until explicit clearing.
+- Bound and validate saved data, keep history files private to their owner on
+  Unix, and cover persistence, searching, deletion and navigation integration.
+
 ## 0.3.0
 
 - Add bounded PNG/JPEG image loading for `<img src>` from local files and HTTP(S),

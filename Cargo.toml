@@ -1,6 +1,6 @@
 [package]
 name = "olive-browser"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A lightweight Rust browser with HTML, CSS and JavaScript"
@@ -36,7 +36,7 @@ default = []
 css = ["dep:cssparser"]
 js = ["dep:boa_engine", "dep:boa_gc", "dep:boa_parser"]
 net = ["dep:reqwest", "dep:url", "dep:encoding_rs", "dep:percent-encoding"]
-gui = ["css", "js", "net", "dep:eframe", "dep:image", "dep:rfd", "dep:zune-jpeg"]
+gui = ["css", "js", "net", "dep:eframe", "dep:image", "dep:rfd", "dep:zune-jpeg", "dep:serde", "dep:serde_json", "dep:tempfile", "dep:time"]
 
 [dependencies]
 html5ever = "0.39.0"
@@ -53,6 +53,10 @@ url = { version = "2.5.8", optional = true }
 encoding_rs = { version = "0.8.35", optional = true }
 percent-encoding = { version = "2.3.2", optional = true }
 zune-jpeg = { version = "0.4.21", optional = true, default-features = false, features = ["std"] }
+serde = { version = "1.0.229", optional = true, features = ["derive"] }
+serde_json = { version = "1.0.151", optional = true }
+tempfile = { version = "3.27.0", optional = true }
+time = { version = "0.3.55", optional = true }
 
 [dev-dependencies]
 flate2 = "1.1.10"

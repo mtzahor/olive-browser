@@ -2,6 +2,8 @@
 
 mod app;
 mod fonts;
+mod history;
+mod history_ui;
 mod icon;
 mod navigation;
 mod render;

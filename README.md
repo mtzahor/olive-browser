@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.3.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.4.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -32,6 +32,32 @@ same-page `#id` / named anchors. Back and Forward retain up to 256 addresses;
 Reload fetches the current page again. Use `Cmd+L`/`Ctrl+L` for the address bar,
 `Alt+Left`/`Alt+Right` for history, and `Cmd+R`/`Ctrl+R` or F5 to reload.
 History traversal reloads documents; it does not cache page state or scroll offsets.
+
+Open **History** or press `Cmd+Shift+H`/`Ctrl+Shift+H` to search saved page titles
+and addresses, reopen a page, remove an address, or clear all saved history.
+History keeps the latest 1,000 distinct URLs across launches, newest first, with
+page titles, last-visited times (shown in UTC), and visit counts. Reloads and
+Back/Forward visits update the existing entry; fragments have separate entries.
+Only successfully opened documents are recorded, including readable HTTP error
+pages and local files. Redirects record the final address, and failed loads do
+not add visits. Script title changes update the entry without adding a visit.
+Clearing saved history asks for confirmation and leaves the current page and
+the session's Back/Forward stack available. Opening a page again records a new visit.
+
+History is stored as a local, unencrypted `history.json` file:
+
+- macOS: `~/Library/Application Support/Olive Browser/history.json`
+- Windows: `%LOCALAPPDATA%\Olive Browser\history.json`
+- Linux: `$XDG_DATA_HOME/olive-browser/history.json`, falling back to
+  `~/.local/share/olive-browser/history.json`
+
+Set `OLIVE_HISTORY_FILE` to use another file, for example an isolated test profile.
+History saves after each change using atomic file replacement. Storage errors
+appear on the **History !** button and in the history window; browsing continues
+with history in memory. An unreadable or unsupported file is preserved until
+you explicitly clear history. History is intended for one running Olive instance
+per file; simultaneous instances can overwrite each other's changes. History
+does not restore tabs, page state, or the Back/Forward stack at startup.
 
 Documents load on one background worker. Redirects update the displayed URL;
 failed loads retain the previous page and history. HTTP error pages such as 404
@@ -240,7 +266,8 @@ cargo doc --locked --no-deps --all-features
 The test suite covers HTML recovery and conformance fixtures, CSS cascade and
 layout, JavaScript execution and DOM limits, CLI behavior, GUI rendering,
 URL resolution, HTTP redirects/errors/timeouts/limits, resource loading and ordering,
-opt-in web scripting, persistent click state, and navigation history.
+opt-in web scripting, persistent click state, navigation history, and saved
+history search, restart persistence, deletion, storage failures and size limits.
 
 ## License
 
