@@ -1,4 +1,7 @@
-use crate::history::{BrowsingHistory, MAX_ENTRIES};
+use crate::{
+    history::{BrowsingHistory, MAX_ENTRIES},
+    ui_icons::{Icon, IconButton},
+};
 use eframe::egui::{self, RichText};
 use olive_html::net::Location;
 
@@ -55,7 +58,7 @@ impl HistoryWindow {
                     search.request_focus();
                     self.focus_search = false;
                 }
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(format!(
                             "{} saved {} · newest first",
@@ -68,14 +71,15 @@ impl HistoryWindow {
                         ))
                         .weak(),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(history.can_clear(), egui::Button::new("Clear all…"))
-                            .clicked()
-                        {
-                            self.confirm_clear = true;
-                        }
-                    });
+                    if ui
+                        .add_enabled(
+                            history.can_clear(),
+                            IconButton::new(Icon::Trash, "Clear all…"),
+                        )
+                        .clicked()
+                    {
+                        self.confirm_clear = true;
+                    }
                 });
                 if self.confirm_clear {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -85,12 +89,15 @@ impl HistoryWindow {
                                 .small()
                                 .weak(),
                         );
-                        ui.horizontal(|ui| {
-                            if ui.button("Clear all history").clicked() {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add(IconButton::new(Icon::Trash, "Clear all history"))
+                                .clicked()
+                            {
                                 history.clear();
                                 self.confirm_clear = false;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.add(IconButton::new(Icon::Close, "Cancel")).clicked() {
                                 self.confirm_clear = false;
                             }
                         });
@@ -98,7 +105,11 @@ impl HistoryWindow {
                 }
                 if let Some(error) = history.error() {
                     ui.colored_label(egui::Color32::from_rgb(160, 55, 35), error);
-                    if history.can_retry() && ui.button("Retry saving").clicked() {
+                    if history.can_retry()
+                        && ui
+                            .add(IconButton::new(Icon::Reload, "Retry saving"))
+                            .clicked()
+                    {
                         history.save();
                     }
                 }
@@ -134,20 +145,20 @@ impl HistoryWindow {
                                     ui.spacing_mut().item_spacing.y = 4.0;
                                     ui.spacing_mut().button_padding.y = 4.0;
                                     ui.horizontal(|ui| {
-                                        let text_width = (ui.available_width() - 88.0).max(140.0);
+                                        let text_width = (ui.available_width() - 56.0).max(140.0);
                                         ui.vertical(|ui| {
                                             ui.set_width(text_width);
+                                            let mut open_button = IconButton::new(
+                                                Icon::Page,
+                                                RichText::new(entry.display_title()).strong(),
+                                            );
+                                            open_button.button = open_button
+                                                .button
+                                                .frame(false)
+                                                .truncate()
+                                                .min_size(egui::vec2(text_width, 22.0));
                                             if ui
-                                                .add_enabled(
-                                                    !busy,
-                                                    egui::Button::new(
-                                                        RichText::new(entry.display_title())
-                                                            .strong(),
-                                                    )
-                                                    .frame(false)
-                                                    .truncate()
-                                                    .min_size(egui::vec2(text_width, 22.0)),
-                                                )
+                                                .add_enabled(!busy, open_button)
                                                 .on_hover_text(format!("Open {}", entry.url))
                                                 .clicked()
                                             {
@@ -176,7 +187,10 @@ impl HistoryWindow {
                                             .on_hover_text(metadata);
                                         });
                                         if ui
-                                            .small_button("Remove")
+                                            .add(IconButton::icon_only(
+                                                Icon::Trash,
+                                                "Remove from history",
+                                            ))
                                             .on_hover_text("Remove this address from saved history")
                                             .clicked()
                                         {

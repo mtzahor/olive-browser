@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.4.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.5.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -26,6 +26,11 @@ Enter an address and press Enter or **Go**. Bare hostnames use HTTPS;
 `localhost`, loopback IP addresses and their optional ports use HTTP. Explicit
 `http://`, `https://`, and local `file://` URLs are supported, along with file paths.
 Open a local `.html` or `.htm` file with **Open…**, `Cmd+O`/`Ctrl+O`, or drag and drop.
+
+Browser buttons use scalable outline icons, with tooltips and accessible names
+for icon-only actions. **Go** is the olive-colored arrow beside the address field.
+In narrow windows, **Open…** and **History** use folder and history icons, and
+status controls wrap to keep every action reachable.
 
 Click links to navigate, including relative links, `<base href>` addresses, and
 same-page `#id` / named anchors. Back and Forward retain up to 256 addresses;
@@ -53,9 +58,9 @@ History is stored as a local, unencrypted `history.json` file:
 
 Set `OLIVE_HISTORY_FILE` to use another file, for example an isolated test profile.
 History saves after each change using atomic file replacement. Storage errors
-appear on the **History !** button and in the history window; browsing continues
-with history in memory. An unreadable or unsupported file is preserved until
-you explicitly clear history. History is intended for one running Olive instance
+appear as an amber badge on the **History** button and in the history window;
+browsing continues with history in memory. An unreadable or unsupported file is
+preserved until you explicitly clear history. History is intended for one running Olive instance
 per file; simultaneous instances can overwrite each other's changes. History
 does not restore tabs, page state, or the Back/Forward stack at startup.
 

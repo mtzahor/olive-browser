@@ -7,6 +7,7 @@ mod history_ui;
 mod icon;
 mod navigation;
 mod render;
+mod ui_icons;
 
 use eframe::egui;
 

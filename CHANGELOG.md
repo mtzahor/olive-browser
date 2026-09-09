@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Add matching vector outline icons to browser buttons, including navigation,
+  history actions, JavaScript controls, diagnostics and alert confirmation.
+- Keep icon-only controls accessible by name and keyboard, with a compact
+  toolbar and wrapping status controls for narrow windows.
+
 ## 0.4.0
 
 - Add saved browsing history for the latest 1,000 distinct URLs, with page titles,

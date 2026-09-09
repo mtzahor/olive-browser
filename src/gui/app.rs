@@ -4,6 +4,7 @@ use crate::{
     icon,
     navigation::{History, Navigation},
     render::{INK, ImageAsset, ImageTextureCache, OLIVE, Page},
+    ui_icons::{self, Icon, IconButton},
 };
 use eframe::egui::{self, Color32, RichText};
 use image::{ImageReader, Limits};
@@ -522,14 +523,9 @@ fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
 }
 
 fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(RichText::new("Open HTML…").color(Color32::WHITE))
-            .fill(OLIVE)
-            .min_size(egui::vec2(126.0, 38.0))
-            .corner_radius(7),
-    )
-    .clicked()
+    let mut button = IconButton::new(Icon::Folder, "Open HTML…").primary();
+    button.button = button.button.min_size(egui::vec2(152.0, 40.0));
+    ui.add_enabled(enabled, button).clicked()
 }
 
 impl eframe::App for OliveApp {
@@ -624,27 +620,50 @@ impl eframe::App for OliveApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.spacing_mut().button_padding = egui::vec2(9.0, 10.0);
+                    let compact = ui.available_width() < 640.0;
                     ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(30.0, 30.0)))
                         .on_hover_text("Olive Browser");
                     back |= ui
                         .add_enabled(
                             !busy && self.history.back().is_some(),
-                            egui::Button::new("←"),
+                            IconButton::icon_only(Icon::Back, "Back"),
                         )
                         .on_hover_text("Back (Alt+Left)")
                         .clicked();
                     forward |= ui
                         .add_enabled(
                             !busy && self.history.forward().is_some(),
-                            egui::Button::new("→"),
+                            IconButton::icon_only(Icon::Forward, "Forward"),
                         )
                         .on_hover_text("Forward (Alt+Right)")
                         .clicked();
                     reload |= ui
-                        .add_enabled(!busy && self.loaded.is_some(), egui::Button::new("↻"))
+                        .add_enabled(
+                            !busy && self.loaded.is_some(),
+                            IconButton::icon_only(Icon::Reload, "Reload"),
+                        )
                         .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
                         .clicked();
-                    let address_width = (ui.available_width() - 195.0).max(60.0);
+                    // Reserve actual control widths, including icon gaps and text,
+                    // so the address field never pushes actions out of the window.
+                    let label_width = |label: &str| {
+                        ui.painter()
+                            .layout_no_wrap(
+                                label.into(),
+                                egui::TextStyle::Button.resolve(ui.style()),
+                                INK,
+                            )
+                            .size()
+                            .x
+                    };
+                    let trailing_width = 3.0 * 36.0
+                        + 3.0 * 6.0
+                        + if compact {
+                            0.0
+                        } else {
+                            label_width("Open…") + label_width("History") + 2.0 * 7.0
+                        };
+                    let address_width = (ui.available_width() - trailing_width).max(60.0);
                     let mut output = egui::TextEdit::singleline(&mut self.address)
                         .id(egui::Id::new("address"))
                         .hint_text("Enter a URL or file path")
@@ -666,36 +685,46 @@ impl eframe::App for OliveApp {
                     go |= output.response.lost_focus()
                         && ui.input(|input| input.key_pressed(egui::Key::Enter));
                     go |= ui
-                        .add_enabled(
-                            !busy,
-                            egui::Button::new(RichText::new("Go").color(Color32::WHITE))
-                                .fill(OLIVE),
-                        )
+                        .add_enabled(!busy, IconButton::icon_only(Icon::Go, "Go").primary())
                         .on_hover_text("Open address")
                         .clicked();
                     choose |= ui
-                        .add_enabled(!busy, egui::Button::new("Open…"))
+                        .add_enabled(
+                            !busy,
+                            if compact {
+                                IconButton::icon_only(Icon::Folder, "Open HTML file")
+                            } else {
+                                IconButton::new(Icon::Folder, "Open…")
+                            },
+                        )
                         .on_hover_text("Open HTML file (Cmd/Ctrl+O)")
                         .clicked();
                     show_history |= ui
-                        .button(if self.browsing_history.error().is_some() {
-                            "History !"
+                        .add(
+                            (if compact {
+                                IconButton::icon_only(Icon::History, "Browsing history")
+                            } else {
+                                IconButton::new(Icon::History, "History")
+                            })
+                            .warning(self.browsing_history.error().is_some()),
+                        )
+                        .on_hover_text(if self.browsing_history.error().is_some() {
+                            "Browsing history — could not save history (Cmd/Ctrl+Shift+H)"
                         } else {
-                            "History"
+                            "Browsing history (Cmd/Ctrl+Shift+H)"
                         })
-                        .on_hover_text("Browsing history (Cmd/Ctrl+Shift+H)")
                         .clicked();
                 });
             });
         egui::Panel::bottom("status")
-            .exact_size(36.0)
             .frame(
                 egui::Frame::new()
                     .fill(CHROME)
                     .inner_margin(egui::Margin::symmetric(20, 9)),
             )
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
                     let label = if busy { "Opening…".to_owned() } else {
                         self.loaded.as_ref().map(|loaded| {
                             let transport = match loaded.location.url().scheme() {
@@ -712,12 +741,13 @@ impl eframe::App for OliveApp {
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
                         if loaded.location.is_remote() {
-                            toggle_scripts = ui.add_enabled(!busy, egui::Button::new(
+                            toggle_scripts = ui.add_enabled(!busy, IconButton::new(
+                                if loaded.scripting_enabled { Icon::CodeOff } else { Icon::Code },
                                 if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
-                            )).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run inside Olive's process. New addresses start with web JavaScript disabled.").clicked();
+                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run inside Olive's process. New addresses start with web JavaScript disabled.").clicked();
                         }
                         if loaded.resources.attempted > 0 || loaded.resources.limited {
-                            ui.menu_button(if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
+                            ui_icons::menu(ui, if loaded.resources.diagnostics.is_empty() { Icon::Resources } else { Icon::Warning }, if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
                                 ui.label(format!("{} of {} resources loaded", loaded.resources.loaded, loaded.resources.attempted));
                                 egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                                     for message in &loaded.resources.diagnostics { ui.label(message); }
@@ -735,7 +765,7 @@ impl eframe::App for OliveApp {
                             } else {
                                 "JavaScript"
                             };
-                            ui.menu_button(label, |ui| {
+                            ui_icons::menu(ui, if loaded.scripts.limited || !loaded.scripts.diagnostics.is_empty() { Icon::Warning } else { Icon::Code }, label, |ui| {
                                 ui.label(format!(
                                     "{} scripts completed; {} skipped",
                                     loaded.scripts.executed, loaded.scripts.skipped
@@ -885,7 +915,10 @@ impl eframe::App for OliveApp {
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
                     ui.label(message);
-                    if ui.button("OK").clicked() {
+                    if ui
+                        .add(IconButton::new(Icon::Check, "OK").primary())
+                        .clicked()
+                    {
                         close = true;
                     }
                 });
