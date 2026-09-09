@@ -1,4 +1,5 @@
 use crate::{
+    focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings, Theme as FocusTheme},
     history::BrowsingHistory,
     history_ui::HistoryWindow,
     icon,
@@ -34,6 +35,7 @@ struct LoadedPage {
     base: Location,
     status: Option<u16>,
     page: Page,
+    reading: Page,
     corrections: usize,
     scripts: ScriptReport,
     scripting_enabled: bool,
@@ -47,6 +49,7 @@ struct ClickRequest {
 }
 struct PageUpdate {
     page: Page,
+    reading: Page,
     base: Location,
     scripts: ScriptReport,
     alert: Option<String>,
@@ -83,9 +86,105 @@ pub struct OliveApp {
     image_textures: ImageTextureCache,
     // Each successful open gets a new scroll ID, including re-opening the same file.
     generation: u64,
+    focus_mode: bool,
+    focus_panel: bool,
+    focus_settings: FocusSettings,
 }
 
 impl OliveApp {
+    fn toggle_focus(&mut self) {
+        if self.focus_mode {
+            self.focus_mode = false;
+        } else if self.pending.is_none()
+            && self
+                .loaded
+                .as_ref()
+                .is_some_and(|loaded| !loaded.reading.is_empty())
+        {
+            self.focus_mode = true;
+            self.focus_panel = true;
+            self.history_window = HistoryWindow::default();
+            self.alert = None;
+        }
+    }
+
+    fn focus_toolbar(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let previous_style = ui.style().clone();
+        // Theme just the reading surface; the browser returns to its normal appearance on exit.
+        ui.style_mut().visuals = self.focus_settings.theme.visuals();
+        egui::Panel::top("focus_toolbar")
+            .exact_size(64.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(self.focus_settings.theme.paper())
+                    .inner_margin(12),
+            )
+            .show(ui, |ui| {
+                ui.spacing_mut().button_padding = egui::vec2(12.0, 9.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(IconButton::new(Icon::Back, "Exit Focus"))
+                        .on_hover_text("Return to the page (Esc)")
+                        .clicked()
+                    {
+                        self.focus_mode = false;
+                    }
+                    if busy {
+                        ui.spinner();
+                        ui.label("Opening…");
+                    } else {
+                        ui.label(RichText::new("Focus mode").strong());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut appearance = IconButton::new(Icon::Appearance, "Appearance");
+                        appearance.button = appearance.button.selected(self.focus_panel);
+                        if ui
+                            .add(appearance)
+                            .on_hover_text("Show or hide reading settings")
+                            .clicked()
+                        {
+                            self.focus_panel = !self.focus_panel;
+                        }
+                    });
+                });
+            });
+        if self.focus_panel {
+            egui::Panel::top("focus_appearance")
+                .frame(
+                    egui::Frame::new()
+                        .fill(self.focus_settings.theme.paper())
+                        .inner_margin(egui::Margin::symmetric(20, 12)),
+                )
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.focus_settings.font_size,
+                                MIN_FONT_SIZE..=MAX_FONT_SIZE,
+                            )
+                            .integer()
+                            .suffix(" px")
+                            .text("Font size")
+                            .show_value(true),
+                        );
+                        ui.selectable_value(
+                            &mut self.focus_settings.theme,
+                            FocusTheme::Light,
+                            "Light",
+                        );
+                        ui.selectable_value(
+                            &mut self.focus_settings.theme,
+                            FocusTheme::Dark,
+                            "Dark",
+                        );
+                    });
+                });
+        }
+        ui.set_style(previous_style);
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
         let ctx = &cc.egui_ctx;
         ctx.set_fonts(crate::fonts::definitions());
@@ -117,6 +216,9 @@ impl OliveApp {
             alert: None,
             image_textures: ImageTextureCache::default(),
             generation: 0,
+            focus_mode: false,
+            focus_panel: true,
+            focus_settings: FocusSettings::default(),
         };
         if let Some(source) = source {
             let location = match source.to_str() {
@@ -188,6 +290,7 @@ impl OliveApp {
                         || matches!(navigation, Navigation::Traverse(_)))
             }) {
                 loaded.page.scroll_to_fragment(location.fragment());
+                loaded.reading.scroll_to_fragment(location.fragment());
                 // A base href can be independent of the document URL.
                 if loaded.base.same_document(&loaded.location) {
                     loaded.base = location.clone();
@@ -254,6 +357,7 @@ impl OliveApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
                     "{title} — Olive Browser"
                 )));
+                self.focus_mode = false;
                 self.loaded = Some(loaded);
                 self.image_textures.clear();
                 self.generation = self.generation.wrapping_add(1);
@@ -298,34 +402,30 @@ fn prepare_page_with_loader(
     );
     let mut resource_report = resources.report;
     let images = decode_images(&resources.images, &mut resource_report);
-    let (page, base, scripts, session) = if scripting_enabled {
+    let (page, reading, base, scripts, session) = if scripting_enabled {
         let session = DocumentSession::with_sources(
             parsed.document,
             ScriptOptions::browser(),
             &resources.scripts,
         );
-        let (page, base) = session.with_document(|document| {
+        let (page, reading, base) = session.with_document(|document| {
+            let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
+            let reading = Page::reading(document, true, &sheet, &images);
             (
-                Page::with_stylesheet_and_images(
-                    document,
-                    true,
-                    Stylesheet::from_document_with_sources(document, &resources.styles),
-                    &images,
-                ),
+                Page::with_stylesheet_and_images(document, true, sheet, &images),
+                reading,
                 source.location.document_base(document),
             )
         });
-        (page, base, session.report().clone(), Some(session))
+        (page, reading, base, session.report().clone(), Some(session))
     } else {
         let document = parsed.document;
-        let page = Page::with_stylesheet_and_images(
-            &document,
-            false,
-            Stylesheet::from_document_with_sources(&document, &resources.styles),
-            &images,
-        );
+        let sheet = Stylesheet::from_document_with_sources(&document, &resources.styles);
+        let reading = Page::reading(&document, false, &sheet, &images);
+        let page = Page::with_stylesheet_and_images(&document, false, sheet, &images);
         (
             page,
+            reading,
             source.location.document_base(&document),
             ScriptReport::default(),
             None,
@@ -337,6 +437,7 @@ fn prepare_page_with_loader(
             base,
             status: source.status,
             page,
+            reading,
             corrections,
             scripts,
             scripting_enabled,
@@ -491,19 +592,18 @@ fn serve_page(
     ctx.request_repaint();
     for click in click_receiver {
         let allowed = session.click(click.target);
-        let (page, base) = session.with_document(|document| {
+        let (page, reading, base) = session.with_document(|document| {
+            let sheet = Stylesheet::from_document_with_sources(document, &prepared.styles);
+            let reading = Page::reading(document, true, &sheet, &prepared.images);
             (
-                Page::with_stylesheet_and_images(
-                    document,
-                    true,
-                    Stylesheet::from_document_with_sources(document, &prepared.styles),
-                    &prepared.images,
-                ),
+                Page::with_stylesheet_and_images(document, true, sheet, &prepared.images),
+                reading,
                 location.document_base(document),
             )
         });
         let update = PageUpdate {
             page,
+            reading,
             base,
             scripts: session.report().clone(),
             alert: session.take_alerts().into_iter().next(),
@@ -542,6 +642,7 @@ impl eframe::App for OliveApp {
                     Ok(update) => {
                         session.busy = false;
                         loaded.page = update.page;
+                        loaded.reading = update.reading;
                         loaded.base = update.base;
                         loaded.scripts = update.scripts;
                         self.browsing_history
@@ -597,6 +698,16 @@ impl eframe::App for OliveApp {
             })
         };
         let focus_address = shortcut(egui::Modifiers::COMMAND, egui::Key::L);
+        if self.focus_mode && (shortcut(egui::Modifiers::NONE, egui::Key::Escape) || focus_address)
+        {
+            self.focus_mode = false;
+        }
+        if shortcut(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::F,
+        ) {
+            self.toggle_focus();
+        }
         let mut show_history = shortcut(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             egui::Key::H,
@@ -609,114 +720,143 @@ impl eframe::App for OliveApp {
         let mut toggle_scripts = false;
         let mut link = None;
         let busy = self.pending.is_some();
-        egui::Panel::top("toolbar")
-            .exact_size(64.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(CHROME)
-                    .inner_margin(egui::Margin::symmetric(12, 12)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.spacing_mut().button_padding = egui::vec2(9.0, 10.0);
-                    let compact = ui.available_width() < 640.0;
-                    ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(30.0, 30.0)))
+        if !self.focus_mode {
+            egui::Panel::top("toolbar")
+                .exact_size(64.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(CHROME)
+                        .inner_margin(egui::Margin::symmetric(12, 12)),
+                )
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().button_padding = egui::vec2(9.0, 10.0);
+                        let compact = ui.available_width() < 760.0;
+                        ui.add(
+                            egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(30.0, 30.0)),
+                        )
                         .on_hover_text("Olive Browser");
-                    back |= ui
-                        .add_enabled(
-                            !busy && self.history.back().is_some(),
-                            IconButton::icon_only(Icon::Back, "Back"),
-                        )
-                        .on_hover_text("Back (Alt+Left)")
-                        .clicked();
-                    forward |= ui
-                        .add_enabled(
-                            !busy && self.history.forward().is_some(),
-                            IconButton::icon_only(Icon::Forward, "Forward"),
-                        )
-                        .on_hover_text("Forward (Alt+Right)")
-                        .clicked();
-                    reload |= ui
-                        .add_enabled(
-                            !busy && self.loaded.is_some(),
-                            IconButton::icon_only(Icon::Reload, "Reload"),
-                        )
-                        .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
-                        .clicked();
-                    // Reserve actual control widths, including icon gaps and text,
-                    // so the address field never pushes actions out of the window.
-                    let label_width = |label: &str| {
-                        ui.painter()
-                            .layout_no_wrap(
-                                label.into(),
-                                egui::TextStyle::Button.resolve(ui.style()),
-                                INK,
+                        back |= ui
+                            .add_enabled(
+                                !busy && self.history.back().is_some(),
+                                IconButton::icon_only(Icon::Back, "Back"),
                             )
-                            .size()
-                            .x
-                    };
-                    let trailing_width = 3.0 * 36.0
-                        + 3.0 * 6.0
-                        + if compact {
-                            0.0
-                        } else {
-                            label_width("Open…") + label_width("History") + 2.0 * 7.0
+                            .on_hover_text("Back (Alt+Left)")
+                            .clicked();
+                        forward |= ui
+                            .add_enabled(
+                                !busy && self.history.forward().is_some(),
+                                IconButton::icon_only(Icon::Forward, "Forward"),
+                            )
+                            .on_hover_text("Forward (Alt+Right)")
+                            .clicked();
+                        reload |= ui
+                            .add_enabled(
+                                !busy && self.loaded.is_some(),
+                                IconButton::icon_only(Icon::Reload, "Reload"),
+                            )
+                            .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
+                            .clicked();
+                        // Reserve actual control widths, including icon gaps and text,
+                        // so the address field never pushes actions out of the window.
+                        let label_width = |label: &str| {
+                            ui.painter()
+                                .layout_no_wrap(
+                                    label.into(),
+                                    egui::TextStyle::Button.resolve(ui.style()),
+                                    INK,
+                                )
+                                .size()
+                                .x
                         };
-                    let address_width = (ui.available_width() - trailing_width).max(60.0);
-                    let mut output = egui::TextEdit::singleline(&mut self.address)
-                        .id(egui::Id::new("address"))
-                        .hint_text("Enter a URL or file path")
-                        .char_limit(olive_html::net::MAX_URL_BYTES)
-                        .desired_width(address_width)
-                        .margin(egui::vec2(10.0, 10.0))
-                        .show(ui);
-                    if focus_address {
-                        output.response.request_focus();
-                        output
-                            .state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                egui::text::CCursor::new(0),
-                                egui::text::CCursor::new(self.address.chars().count()),
-                            )));
-                        output.state.store(ui.ctx(), output.response.id);
-                    }
-                    go |= output.response.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    go |= ui
-                        .add_enabled(!busy, IconButton::icon_only(Icon::Go, "Go").primary())
-                        .on_hover_text("Open address")
-                        .clicked();
-                    choose |= ui
-                        .add_enabled(
-                            !busy,
-                            if compact {
-                                IconButton::icon_only(Icon::Folder, "Open HTML file")
+                        let trailing_width = 4.0 * 36.0
+                            + 4.0 * 6.0
+                            + if compact {
+                                0.0
                             } else {
-                                IconButton::new(Icon::Folder, "Open…")
-                            },
-                        )
-                        .on_hover_text("Open HTML file (Cmd/Ctrl+O)")
-                        .clicked();
-                    show_history |= ui
-                        .add(
-                            (if compact {
-                                IconButton::icon_only(Icon::History, "Browsing history")
+                                label_width("Open…")
+                                    + label_width("History")
+                                    + label_width("Focus")
+                                    + 3.0 * 7.0
+                            };
+                        let address_width = (ui.available_width() - trailing_width).max(60.0);
+                        let mut output = egui::TextEdit::singleline(&mut self.address)
+                            .id(egui::Id::new("address"))
+                            .hint_text("Enter a URL or file path")
+                            .char_limit(olive_html::net::MAX_URL_BYTES)
+                            .desired_width(address_width)
+                            .margin(egui::vec2(10.0, 10.0))
+                            .show(ui);
+                        if focus_address {
+                            output.response.request_focus();
+                            output.state.cursor.set_char_range(Some(
+                                egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    egui::text::CCursor::new(self.address.chars().count()),
+                                ),
+                            ));
+                            output.state.store(ui.ctx(), output.response.id);
+                        }
+                        go |= output.response.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        go |= ui
+                            .add_enabled(!busy, IconButton::icon_only(Icon::Go, "Go").primary())
+                            .on_hover_text("Open address")
+                            .clicked();
+                        let readable = self
+                            .loaded
+                            .as_ref()
+                            .is_some_and(|loaded| !loaded.reading.is_empty());
+                        if ui
+                            .add_enabled(
+                                !busy && readable,
+                                if compact {
+                                    IconButton::icon_only(Icon::Focus, "Focus mode")
+                                } else {
+                                    IconButton::new(Icon::Focus, "Focus")
+                                },
+                            )
+                            .on_disabled_hover_text(if readable {
+                                "Wait for the page to finish loading"
                             } else {
-                                IconButton::new(Icon::History, "History")
+                                "Open a page with readable text to use Focus mode"
                             })
-                            .warning(self.browsing_history.error().is_some()),
-                        )
-                        .on_hover_text(if self.browsing_history.error().is_some() {
-                            "Browsing history — could not save history (Cmd/Ctrl+Shift+H)"
-                        } else {
-                            "Browsing history (Cmd/Ctrl+Shift+H)"
-                        })
-                        .clicked();
+                            .on_hover_text("Focus mode (Cmd/Ctrl+Shift+F)")
+                            .clicked()
+                        {
+                            self.toggle_focus();
+                        }
+
+                        choose |= ui
+                            .add_enabled(
+                                !busy,
+                                if compact {
+                                    IconButton::icon_only(Icon::Folder, "Open HTML file")
+                                } else {
+                                    IconButton::new(Icon::Folder, "Open…")
+                                },
+                            )
+                            .on_hover_text("Open HTML file (Cmd/Ctrl+O)")
+                            .clicked();
+                        show_history |= ui
+                            .add(
+                                (if compact {
+                                    IconButton::icon_only(Icon::History, "Browsing history")
+                                } else {
+                                    IconButton::new(Icon::History, "History")
+                                })
+                                .warning(self.browsing_history.error().is_some()),
+                            )
+                            .on_hover_text(if self.browsing_history.error().is_some() {
+                                "Browsing history — could not save history (Cmd/Ctrl+Shift+H)"
+                            } else {
+                                "Browsing history (Cmd/Ctrl+Shift+H)"
+                            })
+                            .clicked();
+                    });
                 });
-            });
-        egui::Panel::bottom("status")
+            egui::Panel::bottom("status")
             .frame(
                 egui::Frame::new()
                     .fill(CHROME)
@@ -814,21 +954,27 @@ impl eframe::App for OliveApp {
                     });
                 });
             });
+        } else {
+            self.focus_toolbar(ui, busy);
+        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new().fill(
-                    self.loaded
-                        .as_ref()
-                        .and_then(|loaded| loaded.page.background)
-                        .unwrap_or(PAPER),
+                    if self.focus_mode { self.focus_settings.theme.paper() } else {
+                        self.loaded.as_ref().and_then(|loaded| loaded.page.background).unwrap_or(PAPER)
+                    },
                 ),
             )
             .show(ui, |ui| {
+                if self.focus_mode {
+                    ui.style_mut().visuals = self.focus_settings.theme.visuals();
+                }
                 if let Some(error) = &self.error {
                     egui::Frame::new()
                         .fill(Color32::from_rgb(255, 235, 228))
                         .inner_margin(16)
                         .show(ui, |ui| {
+                            ui.visuals_mut().override_text_color = Some(INK);
                             ui.label(
                                 RichText::new("Could not open this page")
                                     .variations([("wght", 650.0)]),
@@ -837,11 +983,21 @@ impl eframe::App for OliveApp {
                         });
                 }
                 if let Some(loaded) = &mut self.loaded {
+                    let focus = self.focus_mode;
+                    let page = if focus { &mut loaded.reading } else { &mut loaded.page };
+                    if focus { page.set_reading_style(self.focus_settings); }
                     egui::ScrollArea::both()
-                        .id_salt(("document", self.generation))
+                        .id_salt(("document", self.generation, focus))
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let margin = ((ui.available_width() - 820.0) / 2.0).max(24.0);
+                            let column = if focus { 720.0 } else { 820.0 };
+                            let margin = ((ui.available_width() - column) / 2.0).max(24.0);
+                            // Keep the column centered beyond the integer frame-margin limit.
+                            let inset = if focus { (margin - 100.0).max(0.0) } else { 0.0 };
+                            let mut rect = ui.available_rect_before_wrap();
+                            rect.min.x += inset;
+                            rect.max.x -= inset;
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                             egui::Frame::new()
                                 .inner_margin(egui::Margin {
                                     left: margin.min(100.0) as i8,
@@ -850,11 +1006,11 @@ impl eframe::App for OliveApp {
                                     bottom: 40,
                                 })
                                 .show(ui, |ui| {
-                                    if loaded.page.is_empty() {
+                                    if page.is_empty() {
                                         ui.label("This document has no visible content.");
                                     }
                                     if let Some(click) =
-                                        loaded.page.show_with_textures(ui, &mut self.image_textures)
+                                        page.show_with_textures(ui, &mut self.image_textures)
                                     {
                                         link = click.href;
                                         if let (Some(target), Some(session)) =
@@ -874,7 +1030,11 @@ impl eframe::App for OliveApp {
                                             link = None;
                                         }
                                     }
+                                    if focus && page.truncated {
+                                        ui.label("This reading view was shortened to keep the page responsive.");
+                                    }
                                 });
+                            });
                         });
                 } else {
                     ui.vertical_centered(|ui| {
@@ -1009,6 +1169,9 @@ mod tests {
             alert: None,
             image_textures: ImageTextureCache::default(),
             generation: 1,
+            focus_mode: false,
+            focus_panel: true,
+            focus_settings: FocusSettings::default(),
         }
     }
 
@@ -1018,6 +1181,84 @@ mod tests {
             bytes: b"<!doctype html><p>Remote</p>".to_vec(),
             status: Some(200),
             plain_text: false,
+        }
+    }
+
+    #[test]
+    fn focus_toggles_without_reloading_or_recording_visits_and_keeps_preferences() {
+        let ctx = egui::Context::default();
+        let mut app = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/story")).unwrap(),
+        );
+        app.focus_settings = FocusSettings {
+            font_size: 25.0,
+            theme: FocusTheme::Dark,
+        };
+        app.toggle_focus();
+        assert!(app.focus_mode && app.focus_panel);
+        app.focus_panel = false;
+        app.toggle_focus();
+        assert!(!app.focus_mode);
+        app.toggle_focus();
+        assert!(app.focus_mode && app.focus_panel);
+        assert_eq!(app.focus_settings.font_size, 25.0);
+        assert_eq!(app.focus_settings.theme, FocusTheme::Dark);
+        assert!(app.pending.is_none());
+        assert_eq!(app.generation, 1);
+        assert_eq!(app.browsing_history.entries()[0].visits, 1);
+        let mut source = remote_source("https://example.com/empty");
+        source.bytes = b"<title>No article</title><nav>Site links</nav>".to_vec();
+        app.loaded = Some(prepare_page(source).unwrap());
+        app.focus_mode = false;
+        app.toggle_focus();
+        assert!(!app.focus_mode);
+    }
+
+    #[test]
+    fn focus_controls_fit_the_minimum_window_width_in_both_themes() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        let mut app = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/story")).unwrap(),
+        );
+        for theme in [FocusTheme::Light, FocusTheme::Dark] {
+            app.focus_settings.theme = theme;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 360.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.focus_toolbar(ui, false);
+                    assert!(ui.available_height() >= 200.0);
+                },
+            );
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(labels.iter().any(|text| text.galley.text() == "Exit Focus"));
+            assert!(labels.iter().any(|text| text.galley.text() == "Dark"));
+            for text in labels {
+                assert!(
+                    text.pos.x >= 0.0 && text.pos.x + text.galley.size().x <= 480.0,
+                    "control clipped: {}",
+                    text.galley.text()
+                );
+            }
+            output.textures_delta.clear();
         }
     }
 
@@ -1039,6 +1280,7 @@ mod tests {
             prepare_page(remote_source(original.as_str())).unwrap(),
         );
         let next = Location::from_input("https://example.com/second").unwrap();
+        app.toggle_focus();
         app.history.commit(next.clone(), Navigation::New);
         app.history
             .commit(original.clone(), Navigation::Traverse(0));
@@ -1059,6 +1301,7 @@ mod tests {
         assert!(app.error.as_ref().unwrap().contains("missing.example"));
         assert_eq!(app.browsing_history.entries().len(), 1);
         assert_eq!(app.browsing_history.entries()[0].url, original.as_str());
+        assert!(app.focus_mode);
     }
 
     #[test]
@@ -1069,6 +1312,8 @@ mod tests {
             prepare_page(remote_source("https://example.com/first")).unwrap(),
         );
         let requested = Location::from_input("https://example.com/redirect").unwrap();
+        app.toggle_focus();
+        app.focus_settings.font_size = 24.0;
         let final_url = "https://example.com/final";
         let mut source = remote_source(final_url);
         // Readable HTTP error pages are successful navigations too.
@@ -1082,6 +1327,8 @@ mod tests {
             navigation: Navigation::New,
         });
         app.receive(&ctx);
+        assert!(!app.focus_mode);
+        assert_eq!(app.focus_settings.font_size, 24.0);
         assert_eq!(app.browsing_history.entries().len(), 2);
         let entry = &app.browsing_history.entries()[0];
         assert_eq!(entry.url, final_url);
@@ -1121,9 +1368,11 @@ mod tests {
         let ctx = egui::Context::default();
         let url = "https://example.com/page";
         let mut app = app_for_test(&ctx, prepare_page(remote_source(url)).unwrap());
+        app.toggle_focus();
         let anchor = Location::from_input(&format!("{url}#section")).unwrap();
         app.open(anchor.clone(), Navigation::New, &ctx);
         assert!(app.pending.is_none());
+        assert!(app.focus_mode);
         assert_eq!(app.browsing_history.entries()[0].url, anchor.as_str());
         let (index, location) = app.history.back().unwrap();
         app.open(location, Navigation::Traverse(index), &ctx);
@@ -1179,6 +1428,7 @@ mod tests {
         assert!(!loaded.page.is_empty());
         let image_page = load_file(root.join("examples/reading.html")).unwrap();
         assert_eq!(image_page.page.image_count(), 1);
+        assert_eq!(image_page.reading.image_count(), 1);
         assert!(load_file(root.clone()).is_err());
         assert!(load_file(root.join("missing-olive-example.html")).is_err());
     }
@@ -1248,6 +1498,7 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
             assert_eq!(update.page.title, format!("Clicked {count}"));
+            assert!(update.reading.is_empty()); // A button-only page has no reading content.
             assert_eq!(update.scripts.executed, 1);
             assert!(update.scripts.diagnostics.is_empty());
             assert_eq!(update.alert, Some(count.to_string()));

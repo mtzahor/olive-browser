@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.5.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.6.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -31,6 +31,27 @@ Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
 In narrow windows, **Open…** and **History** use folder and history icons, and
 status controls wrap to keep every action reachable.
+
+Click **Focus** or press `Cmd+Shift+F`/`Ctrl+Shift+F` for a distraction-free reading
+view. Focus selects article/main content when available, falls back to plain page
+text, and removes navigation, sidebars, forms, hidden content and common promotional
+blocks. The browser toolbar and status bar give way to a quiet reading column.
+Headings, lists, emphasis, code, loaded article images, text selection and links remain.
+The button is disabled when no readable text is available.
+
+While Focus is on, use **Appearance** to show or hide the reading settings panel.
+Choose a **14–32 px font size** and **Light** or **Dark** appearance. Changes apply
+immediately without reloading or running page scripts. Preferences last for the
+current app session. Click **Exit Focus**, press **Escape**, or use the Focus shortcut
+again to return to the original page and its scroll position. `Cmd+L`/`Ctrl+L` also
+leaves Focus and selects the address bar. Following an anchor keeps Focus on;
+successfully opening or reloading a document returns to the normal view. A failed
+load keeps the current reading view. Reader links navigate without invoking page
+click handlers. Entering and leaving Focus does not add history visits.
+
+Content selection uses local heuristics, so unusual page layouts may omit useful
+content or keep some surrounding text. Exit Focus to see the complete original page.
+Try it with `cargo run --locked --features gui --bin olive-gui -- examples/focus.html`.
 
 Click links to navigate, including relative links, `<base href>` addresses, and
 same-page `#id` / named anchors. Back and Forward retain up to 256 addresses;

@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
+mod focus;
 mod fonts;
 mod history;
 mod history_ui;

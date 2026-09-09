@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- Add a Focus toolbar button and Cmd/Ctrl+Shift+F shortcut for a distraction-free
+  reading view, with Exit Focus and Escape to return to the original page.
+- Extract article/main content with a plain-page fallback; remove navigation,
+  sidebars, forms, hidden content, and common advertising, sharing and signup blocks.
+- Add a collapsible Appearance panel with 14–32 px font sizing and Light/Dark
+  themes. Keep these preferences for the running session and reflow instantly.
+- Preserve headings, lists, emphasis, code, loaded article images, selectable text,
+  links and anchors. Keep reading links inert to page click handlers and change
+  appearance without fetching resources, rerunning scripts or adding history visits.
+- Keep separate scroll positions for normal and Focus views. New documents return
+  to normal view; same-page anchors and failed navigations retain Focus mode.
+- Add a Focus demo and regression coverage for extraction, appearance, navigation,
+  image retention, script isolation and bounded rendering.
+
 ## 0.5.0
 
 - Add matching vector outline icons to browser buttons, including navigation,
