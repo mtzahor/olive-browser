@@ -134,7 +134,9 @@ impl Location {
         self.0.scheme() != "file"
     }
     pub fn file_path(&self) -> Option<PathBuf> {
-        self.0.to_file_path().ok()
+        (self.0.scheme() == "file")
+            .then(|| self.0.to_file_path().ok())
+            .flatten()
     }
 
     /// Resolve a page link, preventing a web page from navigating into local files.
@@ -242,6 +244,16 @@ pub struct DocumentLoader {
     timeout: Duration,
 }
 
+pub const MAX_FORM_BYTES: usize = 64 * 1024;
+
+/// A user-initiated, UTF-8 URL-encoded form navigation. Bodies are never history data.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub struct FormRequest {
+    pub location: Location,
+    pub body: Option<String>,
+}
+
 impl DocumentLoader {
     pub fn new() -> Result<Self, String> {
         Self::with_timeout(Duration::from_secs(20))
@@ -263,7 +275,28 @@ impl DocumentLoader {
     }
 
     pub fn load(&self, location: Location) -> Result<LoadedDocument, String> {
-        self.load_kind(location, None, None, self.timeout, MAX_DOCUMENT_BYTES)
+        self.load_kind(location, None, None, self.timeout, MAX_DOCUMENT_BYTES, None)
+    }
+
+    pub fn submit(&self, request: FormRequest) -> Result<LoadedDocument, String> {
+        if !request.location.is_remote() {
+            return Err("Forms can only submit to HTTP or HTTPS addresses.".into());
+        }
+        if request
+            .body
+            .as_ref()
+            .is_some_and(|body| body.len() > MAX_FORM_BYTES)
+        {
+            return Err("Form data exceeds the 64 KiB limit.".into());
+        }
+        self.load_kind(
+            request.location.clone(),
+            None,
+            Some(&request.location),
+            self.timeout,
+            MAX_DOCUMENT_BYTES,
+            request.body,
+        )
     }
 
     /// Fetch a stylesheet, classic script, or raster image with the document's origin policy.
@@ -283,6 +316,7 @@ impl DocumentLoader {
             Some(document),
             timeout.min(self.timeout),
             max_bytes.min(MAX_RESOURCE_BYTES),
+            None,
         )?;
         let bytes = loaded.bytes;
         let source = if kind == ResourceKind::Image {
@@ -304,6 +338,7 @@ impl DocumentLoader {
         document: Option<&Location>,
         timeout: Duration,
         max_bytes: usize,
+        mut body: Option<String>,
     ) -> Result<LoadedDocument, String> {
         if let Some(document) = document {
             check_resource_target(document, &location)?;
@@ -343,9 +378,15 @@ impl DocumentLoader {
             if remaining.is_zero() {
                 return Err("The website took too long to respond. Try again.".into());
             }
-            let response = self
-                .client
-                .get(location.url().clone())
+            let request = if let Some(body) = &body {
+                self.client
+                    .post(location.url().clone())
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(body.clone())
+            } else {
+                self.client.get(location.url().clone())
+            };
+            let response = request
                 .timeout(remaining)
                 .header(
                     header::ACCEPT,
@@ -365,6 +406,16 @@ impl DocumentLoader {
                     }
                     let href = target.to_str().map_err(|_| "Invalid redirect address")?;
                     let mut target = location.resolve(href)?;
+                    if body.is_some()
+                        && location.url().scheme() == "https"
+                        && target.url().scheme() != "https"
+                    {
+                        return Err("HTTPS forms cannot redirect to an insecure address.".into());
+                    }
+                    // Historical POST redirects become GET; 307/308 retain the body.
+                    if matches!(response.status().as_u16(), 301..=303) {
+                        body = None;
+                    }
                     if target.0.fragment().is_none() {
                         target.0.set_fragment(location.0.fragment());
                     }
@@ -537,6 +588,7 @@ mod tests {
             "https://other.example/path"
         );
         for address in ["localhost:8000/test", "127.0.0.1:8080", "[::1]:3000"] {
+            assert!(Location::from_input(address).unwrap().file_path().is_none());
             assert_eq!(
                 Location::from_input(address).unwrap().url().scheme(),
                 "http"

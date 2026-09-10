@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.7.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.8.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -34,8 +34,60 @@ select a numbered tab; `Cmd+9`/`Ctrl+9` selects the last. Close a tab with its
 opens a fresh blank tab. The tab strip scrolls horizontally and supports up to
 32 tabs. Middle-click or Cmd/Ctrl-click a page link to open it in a new tab.
 
+Click **Find** in the status bar or press `Cmd+F`/`Ctrl+F` to search the current
+view. Matches are case-insensitive and highlighted, with an active match counter
+and automatic scrolling. Use **Next**/**Previous**, `F3`/`Shift+F3`, or
+`Cmd+G`/`Ctrl+G` (Shift for previous). In the find field, Enter advances and
+Shift+Enter goes back. Results wrap; Escape closes find before exiting Focus or
+stopping a load. Find works in Focus mode and keeps a separate query per tab.
+It searches displayed page text, including inline formatting, excluding hidden
+content and native control labels/values. Searches do not span separate text blocks; Unicode
+lowercase matching is supported without accent folding or full linguistic case folding.
+
+Native forms work with JavaScript disabled. Supported controls include text,
+search, email, URL, telephone and password inputs, checkboxes, radio groups,
+text areas, single/multiple selects, hidden inputs, submit buttons and reset buttons.
+Tab/Shift+Tab moves between controls; Enter in a single-line input activates the
+form's default submit button (or submits a form with a single text input).
+Controls support initial values, labels, placeholders, disabled fieldsets,
+read-only text, required fields and `maxlength`. Email/URL fields use plain text
+editing; validation currently checks required values only.
+
+Forms send UTF-8 `application/x-www-form-urlencoded` data using GET or POST.
+GET replaces the action's query; POST sends values in the request body. Relative
+actions use the document's base URL; an absent/empty action uses the current URL.
+Named successful controls are included in document order, with repeated names,
+checked choices, selected options and the activated submit button. Explicit
+`form` ownership and submit-button overrides are supported. HTTPS forms cannot
+submit or redirect to HTTP, and form actions must use HTTP(S).
+
+Submission starts a new tab worker and leaves the previous page and edits available
+if the request fails. Web scripting starts disabled on the response. POST redirects
+301/302/303 become GET; 307/308 preserve the body. **Reload, Back and Forward use
+GET and never resend a POST body.** POST bodies are not stored in browsing history;
+GET query values are part of saved URLs. Edits last until a successful full navigation
+or reset and survive tab switches, Focus mode and script presentation updates.
+
+File uploads, specialized numeric/date/color/range controls, multipart/plain-text
+encoding and form targets other than the current tab are not implemented; submitting
+these forms shows an error. Form JavaScript properties/events (`value`, `checked`,
+`input`, `change`, `submit`, `reset`, `FormData`) are not implemented. Existing inline
+button click handlers still run when scripting is enabled and can cancel their
+default action with `return false`; native edited values are not exposed to scripts.
+Forms are limited to 512 controls, 2,048 select options, 16,384 characters per
+text field and 64 KiB of encoded submission data; GET addresses retain the 8 KiB limit.
+
+Try the local interaction demo:
+
+```sh
+python3 examples/interaction-server.py
+# In another terminal:
+cargo run --locked --features gui --bin olive-gui -- http://localhost:8000
+```
+
 Each tab keeps its own address draft, Back/Forward stack, JavaScript realm,
-alerts, Focus settings and document scroll position. Switching tabs does not
+alerts, form edits, find queries, Focus settings and document scroll position.
+Switching tabs does not
 reload pages or add history visits. Saved browsing history is shared across tabs.
 
 Each loaded document has a dedicated child process for networking, HTML/CSS,
@@ -117,7 +169,7 @@ sniffing is not yet implemented. Responses are capped at 1 MiB after decompressi
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
 The viewer renders text, basic boxes, PNG and JPEG images, and linked/embedded/inline styles.
-GIF, WebP, SVG and CSS background images, forms, downloads, cookies,
+GIF, WebP, SVG and CSS background images, downloads, cookies,
 authentication and restoring tabs across launches are not implemented. Sites that require a full DOM, CSS
 layout engine, or browser
 JavaScript APIs will have limited presentation or functionality.
@@ -276,7 +328,8 @@ Use `parse_utf8` or `parse_reader` for custom `ParseOptions`. Enable optional
 engines with `--features css` or `--features js`; the GUI enables both.
 `olive_html::net::{Location, DocumentLoader}` provides explicit URL resolution
 and bounded HTTP(S)/file loading with `--features net`. `load` fetches only the
-requested document; `load_resource` explicitly requests a typed CSS, JS, or PNG/JPEG
+requested document; `submit(FormRequest)` explicitly sends a bounded URL-encoded
+GET/POST form navigation; `load_resource` explicitly requests a typed CSS, JS, or PNG/JPEG
 image resource. With `net`, `css` and `js`, `resources::PageResources::load`
 collects page resources.
 
@@ -313,7 +366,8 @@ cargo doc --locked --no-deps --all-features
 The test suite covers HTML recovery and conformance fixtures, CSS cascade and
 layout, JavaScript execution and DOM limits, CLI behavior, GUI rendering,
 URL resolution, HTTP redirects/errors/timeouts/limits, resource loading and ordering,
-opt-in web scripting, persistent click state, navigation history, and saved
+opt-in web scripting, native form editing/submission/reset, GET/POST redirects,
+Unicode find highlighting and shortcuts, persistent click state, navigation history, and saved
 history search, restart persistence, deletion, storage failures and size limits.
 Process integration tests launch the real GUI executable without a window, verify
 independent JavaScript realms, kill a tab, suspend a tab (Unix), exercise watchdog

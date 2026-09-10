@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Interaction — Olive Browser</title>
+<style>
+body { color: #263020; background: #fafaf6; font-size: 17px; }
+h1 { color: #566933; font-size: 34px; }
+h2 { color: #566933; margin-top: 32px; }
+form { background: #edf1e4; padding: 20px; border: 1px solid #bdc8a8; border-radius: 10px; margin-bottom: 24px; }
+label { display: block; margin-top: 12px; }
+p { line-height: 1.6; }
+</style>
+<body>
+<h1>A more hands-on Olive.</h1>
+<p>Native forms, editable inputs and find-in-page. This demo works without JavaScript.</p>
+<p>Run <code>python3 examples/interaction-server.py</code> and open <code>http://localhost:8000</code> to see submitted values.</p>
+<p><a href="#post">Try POST</a> · <a href="#find">Try find-in-page</a></p>
+<h2>Search with GET</h2>
+<form action="/submit" method="get">
+<label for="query">Search term</label>
+<input id="query" name="q" type="search" placeholder="Try olives & tea" required>
+<label for="region">Region</label>
+<select id="region" name="region">
+<option value="all">Everywhere</option><option value="mediterranean">Mediterranean</option><option value="galilee">Galilee</option>
+</select>
+<input type="hidden" name="source" value="olive-demo">
+<p><input type="checkbox" name="recipes" value="yes" checked aria-label="Include recipes"></p>
+<button name="action" value="search">Search</button>
+<button type="reset">Reset search</button>
+</form>
+<h2 id="post">Send a note with POST</h2>
+<form action="/submit" method="post">
+<label for="name">Name</label><input id="name" name="name" value="Olive reader" maxlength="80" required>
+<label for="password">Demo password (use a made-up value)</label><input id="password" name="password" type="password" placeholder="Masked as you type">
+<label for="message">Your note</label><textarea id="message" name="message" rows="4">Olive trees grow slowly.
+Good things take time.</textarea>
+<p>Preferred olive:</p>
+<input type="radio" name="olive" value="green" checked aria-label="Green">
+<input type="radio" name="olive" value="black" aria-label="Black">
+<label for="topics">Topics (choose several)</label><select id="topics" name="topic" multiple>
+<option value="growing" selected>Growing</option><option value="cooking">Cooking</option><option value="travel">Travel</option>
+</select>
+<label for="reference">Read-only reference</label><input id="reference" name="reference" value="v0.8.0" readonly>
+<fieldset disabled><legend>Unavailable option</legend><input name="disabled" value="This value is not submitted"></fieldset>
+<button name="action" value="send">Send note</button><button type="reset">Reset note</button>
+</form>
+<h2 id="find">Find the olive</h2>
+<p>Press Cmd+F or Ctrl+F, then search for <strong>olive</strong>. Matching text is highlighted, including across inline formatting.</p>
+<p>The first olive is green. The second OLIVE is black. A third <em>olive</em> grows on the tree.</p>
+<p>Try a Unicode search too: café, שלום, or Mediterranean.</p>
+<p>Use Enter or Shift+Enter in the find field, F3 or Shift+F3, or Cmd/Ctrl+G to move between matches. Escape closes find before leaving Focus mode.</p>
+</body>
+</html>

@@ -4,10 +4,14 @@
 #![allow(dead_code)]
 #[path = "../src/gui/document.rs"]
 mod document;
+#[path = "../src/gui/find.rs"]
+mod find;
 #[path = "../src/gui/focus.rs"]
 mod focus;
 #[path = "../src/gui/fonts.rs"]
 mod fonts;
+#[path = "../src/gui/forms.rs"]
+mod forms;
 #[path = "../src/gui/render.rs"]
 mod render;
 #[path = "../src/gui/worker.rs"]
@@ -283,4 +287,87 @@ fn the_watchdog_terminates_a_hung_tab_without_resetting_other_tabs() {
     );
     gone(pid);
     click(&mut healthy, 3);
+}
+
+#[test]
+fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
+    use olive_html::net::FormRequest;
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let action = format!("http://{}/submit", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let mut methods = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                headers.push(byte[0]);
+            }
+            let headers = String::from_utf8(headers).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            methods.push((headers.lines().next().unwrap().to_owned(), body));
+            let body = b"<title>Submitted</title><p>Form received</p><script>document.title='Must stay disabled'</script>";
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
+            stream.write_all(body).unwrap();
+        }
+        methods
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("form.html");
+    std::fs::write(&path, format!("<form action='{action}' method=post><input name=q value=initial><button>Send</button></form>")).unwrap();
+    let mut original = spawn(&path);
+    let mut page = match reply(&mut original).unwrap() {
+        Event::Loaded(page) => page,
+        _ => panic!("expected form"),
+    };
+    page.page.forms.controls[0].value = "edited & שלום".into();
+    let request = page
+        .page
+        .forms
+        .submit(page.page.forms.controls[1].node, &page.location, &page.base)
+        .unwrap();
+    let body = request.body.clone().unwrap();
+    let executable = Path::new(env!("CARGO_BIN_EXE_olive-gui"));
+    let ctx = egui::Context::default();
+    let mut submitted =
+        Worker::spawn_command_at(executable, Command::Submit(request), &ctx).unwrap();
+    assert_ne!(original.pid(), submitted.pid());
+    let loaded = match reply(&mut submitted).unwrap() {
+        Event::Loaded(page) => page,
+        _ => panic!("expected response"),
+    };
+    assert_eq!(loaded.page.title, "Submitted");
+    assert!(!loaded.scripting_enabled);
+    let mut reloaded = Worker::spawn_at(executable, loaded.location, false, &ctx).unwrap();
+    assert!(matches!(reply(&mut reloaded).unwrap(), Event::Loaded(_)));
+    let requests = server.join().unwrap();
+    assert_eq!(
+        requests[0],
+        ("POST /submit HTTP/1.1".into(), body.into_bytes())
+    );
+    assert_eq!(requests[1], ("GET /submit HTTP/1.1".into(), Vec::new()));
+    // The command wire payload preserves ordinary URL-encoded bytes, including Unicode.
+    let encoded = serde_json::to_vec(&Command::Submit(FormRequest {
+        location: Location::from_input(&action).unwrap(),
+        body: Some("q=%D7%A9".into()),
+    }))
+    .unwrap();
+    assert!(matches!(
+        serde_json::from_slice::<Command>(&encoded).unwrap(),
+        Command::Submit(_)
+    ));
 }

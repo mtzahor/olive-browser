@@ -2,8 +2,10 @@
 
 mod app;
 mod document;
+mod find;
 mod focus;
 mod fonts;
+mod forms;
 mod history;
 mod history_ui;
 mod icon;

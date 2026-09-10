@@ -1,4 +1,4 @@
-# Security boundary in 0.7.0
+# Security boundary in 0.8.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG images, and linked/embedded/inline CSS.
@@ -45,9 +45,24 @@ Back/Forward stack at 256 entries.
 One navigation load runs per tab. Starting another navigation cancels that tab's
 pending load. Other tabs continue loading and responding independently.
 No cookies, HTTP authentication, automatic Referer headers, persistent network
-cache, forms, downloads or automatic document navigation are enabled.
+cache, downloads or automatic document navigation are enabled.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
 addresses are allowed, including for subresources; this is not an SSRF-filtering API.
+
+Native forms submit only after user activation, through a fresh document worker.
+Only UTF-8 URL-encoded HTTP(S) GET/POST is supported, with a 64 KiB encoded-body
+limit and the existing 8 KiB URL limit. HTTPS form targets and redirects must stay
+HTTPS. The loader bounds POST responses exactly like GET responses. Redirects
+301/302/303 change POST to GET; 307/308 retain its body. No credentials or Referer
+are added. POST data lives only in memory/worker pipes for the request and is not
+saved to history. Reload and history traversal fetch URLs with GET, without replaying
+POST. A stopped or failed request might already have reached the server.
+Native password widgets mask their display; entered values are not encrypted in memory.
+Controls are capped at 512 and select options at 2,048 per page, with 16,384 characters
+per text field. Oversized initial form state disables submission. Unsupported file or
+specialized input controls and unsupported encodings/targets produce a submission error.
+No form event or value API exposes native edits to page scripts. Find searches only
+bounded rendered text, with a 256-character query; hidden text and input values are excluded.
 
 The GUI saves the latest 1,000 distinct visited URLs (including query strings,
 fragments and local file paths), titles, timestamps and visit counts in a local,
@@ -153,7 +168,7 @@ thread is stuck. The same executable enters worker mode before creating any
 window or reading browser history.
 
 IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
-files. Messages have a four-byte length prefix: commands are limited to 32 KiB,
+files. Messages have a four-byte length prefix: commands are limited to 128 KiB,
 presentation responses to 128 MiB. Pipe reads, writes, JSON decoding, image
 validation and presentation-index checks happen off the UI thread. Only inert
 text/style/image presentation data and bounded reports cross into the browser;

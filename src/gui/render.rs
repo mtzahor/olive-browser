@@ -1,5 +1,9 @@
 //! Inert CSS presentation of Olive's DOM. No HTML reparsing or resource loading.
 use crate::focus::{self, Content, Settings};
+use crate::{
+    find::Matches,
+    forms::{Activation, Forms, Kind},
+};
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Color32, ColorImage, FontFamily, FontId, Stroke, TextureHandle, TextureOptions,
@@ -125,6 +129,7 @@ struct Action {
     link: Option<NodeId>,
 }
 pub struct PageClick {
+    pub form: Option<Activation>,
     pub new_tab: bool,
     pub target: Option<NodeId>,
     pub href: Option<String>,
@@ -135,6 +140,7 @@ enum Command {
     Close,
     Text(usize),
     Image(usize),
+    Control(usize, Option<NodeId>),
     Anchor(usize),
 }
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -144,6 +150,13 @@ pub struct Page {
     pub css_limited: bool,
     pub css_ignored: usize,
     pub background: Option<Color32>,
+    pub forms: Forms,
+    #[serde(skip)]
+    pub find: Matches,
+    #[serde(skip)]
+    pub find_current: usize,
+    #[serde(skip)]
+    pub find_scroll: bool,
     blocks: Vec<Block>,
     boxes: Vec<ComputedStyle>,
     images: Vec<RenderedImage>,
@@ -236,6 +249,11 @@ impl Page {
         let mut budget = StyleBudget::default();
         let mut builder = Builder {
             page: Self {
+                forms: if reading.is_none() {
+                    Forms::from_document(doc, scripting_enabled)
+                } else {
+                    Forms::default()
+                },
                 root_font: if reading.is_some() {
                     focus::DEFAULT_FONT_SIZE
                 } else {
@@ -286,6 +304,14 @@ impl Page {
             reading.map_or(doc.root(), |content| content.root),
             initial,
         )];
+        let controls: HashMap<_, _> = builder
+            .page
+            .forms
+            .controls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.node, i))
+            .collect();
         let mut lists: Vec<Option<i64>> = Vec::new();
         while let Some(visit) = pending.pop() {
             if builder.page.truncated {
@@ -380,6 +406,23 @@ impl Page {
                     if builder.page.truncated {
                         break;
                     }
+                    if reading.is_none()
+                        && matches!(tag, "input" | "textarea" | "select" | "button")
+                    {
+                        builder.flush();
+                        if let Some(&index) = controls.get(&id) {
+                            if builder.page.forms.controls[index].kind != Kind::Hidden {
+                                builder
+                                    .page
+                                    .commands
+                                    .push(Command::Control(index, style.target));
+                            }
+                        }
+                        if block {
+                            builder.close();
+                        }
+                        continue;
+                    }
                     if matches!(tag, "td" | "th") {
                         builder.text(" ", style);
                     }
@@ -472,6 +515,7 @@ impl Page {
 
     /// Reject malformed indices and excessive presentation work before the UI sees IPC data.
     pub fn validate(&self) -> Result<(), String> {
+        self.forms.validate()?;
         let invalid = || "Invalid tab presentation".to_owned();
         if self.blocks.len() > MAX_BLOCKS
             || self.boxes.len() > MAX_BOXES
@@ -488,6 +532,7 @@ impl Page {
                 Command::Close if depth > 0 => depth -= 1,
                 Command::Text(index) if index < self.blocks.len() => {}
                 Command::Image(index) if index < self.images.len() => {}
+                Command::Control(index, _) if index < self.forms.controls.len() => {}
                 Command::Anchor(index) if index < self.anchors.len() => {}
                 _ => return Err(invalid()),
             }
@@ -581,6 +626,10 @@ impl Page {
     }
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
+            && !self
+                .commands
+                .iter()
+                .any(|c| matches!(c, Command::Control(..)))
             && self.images.is_empty()
             && !self
                 .boxes
@@ -590,6 +639,11 @@ impl Page {
     #[cfg(test)]
     pub fn image_count(&self) -> usize {
         self.images.len()
+    }
+    pub fn find_query(&mut self, query: &str) -> usize {
+        self.find
+            .update(query, self.blocks.iter().map(|b| b.job.text.as_str()));
+        self.find.count
     }
     pub fn scroll_to_fragment(&mut self, fragment: Option<String>) {
         self.scroll_to = Some(fragment.unwrap_or_default());
@@ -605,6 +659,7 @@ impl Page {
         textures: &mut ImageTextureCache,
     ) -> Option<PageClick> {
         let mut clicked = None;
+        let mut match_offset = 0;
         let mut scroll_to = self.scroll_to.take();
         let start = ui.cursor().min;
         if scroll_to.as_deref() == Some("") || scroll_to.as_deref() == Some("top") {
@@ -719,6 +774,7 @@ impl Page {
                                 || response.clicked_by(egui::PointerButton::Middle)
                             {
                                 clicked = Some(PageClick {
+                                    form: None,
                                     new_tab: response.clicked_by(egui::PointerButton::Middle)
                                         || ui.input(|input| input.modifiers.command),
                                     target: action.target,
@@ -730,8 +786,57 @@ impl Page {
                             }
                         }
                     }
+                    if let Some(matches) = self.find.blocks.get(index) {
+                        let active = self.find_current.checked_sub(match_offset);
+                        if let Some(target) = paint_matches(ui, &galley, rect.min, matches, active)
+                        {
+                            if self.find_scroll {
+                                ui.scroll_to_rect(target, Some(egui::Align::Center));
+                                self.find_scroll = false;
+                            }
+                        }
+                        match_offset += matches.len();
+                    }
                     parent.cursor += rect.height();
                     right = right.max(rect.right());
+                }
+                Command::Control(index, target) => {
+                    let parent = stack.last_mut().unwrap();
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(parent.content_left, parent.cursor + 4.0),
+                        egui::vec2(parent.width, 0.0),
+                    );
+                    let mut control_ui = text_ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt(("control", index))
+                            .max_rect(rect),
+                    );
+                    control_ui.style_mut().override_font_id =
+                        Some(FontId::proportional(self.root_font));
+                    control_ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+                    control_ui.spacing_mut().interact_size.y = 30.0;
+                    if let Some(activation) = self.forms.show(index, &mut control_ui) {
+                        let target = if activation.control == self.forms.controls[index].node {
+                            target
+                        } else {
+                            self.commands.iter().find_map(|command| match command {
+                                Command::Control(i, target)
+                                    if self.forms.controls[*i].node == activation.control =>
+                                {
+                                    *target
+                                }
+                                _ => None,
+                            })
+                        };
+                        clicked = Some(PageClick {
+                            form: Some(activation),
+                            target,
+                            href: None,
+                            new_tab: false,
+                        });
+                    }
+                    parent.cursor = control_ui.min_rect().bottom() + 6.0;
+                    right = right.max(control_ui.min_rect().right());
                 }
                 Command::Image(index) => {
                     let parent = stack.last_mut().unwrap();
@@ -781,6 +886,7 @@ impl Page {
                             .cloned();
                         if response.clicked() || response.clicked_by(egui::PointerButton::Middle) {
                             clicked = Some(PageClick {
+                                form: None,
                                 new_tab: response.clicked_by(egui::PointerButton::Middle)
                                     || ui.input(|input| input.modifiers.command),
                                 target: image.action.target,
@@ -800,6 +906,9 @@ impl Page {
         }
         let bottom = stack[0].cursor.max(start.y);
         ui.allocate_space(egui::vec2(right - start.x, bottom - start.y));
+        if self.forms.limited {
+            ui.label("This page reached the form control limit. Form submission is unavailable.");
+        }
         if self.truncated || self.css_limited {
             ui.add_space(12.0);
             ui.separator();
@@ -811,6 +920,59 @@ impl Page {
         }
         clicked
     }
+}
+
+// Highlight glyph ranges after text painting; translucent fills preserve authored colors.
+fn paint_matches(
+    ui: &egui::Ui,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    matches: &[Range<usize>],
+    active: Option<usize>,
+) -> Option<egui::Rect> {
+    let mut offset = 0;
+    let mut index = 0;
+    let mut target = None;
+    for row in &galley.rows {
+        let end = offset + row.glyphs.len();
+        while index < matches.len() && matches[index].start < end {
+            let range = &matches[index];
+            let start = range.start.max(offset) - offset;
+            let stop = range.end.min(end) - offset;
+            if start < stop {
+                let rect = egui::Rect::from_min_max(
+                    origin + egui::vec2(row.pos.x + row.glyphs[start].pos.x, row.pos.y),
+                    origin
+                        + egui::vec2(
+                            row.pos.x + row.glyphs[stop - 1].max_x(),
+                            row.pos.y + row.size.y,
+                        ),
+                );
+                let current = active == Some(index);
+                ui.painter().rect_filled(
+                    rect,
+                    2.0,
+                    if current {
+                        Color32::from_rgba_unmultiplied(255, 145, 20, 115)
+                    } else {
+                        Color32::from_rgba_unmultiplied(255, 225, 30, 85)
+                    },
+                );
+                if current && target.is_none() {
+                    target = Some(rect);
+                }
+            }
+            if range.end > end {
+                break;
+            }
+            index += 1;
+        }
+        offset = end + usize::from(row.ends_with_newline);
+        while index < matches.len() && matches[index].end <= offset {
+            index += 1;
+        }
+    }
+    target
 }
 
 // Hit-test actual glyphs, so adjacent links and surrounding text retain their
@@ -1796,5 +1958,110 @@ mod tests {
                 .filter(|c| matches!(c, Command::Close))
                 .count()
         );
+    }
+    #[test]
+    fn native_input_edit_enter_and_hidden_controls() {
+        let ctx = egui::Context::default();
+        let mut page = page(
+            "<form><input name=q placeholder='Search olives'><input type=hidden name=secret value=hidden><button>Search</button></form>",
+        );
+        assert!(!page.is_empty());
+        page.validate().unwrap();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            page.show(ui);
+        });
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Search olives" => {
+                    Some(text.pos + egui::vec2(6.0, 6.0))
+                }
+                _ => None,
+            })
+            .unwrap();
+        output.textures_delta.clear();
+        let events = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                page.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Text("Olive & tea".into())],
+                ..Default::default()
+            },
+            |ui| {
+                page.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(page.forms.controls[0].value, "Olive & tea");
+        let mut activation = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                activation = page.show(ui).or(activation.take());
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            activation.unwrap().form.unwrap().control,
+            page.forms.controls[2].node
+        );
+        assert_eq!(
+            page.commands
+                .iter()
+                .filter(|c| matches!(c, Command::Control(..)))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn find_uses_rendered_text_and_highlights_wrapped_unicode_matches() {
+        let mut page = page(
+            "<p>שלום <strong>Olive</strong> olive</p><p style='display:none'>olive</p><input type=password value=olive><script>olive</script>",
+        );
+        assert_eq!(page.find_query("olive"), 2);
+        assert_eq!(page.find.blocks[0], vec![5..10, 11..16]);
+        page.find_current = 1;
+        page.find_scroll = true;
+        let mut output = draw(&mut page, 100.0);
+        output.textures_delta.clear();
+        assert!(!page.find_scroll);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == Color32::from_rgba_unmultiplied(255, 145, 20, 115))));
+        assert_eq!(page.find_query("missing"), 0);
+        assert_eq!(page.find_query(""), 0);
+        assert_eq!(page.find_query("שלום"), 1);
     }
 }

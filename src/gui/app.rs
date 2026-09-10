@@ -1,6 +1,8 @@
 use crate::{
     document::{ClickRequest, LoadedPage},
+    find::FindBar,
     focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings, Theme as FocusTheme},
+    forms::{Activation, Kind},
     history::BrowsingHistory,
     history_ui::HistoryWindow,
     icon,
@@ -40,6 +42,8 @@ pub struct Tab {
     image_textures: ImageTextureCache,
     // Each successful open gets a new scroll ID, including re-opening the same file.
     generation: u64,
+    find: FindBar,
+    pending_form: Option<Activation>,
     focus_mode: bool,
     focus_panel: bool,
     focus_settings: FocusSettings,
@@ -152,9 +156,65 @@ impl Tab {
             alert: None,
             image_textures: ImageTextureCache::default(),
             generation: 0,
+            find: FindBar::default(),
+            pending_form: None,
             focus_mode: false,
             focus_panel: true,
             focus_settings: FocusSettings::default(),
+        }
+    }
+
+    fn activate_form(&mut self, activation: Activation, ctx: &egui::Context) {
+        if self.pending.is_some() || self.crashed {
+            return;
+        }
+        let Some(loaded) = &mut self.loaded else {
+            return;
+        };
+        let Some(control) = loaded
+            .page
+            .forms
+            .controls
+            .iter()
+            .find(|c| c.node == activation.control)
+        else {
+            return;
+        };
+        if control.disabled || control.owner.is_none() {
+            return;
+        }
+        match control.kind {
+            Kind::Reset => {
+                loaded.page.forms.reset(activation.control);
+                return;
+            }
+            Kind::Button => return,
+            Kind::Submit | Kind::Text | Kind::Password => {}
+            _ => return,
+        }
+        match loaded
+            .page
+            .forms
+            .submit(activation.control, &loaded.location, &loaded.base)
+        {
+            Ok(request) => {
+                let requested = request.location.clone();
+                match Worker::spawn_form(request, ctx) {
+                    Ok(worker) => {
+                        self.address = requested.as_str().into();
+                        self.error = None;
+                        self.alert = None;
+                        // Forms always navigate, even if the action is the current address.
+                        self.pending = Some(PendingPage {
+                            worker,
+                            navigation: Navigation::New,
+                            requested,
+                        });
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -210,6 +270,7 @@ impl Tab {
         scripting: bool,
         shared: &mut Shared,
     ) {
+        self.pending_form = None;
         self.pending = None; // Cancels and reaps a replaced navigation.
         self.error = None;
         self.alert = None;
@@ -271,6 +332,9 @@ impl Tab {
                     self.crashed = false;
                     self.error = None;
                     self.focus_mode = false;
+                    self.pending_form = None;
+                    self.find.current = 0;
+                    self.find.scroll = self.find.open;
                     self.image_textures.clear();
                     self.generation = self.generation.wrapping_add(1);
                 }
@@ -288,9 +352,12 @@ impl Tab {
         }
         let event = self.worker.as_mut().and_then(Worker::poll);
         match event {
-            Some(Ok(Event::Updated(update))) => {
+            Some(Ok(Event::Updated(mut update))) => {
+                let activation = self.pending_form.take().filter(|_| update.default_allowed);
                 if let Some(loaded) = &mut self.loaded {
+                    update.page.forms.preserve_edits(&loaded.page.forms);
                     loaded.page = update.page;
+                    self.find.scroll = self.find.open;
                     loaded.reading = update.reading;
                     loaded.base = update.base;
                     loaded.scripts = update.scripts;
@@ -305,8 +372,12 @@ impl Tab {
                         }
                     }
                 }
+                if let Some(activation) = activation {
+                    self.activate_form(activation, ctx);
+                }
             }
             Some(event) => {
+                self.pending_form = None;
                 self.worker = None;
                 self.crashed = true;
                 self.alert = None;
@@ -320,6 +391,7 @@ impl Tab {
     }
 
     fn stop(&mut self) {
+        self.pending_form = None;
         if self.pending.take().is_some() {
             if let Some(loaded) = &self.loaded {
                 self.address = loaded.location.as_str().into();
@@ -384,6 +456,11 @@ impl Tab {
             })
         };
         let focus_address = autofocus | shortcut(egui::Modifiers::COMMAND, egui::Key::L);
+        let find_escape = self.find.open && shortcut(egui::Modifiers::NONE, egui::Key::Escape);
+        if find_escape {
+            self.find.open = false;
+        }
+        let previous_focus_mode = self.focus_mode;
         if self.focus_mode && (shortcut(egui::Modifiers::NONE, egui::Key::Escape) || focus_address)
         {
             self.focus_mode = false;
@@ -393,6 +470,36 @@ impl Tab {
             egui::Key::F,
         ) {
             self.toggle_focus(shared);
+        }
+        if shortcut(egui::Modifiers::COMMAND, egui::Key::F) {
+            self.find.open = true;
+            self.find.focus = true;
+            self.find.scroll = true;
+        }
+        if previous_focus_mode != self.focus_mode {
+            self.find.current = 0;
+            self.find.scroll = true;
+        }
+        let find_count = self.loaded.as_mut().map_or(0, |loaded| {
+            let page = if self.focus_mode {
+                &mut loaded.reading
+            } else {
+                &mut loaded.page
+            };
+            page.find_query(if self.find.open { &self.find.query } else { "" })
+        });
+        if self.find.open {
+            if shortcut(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::G,
+            ) || shortcut(egui::Modifiers::SHIFT, egui::Key::F3)
+            {
+                self.find.step(find_count, true);
+            } else if shortcut(egui::Modifiers::COMMAND, egui::Key::G)
+                || shortcut(egui::Modifiers::NONE, egui::Key::F3)
+            {
+                self.find.step(find_count, false);
+            }
         }
         let mut show_history = shortcut(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -405,6 +512,7 @@ impl Tab {
         let mut go = false;
         let mut toggle_scripts = false;
         let mut link = None;
+        let mut form_activation = None;
         let mut link_new_tab = false;
         let mut stop = false;
         let busy = self.pending.is_some();
@@ -577,6 +685,9 @@ impl Tab {
                     };
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
                     if let Some(loaded) = &self.loaded {
+                        if ui.add(IconButton::new(Icon::Search, "Find").small()).on_hover_text("Find in page (Cmd/Ctrl+F)").clicked() {
+                            self.find.open = true; self.find.focus = true; self.find.scroll = true;
+                        }
                         if loaded.location.is_remote() {
                             toggle_scripts = ui.add_enabled(!busy, IconButton::new(
                                 if loaded.scripting_enabled { Icon::CodeOff } else { Icon::Code },
@@ -654,6 +765,9 @@ impl Tab {
         } else {
             self.focus_toolbar(ui, busy);
         }
+        if self.find.open {
+            ui.push_id(self.id, |ui| self.find.show(ui, find_count));
+        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new().fill(
@@ -684,6 +798,10 @@ impl Tab {
                     let focus = self.focus_mode;
                     let page = if focus { &mut loaded.reading } else { &mut loaded.page };
                     if focus { page.set_reading_style(self.focus_settings); }
+                    let count = page.find_query(if self.find.open { &self.find.query } else { "" });
+                    self.find.current = self.find.current.min(count.saturating_sub(1));
+                    page.find_current = self.find.current;
+                    page.find_scroll |= std::mem::take(&mut self.find.scroll) && count > 0;
                     egui::ScrollArea::both()
                         .id_salt(("document", self.id, self.generation, focus))
                         .auto_shrink([false, false])
@@ -708,15 +826,20 @@ impl Tab {
                                         ui.label("This document has no visible content.");
                                     }
                                     if let Some(click) =
-                                        page.show_with_textures(ui, &mut self.image_textures)
+                                        ui.push_id((self.id, self.generation), |ui| {
+                                            ui.add_enabled_ui(!busy && !self.crashed && !self.worker.as_ref().is_some_and(Worker::busy), |ui| page.show_with_textures(ui, &mut self.image_textures)).inner
+                                        }).inner
                                     {
                                         link = click.href;
                                         link_new_tab = click.new_tab;
+                                        form_activation = click.form;
                                         if !click.new_tab && !busy && !self.crashed {
                                             if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
                                                 if !worker.busy() {
+                                                    self.pending_form = form_activation.take();
                                                     if let Err(error) = worker.send(Command::Click(ClickRequest { target, href: link.take() })) {
                                                         self.error = Some(error);
+                                                        self.pending_form = None;
                                                     }
                                                 }
                                                 link = None;
@@ -788,7 +911,8 @@ impl Tab {
             shared
                 .history_window
                 .show(&ctx, &mut shared.browsing_history, false);
-        stop |= !self.focus_mode && shortcut(egui::Modifiers::NONE, egui::Key::Escape);
+        stop |=
+            !find_escape && !self.focus_mode && shortcut(egui::Modifiers::NONE, egui::Key::Escape);
         if stop {
             self.stop();
         }
@@ -840,6 +964,8 @@ impl Tab {
                         shared,
                     );
                 }
+            } else if let Some(activation) = form_activation {
+                self.activate_form(activation, &ctx);
             } else if let (Some(href), Some(loaded)) = (link, &self.loaded) {
                 let location = loaded.base.resolve(&href);
                 if link_new_tab {
@@ -1552,5 +1678,54 @@ mod tests {
         output.textures_delta.clear();
         let scroll_id = |tab: &Tab| egui::Id::new(("document", tab.id, tab.generation, false));
         assert_ne!(scroll_id(&browser.tabs[0]), scroll_id(&browser.tabs[1]));
+    }
+    #[test]
+    fn find_shortcuts_keep_focus_mode_and_tab_state_independent() {
+        let ctx = egui::Context::default();
+        let mut source = remote_source("https://example.com/story");
+        source.bytes =
+            b"<p>Olive trees. Olive oil.</p><form><input name=q value=original></form>".to_vec();
+        let (mut tab, mut shared) = app_for_test(&ctx, prepare_page(source).unwrap());
+        tab.focus_mode = true;
+        tab.find.query = "olive".into();
+        let mut press = |tab: &mut Tab, key, modifiers| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 600.0),
+                    )),
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    tab.ui(ui, &mut shared, false);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        press(&mut tab, egui::Key::F, egui::Modifiers::COMMAND);
+        assert!(tab.find.open && tab.focus_mode);
+        assert_eq!(tab.loaded.as_ref().unwrap().reading.find.count, 2);
+        press(&mut tab, egui::Key::G, egui::Modifiers::COMMAND);
+        assert_eq!(tab.find.current, 1);
+        press(&mut tab, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!tab.find.open && tab.focus_mode);
+        let other = Tab::new(9);
+        assert!(!other.find.open && other.find.query.is_empty());
+        assert_eq!(
+            tab.loaded.as_ref().unwrap().page.forms.controls[0].value,
+            "original"
+        );
+        assert_eq!(shared.browsing_history.entries()[0].visits, 1);
     }
 }

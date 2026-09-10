@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 — Interaction
+
+- Render editable native inputs, checkboxes, radio groups, text areas, selects,
+  submit/reset buttons, and retain form state independently in each tab.
+- Submit bounded UTF-8 URL-encoded GET/POST forms with successful-control
+  filtering, form ownership, required fields, button overrides and redirect handling.
+- Load submissions in fresh workers; retain edits after failures, preserve the
+  web scripting opt-in boundary, and never replay POST bodies on reload/history.
+- Add per-tab find-in-page with Unicode lowercase matching, match counts,
+  highlighting, wrapped next/previous navigation and scrolling in normal/Focus views.
+- Correct HTTP localhost addresses being mistaken for file paths.
+- Add the local interaction demo and regressions for native editing, form encoding,
+  HTTP methods/redirects, worker submission, find shortcuts and rendered-text search.
+
 ## 0.7.0
 
 - Add a scrolling tab strip with new, switch and close controls, keyboard

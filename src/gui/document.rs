@@ -33,6 +33,7 @@ pub struct ClickRequest {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PageUpdate {
+    pub default_allowed: bool,
     pub page: Page,
     pub reading: Page,
     pub base: Location,
@@ -240,6 +241,7 @@ impl PreparedPage {
             )
         });
         Some(PageUpdate {
+            default_allowed: allowed,
             page,
             reading,
             base,

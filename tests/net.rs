@@ -31,6 +31,18 @@ fn server(responses: Vec<Vec<u8>>) -> (Location, thread::JoinHandle<Vec<String>>
                 }
                 request.push(byte[0]);
             }
+            let headers = String::from_utf8(request.clone()).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            request.extend(body);
             requests.push(String::from_utf8(request).unwrap());
             // A bounded client can intentionally close while we send a large body.
             let _ = stream.write_all(&response);
@@ -608,4 +620,82 @@ fn megabyte_resources_use_separate_per_resource_and_page_budgets() {
     assert!(resources.report.limited);
     assert_eq!(resources.scripts.len(), 2);
     server.join().unwrap();
+}
+
+#[test]
+fn urlencoded_post_redirects_preserve_or_change_method_and_body() {
+    use olive_html::net::FormRequest;
+    for status in [301, 302, 303, 307, 308] {
+        let (location, server) = server(vec![
+            response(&format!("{status} Redirect"), "Location: /result\r\n", b""),
+            response("200 OK", "Content-Type: text/plain\r\n", b"Submitted"),
+        ]);
+        let source = DocumentLoader::new()
+            .unwrap()
+            .submit(FormRequest {
+                location: location.resolve("?keep=yes#done").unwrap(),
+                body: Some("q=caf%C3%A9+%26+tea&tag=a&tag=b".into()),
+            })
+            .unwrap();
+        assert_eq!(source.location.fragment().as_deref(), Some("done"));
+        assert_eq!(source.bytes, b"Submitted");
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("POST /start?keep=yes HTTP/1.1\r\n"));
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("content-type: application/x-www-form-urlencoded\r\n")
+        );
+        assert!(requests[0].ends_with("q=caf%C3%A9+%26+tea&tag=a&tag=b"));
+        if status >= 307 {
+            assert!(requests[1].starts_with("POST /result HTTP/1.1\r\n"));
+            assert!(requests[1].ends_with("q=caf%C3%A9+%26+tea&tag=a&tag=b"));
+        } else {
+            assert!(requests[1].starts_with("GET /result HTTP/1.1\r\n"));
+            assert!(requests[1].ends_with("\r\n\r\n"));
+            assert!(!requests[1].to_ascii_lowercase().contains("content-type:"));
+        }
+    }
+}
+
+#[test]
+fn form_get_errors_limits_and_local_targets() {
+    use olive_html::net::{FormRequest, MAX_FORM_BYTES};
+    let loader = DocumentLoader::new().unwrap();
+    let (location, server) = server(vec![response(
+        "422 Unprocessable Content",
+        "Content-Type: text/html\r\n",
+        b"<p>Please try again</p>",
+    )]);
+    let mut address = location.url().clone();
+    address.set_host(Some("localhost")).unwrap();
+    let location = Location::from_url(address).unwrap();
+    let source = loader
+        .submit(FormRequest {
+            location: location.resolve("?q=a+b").unwrap(),
+            body: None,
+        })
+        .unwrap();
+    assert_eq!(source.status, Some(422));
+    assert!(server.join().unwrap()[0].starts_with("GET /start?q=a+b HTTP/1.1\r\n"));
+    assert!(
+        loader
+            .submit(FormRequest {
+                location,
+                body: Some("x".repeat(MAX_FORM_BYTES + 1))
+            })
+            .err()
+            .unwrap()
+            .contains("64 KiB")
+    );
+    assert!(
+        loader
+            .submit(FormRequest {
+                location: Location::from_path("Cargo.toml").unwrap(),
+                body: Some("x=y".into())
+            })
+            .err()
+            .unwrap()
+            .contains("HTTP")
+    );
 }

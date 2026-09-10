@@ -9,6 +9,7 @@ use eframe::egui::{
 #[derive(Clone, Copy)]
 pub enum Icon {
     Plus,
+    Search,
     Back,
     Forward,
     Reload,
@@ -51,6 +52,10 @@ impl Icon {
             path(&points);
         };
         match self {
+            Self::Search => {
+                painter.circle_stroke(point(10.0, 10.0), 6.0 * scale, stroke);
+                path(&[[14.5, 14.5], [21.0, 21.0]]);
+            }
             Self::Plus => {
                 path(&[[5.0, 12.0], [19.0, 12.0]]);
                 path(&[[12.0, 5.0], [12.0, 19.0]]);

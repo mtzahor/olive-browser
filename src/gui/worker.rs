@@ -2,7 +2,7 @@
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
 use crate::document::{ClickRequest, LoadedPage, PageUpdate, prepare_page_with_loader};
 use eframe::egui;
-use olive_html::net::{DocumentLoader, Location};
+use olive_html::net::{DocumentLoader, FormRequest, Location};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, Read, Write},
@@ -13,7 +13,7 @@ use std::{
 };
 
 pub const WORKER_ARG: &str = "--olive-tab-worker";
-const MAX_COMMAND_BYTES: usize = 32 * 1024;
+const MAX_COMMAND_BYTES: usize = 128 * 1024;
 const MAX_EVENT_BYTES: usize = 128 * 1024 * 1024;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -22,6 +22,7 @@ const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
 pub enum Command {
     Load { location: Location, scripting: bool },
     Click(ClickRequest),
+    Submit(FormRequest),
 }
 #[derive(Serialize, Deserialize)]
 pub enum Event {
@@ -51,6 +52,26 @@ impl Worker {
         executable: &Path,
         location: Location,
         scripting: bool,
+        ctx: &egui::Context,
+    ) -> Result<Self, String> {
+        Self::spawn_command_at(
+            executable,
+            Command::Load {
+                location,
+                scripting,
+            },
+            ctx,
+        )
+    }
+
+    pub fn spawn_form(request: FormRequest, ctx: &egui::Context) -> Result<Self, String> {
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        Self::spawn_command_at(&executable, Command::Submit(request), ctx)
+    }
+
+    pub fn spawn_command_at(
+        executable: &Path,
+        initial: Command,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
         let mut command = ProcessCommand::new(executable);
@@ -125,10 +146,7 @@ impl Worker {
                 }
             })
             .map_err(|e| format!("Could not start tab output: {e}"))?;
-        worker.send(Command::Load {
-            location,
-            scripting,
-        })?;
+        worker.send(initial)?;
         Ok(worker)
     }
 
@@ -144,7 +162,7 @@ impl Worker {
             return Err("The tab is still working. Stop or reload it to continue.".into());
         }
         let timeout = match command {
-            Command::Load { .. } => LOAD_TIMEOUT,
+            Command::Load { .. } | Command::Submit(_) => LOAD_TIMEOUT,
             Command::Click(_) => CLICK_TIMEOUT,
         };
         self.sender
@@ -246,6 +264,16 @@ pub fn run() -> io::Result<()> {
     let mut output = io::stdout().lock();
     let mut prepared = None;
     for command in commands {
+        let (command, form) = match command {
+            Command::Submit(request) => (
+                Command::Load {
+                    location: request.location.clone(),
+                    scripting: false,
+                },
+                Some(request),
+            ),
+            command => (command, None),
+        };
         let event = match command {
             Command::Load {
                 location,
@@ -257,7 +285,11 @@ pub fn run() -> io::Result<()> {
                 }
                 let result = (|| {
                     let loader = DocumentLoader::new()?;
-                    let source = loader.load(location.clone())?;
+                    let source = if let Some(request) = form {
+                        loader.submit(request)?
+                    } else {
+                        loader.load(location.clone())?
+                    };
                     let scripting = !source.location.is_remote()
                         || (scripting && source.location.same_document(&location));
                     prepare_page_with_loader(source, &loader, scripting)
@@ -281,6 +313,7 @@ pub fn run() -> io::Result<()> {
                     Err(error) => Event::Error(error),
                 }
             }
+            Command::Submit(_) => return Err(io::Error::other("Unexpected form command")),
             Command::Click(click) => match prepared.as_mut().and_then(|page| page.click(click)) {
                 Some(update) => Event::Updated(Box::new(update)),
                 None => Event::Error("No live scripting session. Reload this tab.".into()),
