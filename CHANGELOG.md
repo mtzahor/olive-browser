@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0
+
+- Add a scrolling tab strip with new, switch and close controls, keyboard
+  shortcuts, and middle/Cmd/Ctrl-click links to open a new tab (up to 32 tabs).
+- Keep addresses, navigation stacks, JavaScript realms, alerts, Focus preferences,
+  images and scroll positions independent while sharing saved browsing history.
+- Move networking, parsing, CSS, JavaScript and image decoding into separate
+  child processes; a document crash or hang does not take down other workers.
+- Exchange bounded presentation messages over private pipes, with asynchronous
+  I/O, validated layout indices, and no page code executing in the UI process.
+- Terminate stalled loads after 60 seconds and click handlers after 10 seconds;
+  provide Stop and Reload recovery and reap workers on navigation, close and exit.
+- Add real-process crash, suspension, watchdog, independent-realm, image transfer
+  and parent-exit tests, plus tab routing, state and narrow-window regressions.
+- Preserve remote JavaScript opt-in. Process isolation is fault containment,
+  not an OS security sandbox or a hard memory limit.
+
 ## 0.6.0
 
 - Add a Focus toolbar button and Cmd/Ctrl+Shift+F shortcut for a distraction-free

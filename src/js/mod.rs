@@ -78,6 +78,7 @@ impl ScriptOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum ErrorKind {
     Syntax,
     Runtime,

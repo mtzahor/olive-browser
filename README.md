@@ -1,13 +1,13 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.6.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.7.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
 CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
 reload the current page with scripting. Use this only for pages you trust: the
-runtime runs inside Olive's process. **Disable JavaScript** reloads without scripts.
+runtime runs in a separate tab process, without an OS security sandbox. **Disable JavaScript** reloads without scripts.
 Reload and same-page anchors preserve the choice; new addresses, history traversal
 to another document, and redirects to a different address start with web scripting
 disabled. Local documents continue to run scripts automatically.
@@ -26,6 +26,26 @@ Enter an address and press Enter or **Go**. Bare hostnames use HTTPS;
 `localhost`, loopback IP addresses and their optional ports use HTTP. Explicit
 `http://`, `https://`, and local `file://` URLs are supported, along with file paths.
 Open a local `.html` or `.htm` file with **Open…**, `Cmd+O`/`Ctrl+O`, or drag and drop.
+
+Use **+** or `Cmd+T`/`Ctrl+T` to open a tab. Click a tab to switch, or use
+`Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle. `Cmd+1`–`Cmd+8` / `Ctrl+1`–`Ctrl+8`
+select a numbered tab; `Cmd+9`/`Ctrl+9` selects the last. Close a tab with its
+**×**, a middle click on its title, or `Cmd+W`/`Ctrl+W`. Closing the last tab
+opens a fresh blank tab. The tab strip scrolls horizontally and supports up to
+32 tabs. Middle-click or Cmd/Ctrl-click a page link to open it in a new tab.
+
+Each tab keeps its own address draft, Back/Forward stack, JavaScript realm,
+alerts, Focus settings and document scroll position. Switching tabs does not
+reload pages or add history visits. Saved browsing history is shared across tabs.
+
+Each loaded document has a dedicated child process for networking, HTML/CSS,
+JavaScript and image decoding. A full navigation starts a fresh process; the
+previous document and its process remain available until the new load succeeds.
+Tab failures leave other tab processes and the browser controls running. Use
+**Reload tab** after a crash, or **Stop** / **Escape** to cancel pending work.
+A stalled load is terminated after 60 seconds; a stalled click after 10 seconds.
+Closing a tab terminates its workers. Workers also exit if the browser's pipe
+closes, including while loading or executing scripts. Blank tabs need no worker.
 
 Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
@@ -85,7 +105,7 @@ preserved until you explicitly clear history. History is intended for one runnin
 per file; simultaneous instances can overwrite each other's changes. History
 does not restore tabs, page state, or the Back/Forward stack at startup.
 
-Documents load on one background worker. Redirects update the displayed URL;
+Documents load independently in their tab processes. Redirects update the displayed URL;
 failed loads retain the previous page and history. HTTP error pages such as 404
 remain readable and show their status. The status bar distinguishes HTTPS,
 unencrypted HTTP, and local files. HTTPS verifies certificates using Rustls and
@@ -98,7 +118,7 @@ and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
 The viewer renders text, basic boxes, PNG and JPEG images, and linked/embedded/inline styles.
 GIF, WebP, SVG and CSS background images, forms, downloads, cookies,
-authentication and tabs are not implemented. Sites that require a full DOM, CSS
+authentication and restoring tabs across launches are not implemented. Sites that require a full DOM, CSS
 layout engine, or browser
 JavaScript APIs will have limited presentation or functionality.
 
@@ -275,8 +295,9 @@ quirks modes. Parsing is inert by default; the GUI performs a separate script
 pass.
 
 Input, script, CSS, DOM, and preview work are bounded. These limits protect the
-viewer from oversized or pathological documents but are not a process
-sandbox. See [SECURITY.md](SECURITY.md) for the trust boundary and current
+viewer from oversized or pathological documents. Tab processes contain document
+crashes and have operation deadlines, but share the UI compositor and do not
+provide an OS security sandbox or a hard memory ceiling. See [SECURITY.md](SECURITY.md) for the trust boundary and current
 limits.
 
 ## Development
@@ -294,6 +315,9 @@ layout, JavaScript execution and DOM limits, CLI behavior, GUI rendering,
 URL resolution, HTTP redirects/errors/timeouts/limits, resource loading and ordering,
 opt-in web scripting, persistent click state, navigation history, and saved
 history search, restart persistence, deletion, storage failures and size limits.
+Process integration tests launch the real GUI executable without a window, verify
+independent JavaScript realms, kill a tab, suspend a tab (Unix), exercise watchdog
+termination, close workers, and simulate a browser exiting during a blocked load.
 
 ## License
 

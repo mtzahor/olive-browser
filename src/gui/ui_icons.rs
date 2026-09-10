@@ -8,6 +8,7 @@ use eframe::egui::{
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    Plus,
     Back,
     Forward,
     Reload,
@@ -50,6 +51,10 @@ impl Icon {
             path(&points);
         };
         match self {
+            Self::Plus => {
+                path(&[[5.0, 12.0], [19.0, 12.0]]);
+                path(&[[12.0, 5.0], [12.0, 19.0]]);
+            }
             Self::Focus => {
                 path(&[[8.0, 3.0], [3.0, 3.0], [3.0, 8.0]]);
                 path(&[[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]]);

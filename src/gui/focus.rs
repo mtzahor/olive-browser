@@ -10,7 +10,7 @@ pub const DEFAULT_FONT_SIZE: f32 = 20.0;
 pub const MIN_FONT_SIZE: f32 = 14.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Theme {
     #[default]
     Light,
@@ -58,7 +58,7 @@ impl Theme {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub font_size: f32,
     pub theme: Theme,

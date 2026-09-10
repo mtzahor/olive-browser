@@ -32,6 +32,7 @@ pub struct ExternalImage {
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResourceReport {
     pub attempted: usize,
     pub loaded: usize,

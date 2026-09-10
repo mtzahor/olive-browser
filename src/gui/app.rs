@@ -1,86 +1,40 @@
 use crate::{
+    document::{ClickRequest, LoadedPage},
     focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings, Theme as FocusTheme},
     history::BrowsingHistory,
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
-    render::{INK, ImageAsset, ImageTextureCache, OLIVE, Page},
+    render::{INK, ImageTextureCache, OLIVE},
     ui_icons::{self, Icon, IconButton},
+    worker::{Command, Event, Worker},
 };
 use eframe::egui::{self, Color32, RichText};
-use image::{ImageReader, Limits};
-use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
-use olive_html::{
-    ExternalSource, NodeId,
-    css::Stylesheet,
-    net::{DocumentLoader, LoadedDocument, Location},
-    resources::{PageResources, ResourceReport},
-};
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    io::Cursor,
-    path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
-};
+use olive_html::net::Location;
+use std::{ffi::OsString, path::PathBuf};
 
 const PAPER: Color32 = Color32::from_rgb(250, 250, 246);
 const CHROME: Color32 = Color32::from_rgb(239, 242, 231);
-const MAX_IMAGE_DIMENSION: u32 = 4_096;
-const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PAGE_IMAGE_PIXELS: u64 = 8 * 1024 * 1024;
-
-struct LoadedPage {
-    location: Location,
-    base: Location,
-    status: Option<u16>,
-    page: Page,
-    reading: Page,
-    corrections: usize,
-    scripts: ScriptReport,
-    scripting_enabled: bool,
-    resources: ResourceReport,
-    session: Option<SessionHandle>,
-}
-
-struct ClickRequest {
-    target: NodeId,
-    href: Option<String>,
-}
-struct PageUpdate {
-    page: Page,
-    reading: Page,
-    base: Location,
-    scripts: ScriptReport,
-    alert: Option<String>,
-    link: Option<String>,
-}
-struct SessionHandle {
-    sender: Sender<ClickRequest>,
-    receiver: Receiver<PageUpdate>,
-    busy: bool,
-}
-struct PreparedPage {
-    loaded: LoadedPage,
-    session: Option<DocumentSession>,
-    styles: HashMap<NodeId, ExternalSource>,
-    images: HashMap<NodeId, ImageAsset>,
-}
-
 struct PendingPage {
-    receiver: Receiver<Result<LoadedPage, String>>,
+    worker: Worker,
     navigation: Navigation,
     requested: Location,
 }
 
-pub struct OliveApp {
+struct Shared {
     icon: egui::TextureHandle,
+    browsing_history: BrowsingHistory,
+    history_window: HistoryWindow,
+}
+
+pub struct Tab {
+    id: u64,
+    worker: Option<Worker>,
+    crashed: bool,
     loaded: Option<LoadedPage>,
     pending: Option<PendingPage>,
     address: String,
     history: History,
-    browsing_history: BrowsingHistory,
-    history_window: HistoryWindow,
     error: Option<String>,
     alert: Option<String>,
     image_textures: ImageTextureCache,
@@ -91,8 +45,8 @@ pub struct OliveApp {
     focus_settings: FocusSettings,
 }
 
-impl OliveApp {
-    fn toggle_focus(&mut self) {
+impl Tab {
+    fn toggle_focus(&mut self, shared: &mut Shared) {
         if self.focus_mode {
             self.focus_mode = false;
         } else if self.pending.is_none()
@@ -103,7 +57,7 @@ impl OliveApp {
         {
             self.focus_mode = true;
             self.focus_panel = true;
-            self.history_window = HistoryWindow::default();
+            shared.history_window = HistoryWindow::default();
             self.alert = None;
         }
     }
@@ -185,33 +139,15 @@ impl OliveApp {
         ui.set_style(previous_style);
     }
 
-    pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
-        let ctx = &cc.egui_ctx;
-        ctx.set_fonts(crate::fonts::definitions());
-        let mut style = egui::Style {
-            visuals: egui::Visuals::light(),
-            ..Default::default()
-        };
-        style.visuals.override_text_color = Some(INK);
-        style.visuals.panel_fill = PAPER;
-        style.visuals.selection.bg_fill = Color32::from_rgb(209, 223, 182);
-        style.spacing.button_padding = egui::vec2(16.0, 10.0);
-        style.spacing.item_spacing = egui::vec2(12.0, 8.0);
-        ctx.set_global_style(style);
-        ctx.set_theme(egui::Theme::Light);
-        let icon = ctx.load_texture(
-            "olive-browser-icon",
-            egui::ColorImage::from(icon::data()),
-            egui::TextureOptions::LINEAR,
-        );
-        let mut app = Self {
-            icon,
+    fn new(id: u64) -> Self {
+        Self {
+            id,
+            worker: None,
+            crashed: false,
             loaded: None,
             pending: None,
             address: String::new(),
             history: History::default(),
-            browsing_history: BrowsingHistory::load_default(),
-            history_window: HistoryWindow::default(),
             error: None,
             alert: None,
             image_textures: ImageTextureCache::default(),
@@ -219,21 +155,10 @@ impl OliveApp {
             focus_mode: false,
             focus_panel: true,
             focus_settings: FocusSettings::default(),
-        };
-        if let Some(source) = source {
-            let location = match source.to_str() {
-                Some(input) => Location::from_input(input),
-                None => Location::from_path(PathBuf::from(source)),
-            };
-            app.open_result(location, Navigation::New, ctx);
         }
-        app
     }
 
-    fn choose_file(&mut self, ctx: &egui::Context) {
-        if self.pending.is_some() {
-            return;
-        }
+    fn choose_file(&mut self, ctx: &egui::Context, shared: &mut Shared) {
         let mut dialog = rfd::FileDialog::new().add_filter("HTML documents", &["html", "htm"]);
         if let Some(path) = self
             .loaded
@@ -245,7 +170,7 @@ impl OliveApp {
             }
         }
         if let Some(path) = dialog.pick_file() {
-            self.open_result(Location::from_path(path), Navigation::New, ctx);
+            self.open_result(Location::from_path(path), Navigation::New, ctx, shared);
         }
     }
 
@@ -254,20 +179,27 @@ impl OliveApp {
         location: Result<Location, String>,
         navigation: Navigation,
         ctx: &egui::Context,
+        shared: &mut Shared,
     ) {
         match location {
-            Ok(location) => self.open(location, navigation, ctx),
+            Ok(location) => self.open(location, navigation, ctx, shared),
             Err(error) => self.error = Some(error),
         }
     }
 
-    fn open(&mut self, location: Location, navigation: Navigation, ctx: &egui::Context) {
+    fn open(
+        &mut self,
+        location: Location,
+        navigation: Navigation,
+        ctx: &egui::Context,
+        shared: &mut Shared,
+    ) {
         let scripting = !location.is_remote()
             || (matches!(navigation, Navigation::Reload)
                 && self.loaded.as_ref().is_some_and(|loaded| {
                     loaded.scripting_enabled && loaded.location.same_document(&location)
                 }));
-        self.open_with_scripts(location, navigation, ctx, scripting);
+        self.open_with_scripts(location, navigation, ctx, scripting, shared);
     }
 
     fn open_with_scripts(
@@ -276,14 +208,13 @@ impl OliveApp {
         navigation: Navigation,
         ctx: &egui::Context,
         scripting: bool,
+        shared: &mut Shared,
     ) {
-        if self.pending.is_some() {
-            return;
-        }
+        self.pending = None; // Cancels and reaps a replaced navigation.
         self.error = None;
         self.alert = None;
         self.address = location.as_str().to_owned();
-        if !matches!(navigation, Navigation::Reload) {
+        if !self.crashed && !matches!(navigation, Navigation::Reload) {
             if let Some(loaded) = self.loaded.as_mut().filter(|loaded| {
                 loaded.location.same_document(&location)
                     && (loaded.location != location
@@ -296,330 +227,126 @@ impl OliveApp {
                     loaded.base = location.clone();
                 }
                 loaded.location = location.clone();
-                self.browsing_history.record(&location, &loaded.page.title);
+                shared
+                    .browsing_history
+                    .record(&location, &loaded.page.title);
                 self.history.commit(location, navigation);
                 return;
             }
         }
-        let (sender, receiver) = mpsc::channel();
         let requested = location.clone();
-        let ctx = ctx.clone();
-        // The parser's DOM stays on this worker; only the owned presentation crosses threads.
-        match std::thread::Builder::new()
-            .name("olive-document-loader".into())
-            .spawn(move || {
-                let result = (|| {
-                    let loader = DocumentLoader::new()?;
-                    let source = loader.load(location.clone())?;
-                    // Opt-in belongs to this address, never a redirected destination.
-                    let scripting = !source.location.is_remote()
-                        || (scripting && source.location.same_document(&location));
-                    prepare_page_with_loader(source, &loader, scripting)
-                })();
-                match result {
-                    Ok(prepared) => serve_page(prepared, sender, &ctx),
-                    Err(error) => {
-                        let _ = sender.send(Err(error));
-                        ctx.request_repaint();
-                    }
-                }
-            }) {
-            Ok(_) => {
+        match Worker::spawn(location, scripting, ctx) {
+            Ok(worker) => {
                 self.pending = Some(PendingPage {
-                    receiver,
+                    worker,
                     navigation,
                     requested,
                 })
             }
-            Err(error) => {
-                self.error = Some(format!("Could not start the document loader: {error}"))
-            }
+            Err(error) => self.error = Some(error),
         }
     }
 
-    fn receive(&mut self, ctx: &egui::Context) {
-        let Some(pending) = &self.pending else {
-            return;
-        };
-        match pending.receiver.try_recv() {
-            Ok(Ok(mut loaded)) => {
-                self.history
-                    .commit(loaded.location.clone(), pending.navigation);
-                self.browsing_history
-                    .record(&loaded.location, &loaded.page.title);
-                self.address = loaded.location.as_str().to_owned();
-                loaded.page.scroll_to_fragment(loaded.location.fragment());
-                let title = if loaded.page.title.trim().is_empty() {
-                    loaded.location.as_str().to_owned()
+    fn receive(&mut self, ctx: &egui::Context, shared: &mut Shared) {
+        if let Some(event) = self
+            .pending
+            .as_mut()
+            .and_then(|pending| pending.worker.poll())
+        {
+            let pending = self.pending.take().unwrap();
+            match event {
+                Ok(Event::Loaded(mut loaded)) => {
+                    self.history
+                        .commit(loaded.location.clone(), pending.navigation);
+                    shared
+                        .browsing_history
+                        .record(&loaded.location, &loaded.page.title);
+                    self.address = loaded.location.as_str().to_owned();
+                    loaded.page.scroll_to_fragment(loaded.location.fragment());
+                    loaded
+                        .reading
+                        .scroll_to_fragment(loaded.location.fragment());
+                    self.loaded = Some(*loaded);
+                    self.worker = Some(pending.worker);
+                    self.crashed = false;
+                    self.error = None;
+                    self.focus_mode = false;
+                    self.image_textures.clear();
+                    self.generation = self.generation.wrapping_add(1);
+                }
+                other => {
+                    let error = match other {
+                        Ok(Event::Error(error)) | Err(error) => error,
+                        _ => "The tab process sent an unexpected reply.".into(),
+                    };
+                    self.error = Some(format!("{}\n{error}", pending.requested.as_str()));
+                    if let Some(loaded) = &self.loaded {
+                        self.address = loaded.location.as_str().into();
+                    }
+                }
+            }
+        }
+        let event = self.worker.as_mut().and_then(Worker::poll);
+        match event {
+            Some(Ok(Event::Updated(update))) => {
+                if let Some(loaded) = &mut self.loaded {
+                    loaded.page = update.page;
+                    loaded.reading = update.reading;
+                    loaded.base = update.base;
+                    loaded.scripts = update.scripts;
+                    shared
+                        .browsing_history
+                        .update_title(&loaded.location, &loaded.page.title);
+                    self.alert = update.alert;
+                    if self.pending.is_none() {
+                        if let Some(href) = update.link {
+                            let location = loaded.base.resolve(&href);
+                            self.open_result(location, Navigation::New, ctx, shared);
+                        }
+                    }
+                }
+            }
+            Some(event) => {
+                self.worker = None;
+                self.crashed = true;
+                self.alert = None;
+                self.error = Some(match event {
+                    Err(error) | Ok(Event::Error(error)) => error,
+                    _ => "The tab process sent an unexpected reply. Reload this tab.".into(),
+                });
+            }
+            None => {}
+        }
+    }
+
+    fn stop(&mut self) {
+        if self.pending.take().is_some() {
+            if let Some(loaded) = &self.loaded {
+                self.address = loaded.location.as_str().into();
+            }
+        } else if self.worker.as_ref().is_some_and(Worker::busy) {
+            self.worker = None;
+            self.crashed = true;
+            self.error = Some("This tab was stopped. Reload to restart it.".into());
+        }
+    }
+
+    fn title(&self) -> &str {
+        self.loaded
+            .as_ref()
+            .map(|page| {
+                if page.page.title.trim().is_empty() {
+                    page.location.as_str()
                 } else {
-                    loaded.page.title.clone()
-                };
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                    "{title} — Olive Browser"
-                )));
-                self.focus_mode = false;
-                self.loaded = Some(loaded);
-                self.image_textures.clear();
-                self.generation = self.generation.wrapping_add(1);
-                self.pending = None;
-            }
-            Ok(Err(error)) => {
-                self.error = Some(format!("{}\n{error}", pending.requested.as_str()));
-                if let Some(loaded) = &self.loaded {
-                    self.address = loaded.location.as_str().to_owned();
+                    &page.page.title
                 }
-                self.pending = None;
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.error = Some(
-                    "The document loader stopped unexpectedly. You can try another address.".into(),
-                );
-                if let Some(loaded) = &self.loaded {
-                    self.address = loaded.location.as_str().to_owned();
-                }
-                self.pending = None;
-            }
-            Err(TryRecvError::Empty) => {}
-        }
-    }
-}
-
-fn prepare_page_with_loader(
-    source: LoadedDocument,
-    loader: &DocumentLoader,
-    scripting_enabled: bool,
-) -> Result<PreparedPage, String> {
-    let parsed = source.parse(scripting_enabled)?;
-    let corrections = parsed
-        .diagnostics
-        .len()
-        .saturating_add(parsed.omitted_diagnostics);
-    let resources = PageResources::load(
-        loader,
-        &source.location,
-        &parsed.document,
-        scripting_enabled,
-    );
-    let mut resource_report = resources.report;
-    let images = decode_images(&resources.images, &mut resource_report);
-    let (page, reading, base, scripts, session) = if scripting_enabled {
-        let session = DocumentSession::with_sources(
-            parsed.document,
-            ScriptOptions::browser(),
-            &resources.scripts,
-        );
-        let (page, reading, base) = session.with_document(|document| {
-            let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
-            let reading = Page::reading(document, true, &sheet, &images);
-            (
-                Page::with_stylesheet_and_images(document, true, sheet, &images),
-                reading,
-                source.location.document_base(document),
-            )
-        });
-        (page, reading, base, session.report().clone(), Some(session))
-    } else {
-        let document = parsed.document;
-        let sheet = Stylesheet::from_document_with_sources(&document, &resources.styles);
-        let reading = Page::reading(&document, false, &sheet, &images);
-        let page = Page::with_stylesheet_and_images(&document, false, sheet, &images);
-        (
-            page,
-            reading,
-            source.location.document_base(&document),
-            ScriptReport::default(),
-            None,
-        )
-    };
-    Ok(PreparedPage {
-        loaded: LoadedPage {
-            location: source.location,
-            base,
-            status: source.status,
-            page,
-            reading,
-            corrections,
-            scripts,
-            scripting_enabled,
-            resources: resource_report,
-            session: None,
-        },
-        session,
-        styles: resources.styles,
-        images,
-    })
-}
-
-fn decode_images(
-    sources: &HashMap<NodeId, olive_html::resources::ExternalImage>,
-    report: &mut ResourceReport,
-) -> HashMap<NodeId, ImageAsset> {
-    let mut decoded = HashMap::new();
-    let mut pixels = 0_u64;
-    for (&id, source) in sources {
-        let result = decode_image(&source.bytes).and_then(|(image, image_pixels)| {
-            if pixels.saturating_add(image_pixels) > MAX_PAGE_IMAGE_PIXELS {
-                Err(format!(
-                    "Page image pixel budget exhausted ({} pixels total).",
-                    MAX_PAGE_IMAGE_PIXELS
-                ))
+            })
+            .unwrap_or(if self.address.is_empty() {
+                "New tab"
             } else {
-                pixels += image_pixels;
-                Ok(image)
-            }
-        });
-        match result {
-            Ok(image) => {
-                decoded.insert(
-                    id,
-                    ImageAsset {
-                        reference: source.reference.clone(),
-                        image,
-                    },
-                );
-            }
-            Err(error) => {
-                let message = format!("{}: {error}", source.reference);
-                let end = message
-                    .char_indices()
-                    .nth(1024)
-                    .map_or(message.len(), |(index, _)| index);
-                report.diagnostics.push(message[..end].to_owned());
-            }
-        }
+                &self.address
+            })
     }
-    decoded
-}
-
-fn decode_image(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        return decode_jpeg(bytes);
-    }
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|error| format!("could not identify image format: {error}"))?;
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
-    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
-    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
-    reader.limits(limits);
-    let image = reader
-        .decode()
-        .map_err(|error| format!("could not decode image: {error}"))?;
-    let width = image.width();
-    let height = image.height();
-    let pixels = checked_image_pixels(width, height)?;
-    let rgba = image.to_rgba8();
-    Ok((color_image(width, height, rgba.as_raw()), pixels))
-}
-
-fn decode_jpeg(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
-    use zune_jpeg::{JpegDecoder, zune_core::colorspace::ColorSpace};
-
-    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
-        .jpeg_set_out_colorspace(ColorSpace::RGBA)
-        .set_use_unsafe(false);
-    let mut decoder = JpegDecoder::new_with_options(bytes, options);
-    decoder
-        .decode_headers()
-        .map_err(|error| format!("could not read image dimensions: {error}"))?;
-    let info = decoder
-        .info()
-        .ok_or_else(|| "could not read image dimensions".to_owned())?;
-    let width = u32::from(info.width);
-    let height = u32::from(info.height);
-    let pixels = checked_image_pixels(width, height)?;
-    let rgba = decoder
-        .decode()
-        .map_err(|error| format!("could not decode image: {error}"))?;
-    let expected = usize::try_from(pixels)
-        .ok()
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| "decoded image is too large".to_owned())?;
-    if rgba.len() != expected {
-        return Err("JPEG decoder returned an unexpected pixel buffer".into());
-    }
-    Ok((color_image(width, height, &rgba), pixels))
-}
-
-fn checked_image_pixels(width: u32, height: u32) -> Result<u64, String> {
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err(format!(
-            "image dimensions exceed the {MAX_IMAGE_DIMENSION}px limit"
-        ));
-    }
-    let pixels = u64::from(width).saturating_mul(u64::from(height));
-    if pixels > MAX_PAGE_IMAGE_PIXELS {
-        return Err(format!(
-            "image has too many pixels (maximum {MAX_PAGE_IMAGE_PIXELS})"
-        ));
-    }
-    Ok(pixels)
-}
-
-fn color_image(width: u32, height: u32, rgba: &[u8]) -> std::sync::Arc<egui::ColorImage> {
-    std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied(
-        [width as usize, height as usize],
-        rgba,
-    ))
-}
-
-// The DOM and Boa realm stay on their original worker. Only presentation data
-// crosses threads, so scripts run once and click handlers retain their globals.
-fn serve_page(
-    mut prepared: PreparedPage,
-    sender: Sender<Result<LoadedPage, String>>,
-    ctx: &egui::Context,
-) {
-    let Some(mut session) = prepared.session else {
-        let _ = sender.send(Ok(prepared.loaded));
-        ctx.request_repaint();
-        return;
-    };
-    // Page-load alerts have no dialog lifecycle in this preview.
-    session.take_alerts();
-    let location = prepared.loaded.location.clone();
-    let (click_sender, click_receiver) = mpsc::channel::<ClickRequest>();
-    let (update_sender, update_receiver) = mpsc::channel();
-    prepared.loaded.session = Some(SessionHandle {
-        sender: click_sender,
-        receiver: update_receiver,
-        busy: false,
-    });
-    if sender.send(Ok(prepared.loaded)).is_err() {
-        return;
-    }
-    ctx.request_repaint();
-    for click in click_receiver {
-        let allowed = session.click(click.target);
-        let (page, reading, base) = session.with_document(|document| {
-            let sheet = Stylesheet::from_document_with_sources(document, &prepared.styles);
-            let reading = Page::reading(document, true, &sheet, &prepared.images);
-            (
-                Page::with_stylesheet_and_images(document, true, sheet, &prepared.images),
-                reading,
-                location.document_base(document),
-            )
-        });
-        let update = PageUpdate {
-            page,
-            reading,
-            base,
-            scripts: session.report().clone(),
-            alert: session.take_alerts().into_iter().next(),
-            link: if allowed { click.href } else { None },
-        };
-        if update_sender.send(update).is_err() {
-            break;
-        }
-        ctx.request_repaint();
-    }
-}
-
-#[cfg(test)]
-fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
-    let scripting = !source.location.is_remote();
-    Ok(prepare_page_with_loader(source, &DocumentLoader::new()?, scripting)?.loaded)
 }
 
 fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
@@ -628,49 +355,8 @@ fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
     ui.add_enabled(enabled, button).clicked()
 }
 
-impl eframe::App for OliveApp {
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        PAPER.to_normalized_gamma_f32()
-    }
-
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.receive(ctx);
-        let mut link = None;
-        if let Some(loaded) = &mut self.loaded {
-            if let Some(session) = &mut loaded.session {
-                match session.receiver.try_recv() {
-                    Ok(update) => {
-                        session.busy = false;
-                        loaded.page = update.page;
-                        loaded.reading = update.reading;
-                        loaded.base = update.base;
-                        loaded.scripts = update.scripts;
-                        self.browsing_history
-                            .update_title(&loaded.location, &loaded.page.title);
-                        self.alert = update.alert;
-                        if self.pending.is_none() {
-                            link = update.link.map(|href| loaded.base.resolve(&href));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                                "{} — Olive Browser",
-                                loaded.page.title
-                            )));
-                        }
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        loaded.session = None;
-                        self.error =
-                            Some("The JavaScript worker stopped. Reload to try again.".into());
-                    }
-                    Err(TryRecvError::Empty) => {}
-                }
-            }
-        }
-        if let Some(location) = link {
-            self.open_result(location, Navigation::New, ctx);
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl Tab {
+    fn ui(&mut self, ui: &mut egui::Ui, shared: &mut Shared, autofocus: bool) -> Option<Location> {
         // Panels share the root UI; leave no unpainted gap between them.
         ui.spacing_mut().item_spacing.y = 0.0;
         let ctx = ui.ctx().clone();
@@ -680,7 +366,7 @@ impl eframe::App for OliveApp {
                 egui::Key::O,
             ))
         }) {
-            self.choose_file(&ctx);
+            self.choose_file(&ctx, shared);
         }
         if let Some(path) = ctx.input(|input| {
             input
@@ -689,7 +375,7 @@ impl eframe::App for OliveApp {
                 .first()
                 .map(|file| file.path().to_path_buf())
         }) {
-            self.open_result(Location::from_path(path), Navigation::New, &ctx);
+            self.open_result(Location::from_path(path), Navigation::New, &ctx, shared);
         }
         let mut choose = false;
         let shortcut = |modifiers, key| {
@@ -697,7 +383,7 @@ impl eframe::App for OliveApp {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
             })
         };
-        let focus_address = shortcut(egui::Modifiers::COMMAND, egui::Key::L);
+        let focus_address = autofocus | shortcut(egui::Modifiers::COMMAND, egui::Key::L);
         if self.focus_mode && (shortcut(egui::Modifiers::NONE, egui::Key::Escape) || focus_address)
         {
             self.focus_mode = false;
@@ -706,7 +392,7 @@ impl eframe::App for OliveApp {
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             egui::Key::F,
         ) {
-            self.toggle_focus();
+            self.toggle_focus(shared);
         }
         let mut show_history = shortcut(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -719,6 +405,8 @@ impl eframe::App for OliveApp {
         let mut go = false;
         let mut toggle_scripts = false;
         let mut link = None;
+        let mut link_new_tab = false;
+        let mut stop = false;
         let busy = self.pending.is_some();
         if !self.focus_mode {
             egui::Panel::top("toolbar")
@@ -734,30 +422,39 @@ impl eframe::App for OliveApp {
                         ui.spacing_mut().button_padding = egui::vec2(9.0, 10.0);
                         let compact = ui.available_width() < 760.0;
                         ui.add(
-                            egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(30.0, 30.0)),
+                            egui::Image::new(&shared.icon)
+                                .fit_to_exact_size(egui::vec2(30.0, 30.0)),
                         )
                         .on_hover_text("Olive Browser");
                         back |= ui
                             .add_enabled(
-                                !busy && self.history.back().is_some(),
+                                self.history.back().is_some(),
                                 IconButton::icon_only(Icon::Back, "Back"),
                             )
                             .on_hover_text("Back (Alt+Left)")
                             .clicked();
                         forward |= ui
                             .add_enabled(
-                                !busy && self.history.forward().is_some(),
+                                self.history.forward().is_some(),
                                 IconButton::icon_only(Icon::Forward, "Forward"),
                             )
                             .on_hover_text("Forward (Alt+Right)")
                             .clicked();
-                        reload |= ui
-                            .add_enabled(
-                                !busy && self.loaded.is_some(),
-                                IconButton::icon_only(Icon::Reload, "Reload"),
-                            )
-                            .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
-                            .clicked();
+                        let working = busy || self.worker.as_ref().is_some_and(Worker::busy);
+                        if working {
+                            stop |= ui
+                                .add(IconButton::icon_only(Icon::Close, "Stop tab"))
+                                .on_hover_text("Stop this tab (Escape)")
+                                .clicked();
+                        } else {
+                            reload |= ui
+                                .add_enabled(
+                                    self.loaded.is_some() || !self.address.is_empty(),
+                                    IconButton::icon_only(Icon::Reload, "Reload"),
+                                )
+                                .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
+                                .clicked();
+                        }
                         // Reserve actual control widths, including icon gaps and text,
                         // so the address field never pushes actions out of the window.
                         let label_width = |label: &str| {
@@ -782,7 +479,7 @@ impl eframe::App for OliveApp {
                             };
                         let address_width = (ui.available_width() - trailing_width).max(60.0);
                         let mut output = egui::TextEdit::singleline(&mut self.address)
-                            .id(egui::Id::new("address"))
+                            .id(egui::Id::new(("address", self.id)))
                             .hint_text("Enter a URL or file path")
                             .char_limit(olive_html::net::MAX_URL_BYTES)
                             .desired_width(address_width)
@@ -801,7 +498,7 @@ impl eframe::App for OliveApp {
                         go |= output.response.lost_focus()
                             && ui.input(|input| input.key_pressed(egui::Key::Enter));
                         go |= ui
-                            .add_enabled(!busy, IconButton::icon_only(Icon::Go, "Go").primary())
+                            .add(IconButton::icon_only(Icon::Go, "Go").primary())
                             .on_hover_text("Open address")
                             .clicked();
                         let readable = self
@@ -825,12 +522,12 @@ impl eframe::App for OliveApp {
                             .on_hover_text("Focus mode (Cmd/Ctrl+Shift+F)")
                             .clicked()
                         {
-                            self.toggle_focus();
+                            self.toggle_focus(shared);
                         }
 
                         choose |= ui
                             .add_enabled(
-                                !busy,
+                                true,
                                 if compact {
                                     IconButton::icon_only(Icon::Folder, "Open HTML file")
                                 } else {
@@ -846,9 +543,9 @@ impl eframe::App for OliveApp {
                                 } else {
                                     IconButton::new(Icon::History, "History")
                                 })
-                                .warning(self.browsing_history.error().is_some()),
+                                .warning(shared.browsing_history.error().is_some()),
                             )
-                            .on_hover_text(if self.browsing_history.error().is_some() {
+                            .on_hover_text(if shared.browsing_history.error().is_some() {
                                 "Browsing history — could not save history (Cmd/Ctrl+Shift+H)"
                             } else {
                                 "Browsing history (Cmd/Ctrl+Shift+H)"
@@ -884,7 +581,7 @@ impl eframe::App for OliveApp {
                             toggle_scripts = ui.add_enabled(!busy, IconButton::new(
                                 if loaded.scripting_enabled { Icon::CodeOff } else { Icon::Code },
                                 if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
-                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run inside Olive's process. New addresses start with web JavaScript disabled.").clicked();
+                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run in this tab's process without an OS security sandbox. New addresses start with web JavaScript disabled.").clicked();
                         }
                         if loaded.resources.attempted > 0 || loaded.resources.limited {
                             ui_icons::menu(ui, if loaded.resources.diagnostics.is_empty() { Icon::Resources } else { Icon::Warning }, if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
@@ -976,10 +673,11 @@ impl eframe::App for OliveApp {
                         .show(ui, |ui| {
                             ui.visuals_mut().override_text_color = Some(INK);
                             ui.label(
-                                RichText::new("Could not open this page")
+                                RichText::new(if self.crashed { "This tab stopped" } else { "Could not open this page" })
                                     .variations([("wght", 650.0)]),
                             );
                             ui.label(error);
+                            if ui.add(IconButton::new(Icon::Reload, "Reload tab")).clicked() { reload = true; }
                         });
                 }
                 if let Some(loaded) = &mut self.loaded {
@@ -987,7 +685,7 @@ impl eframe::App for OliveApp {
                     let page = if focus { &mut loaded.reading } else { &mut loaded.page };
                     if focus { page.set_reading_style(self.focus_settings); }
                     egui::ScrollArea::both()
-                        .id_salt(("document", self.generation, focus))
+                        .id_salt(("document", self.id, self.generation, focus))
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let column = if focus { 720.0 } else { 820.0 };
@@ -1013,22 +711,18 @@ impl eframe::App for OliveApp {
                                         page.show_with_textures(ui, &mut self.image_textures)
                                     {
                                         link = click.href;
-                                        if let (Some(target), Some(session)) =
-                                            (click.target, loaded.session.as_mut())
-                                        {
-                                            if !session.busy
-                                                && session
-                                                    .sender
-                                                    .send(ClickRequest {
-                                                        target,
-                                                        href: link.take(),
-                                                    })
-                                                    .is_ok()
-                                            {
-                                                session.busy = true;
+                                        link_new_tab = click.new_tab;
+                                        if !click.new_tab && !busy && !self.crashed {
+                                            if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
+                                                if !worker.busy() {
+                                                    if let Err(error) = worker.send(Command::Click(ClickRequest { target, href: link.take() })) {
+                                                        self.error = Some(error);
+                                                    }
+                                                }
+                                                link = None;
                                             }
-                                            link = None;
                                         }
+
                                     }
                                     if focus && page.truncated {
                                         ui.label("This reading view was shortened to keep the page responsive.");
@@ -1054,7 +748,7 @@ impl eframe::App for OliveApp {
                                 .weak(),
                         );
                         ui.add_space(22.0);
-                        choose |= open_button(ui, self.pending.is_none());
+                        choose |= open_button(ui, true);
                         ui.add_space(10.0);
                         ui.label(
                             RichText::new(if cfg!(target_os = "macos") {
@@ -1071,6 +765,7 @@ impl eframe::App for OliveApp {
         if let Some(message) = &self.alert {
             let mut close = false;
             egui::Window::new("JavaScript alert")
+                .id(egui::Id::new(("alert", self.id)))
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
@@ -1087,16 +782,21 @@ impl eframe::App for OliveApp {
             }
         }
         if show_history {
-            self.history_window.toggle();
+            shared.history_window.toggle();
         }
-        let history_location = self
-            .history_window
-            .show(&ctx, &mut self.browsing_history, busy);
+        let history_location =
+            shared
+                .history_window
+                .show(&ctx, &mut shared.browsing_history, false);
+        stop |= !self.focus_mode && shortcut(egui::Modifiers::NONE, egui::Key::Escape);
+        if stop {
+            self.stop();
+        }
         if choose {
-            self.choose_file(&ctx);
-        } else if !busy {
+            self.choose_file(&ctx, shared);
+        } else {
             if let Some(location) = history_location {
-                self.open(location, Navigation::New, &ctx);
+                self.open(location, Navigation::New, &ctx, shared);
             } else if go {
                 let location = Location::from_input(&self.address);
                 let navigation = if location.as_ref().ok().is_some_and(|location| {
@@ -1108,14 +808,14 @@ impl eframe::App for OliveApp {
                 } else {
                     Navigation::New
                 };
-                self.open_result(location, navigation, &ctx);
+                self.open_result(location, navigation, &ctx, shared);
             } else if back {
                 if let Some((index, location)) = self.history.back() {
-                    self.open(location, Navigation::Traverse(index), &ctx);
+                    self.open(location, Navigation::Traverse(index), &ctx, shared);
                 }
             } else if forward {
                 if let Some((index, location)) = self.history.forward() {
-                    self.open(location, Navigation::Traverse(index), &ctx);
+                    self.open(location, Navigation::Traverse(index), &ctx, shared);
                 }
             } else if toggle_scripts {
                 if let Some(loaded) = &self.loaded {
@@ -1124,23 +824,310 @@ impl eframe::App for OliveApp {
                         Navigation::Reload,
                         &ctx,
                         !loaded.scripting_enabled,
+                        shared,
                     );
                 }
             } else if reload {
-                if let Some(loaded) = &self.loaded {
-                    self.open(loaded.location.clone(), Navigation::Reload, &ctx);
+                if let Some(pending) = &self.pending {
+                    self.open(pending.requested.clone(), pending.navigation, &ctx, shared);
+                } else if let Some(loaded) = &self.loaded {
+                    self.open(loaded.location.clone(), Navigation::Reload, &ctx, shared);
+                } else {
+                    self.open_result(
+                        Location::from_input(&self.address),
+                        Navigation::New,
+                        &ctx,
+                        shared,
+                    );
                 }
             } else if let (Some(href), Some(loaded)) = (link, &self.loaded) {
                 let location = loaded.base.resolve(&href);
-                self.open_result(location, Navigation::New, &ctx);
+                if link_new_tab {
+                    match location {
+                        Ok(location) => return Some(location),
+                        Err(error) => self.error = Some(error),
+                    }
+                } else {
+                    self.open_result(location, Navigation::New, &ctx, shared);
+                }
             }
         }
+        None
     }
 }
 
+const MAX_TABS: usize = 32;
+
+pub struct OliveApp {
+    shared: Shared,
+    tabs: Vec<Tab>,
+    active: usize,
+    next_id: u64,
+    focus_address: bool,
+    reveal_tab: bool,
+}
+impl OliveApp {
+    pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
+        let ctx = &cc.egui_ctx;
+        ctx.set_fonts(crate::fonts::definitions());
+        let mut style = egui::Style {
+            visuals: egui::Visuals::light(),
+            ..Default::default()
+        };
+        style.visuals.override_text_color = Some(INK);
+        style.visuals.panel_fill = PAPER;
+        style.visuals.selection.bg_fill = Color32::from_rgb(209, 223, 182);
+        style.spacing.button_padding = egui::vec2(16.0, 10.0);
+        style.spacing.item_spacing = egui::vec2(12.0, 8.0);
+        ctx.set_global_style(style);
+        ctx.set_theme(egui::Theme::Light);
+        let icon = ctx.load_texture(
+            "olive-browser-icon",
+            egui::ColorImage::from(icon::data()),
+            egui::TextureOptions::LINEAR,
+        );
+
+        let mut app = Self {
+            shared: Shared {
+                icon,
+                browsing_history: BrowsingHistory::load_default(),
+                history_window: HistoryWindow::default(),
+            },
+            tabs: vec![Tab::new(0)],
+            active: 0,
+            next_id: 1,
+            focus_address: source.is_none(),
+            reveal_tab: false,
+        };
+        if let Some(source) = source {
+            let location = match source.to_str() {
+                Some(input) => Location::from_input(input),
+                None => Location::from_path(PathBuf::from(source)),
+            };
+            app.tabs[0].open_result(location, Navigation::New, ctx, &mut app.shared);
+        }
+        app
+    }
+
+    fn new_tab(&mut self, location: Option<Location>, ctx: &egui::Context) {
+        if self.tabs.len() >= MAX_TABS {
+            self.tabs[self.active].error =
+                Some("Close a tab before opening another (32 tab limit).".into());
+            return;
+        }
+        let mut tab = Tab::new(self.next_id);
+        self.next_id += 1;
+        self.focus_address = location.is_none();
+        if let Some(location) = location {
+            tab.open(location, Navigation::New, ctx, &mut self.shared);
+        }
+        self.tabs.push(tab);
+        self.select(self.tabs.len() - 1);
+    }
+    fn select(&mut self, index: usize) {
+        self.active = index.min(self.tabs.len() - 1);
+        self.reveal_tab = true;
+    }
+    fn close_tab(&mut self, index: usize, ctx: &egui::Context) {
+        self.tabs.remove(index); // Drop terminates this tab's current and pending children.
+        if self.tabs.is_empty() {
+            self.active = 0;
+            self.new_tab(None, ctx);
+        } else {
+            if index < self.active {
+                self.active -= 1;
+            }
+            self.select(self.active);
+        }
+    }
+
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let mut selected = None;
+        let mut close = None;
+        let mut add = false;
+        egui::Panel::top("tabs")
+            .exact_size(48.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(CHROME)
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let width = (ui.available_width() - 44.0).max(100.0);
+                    egui::ScrollArea::horizontal()
+                        .id_salt("tab-strip")
+                        .max_width(width)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (index, tab) in self.tabs.iter().enumerate() {
+                                    ui.push_id(tab.id, |ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        let busy = tab.pending.is_some()
+                                            || tab.worker.as_ref().is_some_and(Worker::busy);
+                                        let title: String = tab.title().chars().take(80).collect();
+                                        let label = if busy {
+                                            format!("Opening… {title}")
+                                        } else {
+                                            title
+                                        };
+                                        let mut button = IconButton::new(
+                                            if tab.crashed || tab.error.is_some() {
+                                                Icon::Warning
+                                            } else {
+                                                Icon::Page
+                                            },
+                                            label,
+                                        );
+                                        button.button = button
+                                            .button
+                                            .selected(index == self.active)
+                                            .truncate()
+                                            .min_size(egui::vec2(140.0, 32.0));
+                                        let response = ui
+                                            .add_sized([180.0, 32.0], button)
+                                            .on_hover_text(format!(
+                                                "{}\n{}",
+                                                tab.title(),
+                                                tab.worker
+                                                    .as_ref()
+                                                    .or_else(|| tab
+                                                        .pending
+                                                        .as_ref()
+                                                        .map(|p| &p.worker))
+                                                    .and_then(Worker::pid)
+                                                    .map(|pid| format!("Tab process {pid}"))
+                                                    .unwrap_or_else(|| "New tab".into())
+                                            ));
+                                        if self.reveal_tab && index == self.active {
+                                            response.scroll_to_me(Some(egui::Align::Center));
+                                        }
+                                        if response.clicked() {
+                                            selected = Some(index);
+                                        }
+                                        if response.clicked_by(egui::PointerButton::Middle) {
+                                            close = Some(index);
+                                        }
+                                        if ui
+                                            .add(
+                                                IconButton::icon_only(Icon::Close, "Close tab")
+                                                    .small(),
+                                            )
+                                            .on_hover_text("Close tab (Cmd/Ctrl+W)")
+                                            .clicked()
+                                        {
+                                            close = Some(index);
+                                        }
+                                    });
+                                }
+                            });
+                        });
+                    add = ui
+                        .add_enabled(
+                            self.tabs.len() < MAX_TABS,
+                            IconButton::icon_only(Icon::Plus, "New tab"),
+                        )
+                        .on_hover_text("New tab (Cmd/Ctrl+T)")
+                        .on_disabled_hover_text("Close a tab to open another (32 tab limit)")
+                        .clicked();
+                });
+            });
+        self.reveal_tab = false;
+        if let Some(index) = selected {
+            self.select(index);
+        }
+        if let Some(index) = close {
+            self.close_tab(index, &ctx);
+        }
+        if add {
+            self.new_tab(None, &ctx);
+        }
+    }
+}
+impl eframe::App for OliveApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        PAPER.to_normalized_gamma_f32()
+    }
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        for tab in &mut self.tabs {
+            tab.receive(ctx, &mut self.shared);
+        }
+        if self
+            .tabs
+            .iter()
+            .any(|tab| tab.worker.is_some() || tab.pending.is_some())
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let shortcut = |modifiers, key| {
+            ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+            })
+        };
+        if shortcut(egui::Modifiers::COMMAND, egui::Key::T) {
+            self.new_tab(None, &ctx);
+        }
+        if shortcut(egui::Modifiers::COMMAND, egui::Key::W) {
+            self.close_tab(self.active, &ctx);
+        }
+        if shortcut(
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::Tab,
+        ) {
+            self.select((self.active + self.tabs.len() - 1) % self.tabs.len());
+        } else if shortcut(egui::Modifiers::CTRL, egui::Key::Tab) {
+            self.select((self.active + 1) % self.tabs.len());
+        }
+        for (index, key) in [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if shortcut(egui::Modifiers::COMMAND, key) {
+                self.select(if index == 8 {
+                    self.tabs.len() - 1
+                } else {
+                    index
+                });
+            }
+        }
+        ui.spacing_mut().item_spacing.y = 0.0;
+        self.tab_bar(ui);
+        let autofocus = std::mem::take(&mut self.focus_address);
+        if let Some(location) = self.tabs[self.active].ui(ui, &mut self.shared, autofocus) {
+            self.new_tab(Some(location), &ctx);
+        }
+        let title: String = self.tabs[self.active].title().chars().take(200).collect();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{title} — Olive Browser"
+        )));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::prepare_page_with_loader;
+    use olive_html::net::{DocumentLoader, LoadedDocument};
+
+    fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
+        let scripting = !source.location.is_remote();
+        Ok(prepare_page_with_loader(source, &DocumentLoader::new()?, scripting)?.loaded)
+    }
 
     fn load_file(path: PathBuf) -> Result<LoadedPage, String> {
         DocumentLoader::new()?
@@ -1148,31 +1135,25 @@ mod tests {
             .and_then(prepare_page)
     }
 
-    fn app_for_test(ctx: &egui::Context, loaded: LoadedPage) -> OliveApp {
-        let mut history = History::default();
-        history.commit(loaded.location.clone(), Navigation::New);
-        let mut browsing_history = BrowsingHistory::default();
-        browsing_history.record(&loaded.location, &loaded.page.title);
-        OliveApp {
+    fn app_for_test(ctx: &egui::Context, loaded: LoadedPage) -> (Tab, Shared) {
+        let mut tab = Tab::new(0);
+        tab.history.commit(loaded.location.clone(), Navigation::New);
+        let mut shared = Shared {
             icon: ctx.load_texture(
                 "test-icon",
                 egui::ColorImage::from(icon::data()),
                 Default::default(),
             ),
-            address: loaded.location.as_str().into(),
-            history,
-            browsing_history,
+            browsing_history: BrowsingHistory::default(),
             history_window: HistoryWindow::default(),
-            loaded: Some(loaded),
-            pending: None,
-            error: None,
-            alert: None,
-            image_textures: ImageTextureCache::default(),
-            generation: 1,
-            focus_mode: false,
-            focus_panel: true,
-            focus_settings: FocusSettings::default(),
-        }
+        };
+        shared
+            .browsing_history
+            .record(&loaded.location, &loaded.page.title);
+        tab.address = loaded.location.as_str().into();
+        tab.loaded = Some(loaded);
+        tab.generation = 1;
+        (tab, shared)
     }
 
     fn remote_source(url: &str) -> LoadedDocument {
@@ -1187,7 +1168,7 @@ mod tests {
     #[test]
     fn focus_toggles_without_reloading_or_recording_visits_and_keeps_preferences() {
         let ctx = egui::Context::default();
-        let mut app = app_for_test(
+        let (mut app, mut shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/story")).unwrap(),
         );
@@ -1195,23 +1176,23 @@ mod tests {
             font_size: 25.0,
             theme: FocusTheme::Dark,
         };
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         assert!(app.focus_mode && app.focus_panel);
         app.focus_panel = false;
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         assert!(!app.focus_mode);
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         assert!(app.focus_mode && app.focus_panel);
         assert_eq!(app.focus_settings.font_size, 25.0);
         assert_eq!(app.focus_settings.theme, FocusTheme::Dark);
         assert!(app.pending.is_none());
         assert_eq!(app.generation, 1);
-        assert_eq!(app.browsing_history.entries()[0].visits, 1);
+        assert_eq!(shared.browsing_history.entries()[0].visits, 1);
         let mut source = remote_source("https://example.com/empty");
         source.bytes = b"<title>No article</title><nav>Site links</nav>".to_vec();
         app.loaded = Some(prepare_page(source).unwrap());
         app.focus_mode = false;
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         assert!(!app.focus_mode);
     }
 
@@ -1219,7 +1200,7 @@ mod tests {
     fn focus_controls_fit_the_minimum_window_width_in_both_themes() {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::fonts::definitions());
-        let mut app = app_for_test(
+        let (mut app, _shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/story")).unwrap(),
         );
@@ -1263,99 +1244,103 @@ mod tests {
     }
 
     #[test]
-    fn decodes_png_images_with_bounded_dimensions() {
-        let (image, pixels) =
-            decode_image(include_bytes!("../../assets/olive-browser.png")).unwrap();
-        assert_eq!(image.size, [1024, 1024]);
-        assert_eq!(pixels, 1024 * 1024);
-        assert!(decode_image(b"not an image").is_err());
-    }
-
-    #[test]
     fn failed_navigation_keeps_the_page_address_and_forward_history() {
         let ctx = egui::Context::default();
         let original = Location::from_input("https://example.com/first").unwrap();
-        let mut app = app_for_test(
+        let (mut app, mut shared) = app_for_test(
             &ctx,
             prepare_page(remote_source(original.as_str())).unwrap(),
         );
         let next = Location::from_input("https://example.com/second").unwrap();
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         app.history.commit(next.clone(), Navigation::New);
         app.history
             .commit(original.clone(), Navigation::Traverse(0));
         let requested = Location::from_input("https://missing.example/").unwrap();
         app.address = requested.as_str().into();
-        let (sender, receiver) = mpsc::channel();
-        sender.send(Err("Test connection failure".into())).unwrap();
+        let (worker, sender) = Worker::mock();
+        assert!(sender.send(Err("Test connection failure".into())).is_ok());
         app.pending = Some(PendingPage {
-            receiver,
+            worker,
             requested,
             navigation: Navigation::New,
         });
-        app.receive(&ctx);
+        app.receive(&ctx, &mut shared);
         assert_eq!(app.loaded.as_ref().unwrap().location, original);
         assert_eq!(app.address, original.as_str());
         assert_eq!(app.history.forward().unwrap().1, next);
         assert!(app.pending.is_none());
         assert!(app.error.as_ref().unwrap().contains("missing.example"));
-        assert_eq!(app.browsing_history.entries().len(), 1);
-        assert_eq!(app.browsing_history.entries()[0].url, original.as_str());
+        assert_eq!(shared.browsing_history.entries().len(), 1);
+        assert_eq!(shared.browsing_history.entries()[0].url, original.as_str());
         assert!(app.focus_mode);
     }
 
     #[test]
     fn saved_history_records_final_urls_and_successful_reload_and_traversal() {
         let ctx = egui::Context::default();
-        let mut app = app_for_test(
+        let (mut app, mut shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/first")).unwrap(),
         );
         let requested = Location::from_input("https://example.com/redirect").unwrap();
-        app.toggle_focus();
+        app.toggle_focus(&mut shared);
         app.focus_settings.font_size = 24.0;
         let final_url = "https://example.com/final";
         let mut source = remote_source(final_url);
         // Readable HTTP error pages are successful navigations too.
         source.status = Some(404);
         source.bytes = b"<!doctype html><title>Not found</title><p>404</p>".to_vec();
-        let (sender, receiver) = mpsc::channel();
-        sender.send(Ok(prepare_page(source).unwrap())).unwrap();
+        let (worker, sender) = Worker::mock();
+        assert!(
+            sender
+                .send(Ok(Event::Loaded(Box::new(prepare_page(source).unwrap()))))
+                .is_ok()
+        );
         app.pending = Some(PendingPage {
-            receiver,
+            worker,
             requested: requested.clone(),
             navigation: Navigation::New,
         });
-        app.receive(&ctx);
+        app.receive(&ctx, &mut shared);
         assert!(!app.focus_mode);
         assert_eq!(app.focus_settings.font_size, 24.0);
-        assert_eq!(app.browsing_history.entries().len(), 2);
-        let entry = &app.browsing_history.entries()[0];
+        assert_eq!(shared.browsing_history.entries().len(), 2);
+        let entry = &shared.browsing_history.entries()[0];
         assert_eq!(entry.url, final_url);
         assert_eq!(entry.title, "Not found");
-        assert!(app.browsing_history.search(requested.as_str()).is_empty());
+        assert!(
+            shared
+                .browsing_history
+                .search(requested.as_str())
+                .is_empty()
+        );
 
         for (url, navigation) in [
             (final_url, Navigation::Reload),
             ("https://example.com/first", Navigation::Traverse(0)),
         ] {
-            let (sender, receiver) = mpsc::channel();
-            sender
-                .send(Ok(prepare_page(remote_source(url)).unwrap()))
-                .unwrap();
+            let (worker, sender) = Worker::mock();
+            assert!(
+                sender
+                    .send(Ok(Event::Loaded(Box::new(
+                        prepare_page(remote_source(url)).unwrap()
+                    ))))
+                    .is_ok()
+            );
             app.pending = Some(PendingPage {
-                receiver,
+                worker,
                 requested: Location::from_input(url).unwrap(),
                 navigation,
             });
-            app.receive(&ctx);
-            assert_eq!(app.browsing_history.entries().len(), 2);
-            assert_eq!(app.browsing_history.entries()[0].url, url);
-            assert_eq!(app.browsing_history.entries()[0].visits, 2);
+            app.receive(&ctx, &mut shared);
+            assert_eq!(shared.browsing_history.entries().len(), 2);
+            assert_eq!(shared.browsing_history.entries()[0].url, url);
+            assert_eq!(shared.browsing_history.entries()[0].visits, 2);
         }
         assert_eq!(app.history.forward().unwrap().1.as_str(), final_url);
-        app.browsing_history.clear();
-        assert!(app.browsing_history.entries().is_empty());
+        shared.browsing_history.clear();
+        assert!(shared.browsing_history.entries().is_empty());
         assert_eq!(app.history.forward().unwrap().1.as_str(), final_url);
         assert_eq!(
             app.loaded.as_ref().unwrap().location.as_str(),
@@ -1367,42 +1352,42 @@ mod tests {
     fn same_document_navigation_records_visits_without_a_loader() {
         let ctx = egui::Context::default();
         let url = "https://example.com/page";
-        let mut app = app_for_test(&ctx, prepare_page(remote_source(url)).unwrap());
-        app.toggle_focus();
+        let (mut app, mut shared) = app_for_test(&ctx, prepare_page(remote_source(url)).unwrap());
+        app.toggle_focus(&mut shared);
         let anchor = Location::from_input(&format!("{url}#section")).unwrap();
-        app.open(anchor.clone(), Navigation::New, &ctx);
+        app.open(anchor.clone(), Navigation::New, &ctx, &mut shared);
         assert!(app.pending.is_none());
         assert!(app.focus_mode);
-        assert_eq!(app.browsing_history.entries()[0].url, anchor.as_str());
+        assert_eq!(shared.browsing_history.entries()[0].url, anchor.as_str());
         let (index, location) = app.history.back().unwrap();
-        app.open(location, Navigation::Traverse(index), &ctx);
+        app.open(location, Navigation::Traverse(index), &ctx, &mut shared);
         assert!(app.pending.is_none());
-        assert_eq!(app.browsing_history.entries().len(), 2);
-        assert_eq!(app.browsing_history.entries()[0].url, url);
-        assert_eq!(app.browsing_history.entries()[0].visits, 2);
-        app.browsing_history.remove(anchor.as_str());
+        assert_eq!(shared.browsing_history.entries().len(), 2);
+        assert_eq!(shared.browsing_history.entries()[0].url, url);
+        assert_eq!(shared.browsing_history.entries()[0].visits, 2);
+        shared.browsing_history.remove(anchor.as_str());
         assert_eq!(app.history.forward().unwrap().1, anchor);
     }
 
     #[test]
     fn disconnected_load_does_not_record_a_visit() {
         let ctx = egui::Context::default();
-        let mut app = app_for_test(
+        let (mut app, mut shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/first")).unwrap(),
         );
-        let (sender, receiver) = mpsc::channel();
+        let (worker, sender) = Worker::mock();
         drop(sender);
         app.pending = Some(PendingPage {
-            receiver,
+            worker,
             requested: Location::from_input("https://example.com/disconnected").unwrap(),
             navigation: Navigation::New,
         });
-        app.receive(&ctx);
+        app.receive(&ctx, &mut shared);
         assert!(app.pending.is_none());
         assert!(app.error.is_some());
-        assert_eq!(app.browsing_history.entries().len(), 1);
-        assert!(app.browsing_history.search("disconnected").is_empty());
+        assert_eq!(shared.browsing_history.entries().len(), 1);
+        assert!(shared.browsing_history.search("disconnected").is_empty());
     }
 
     #[test]
@@ -1415,7 +1400,7 @@ mod tests {
         let loaded = prepare_page(source).unwrap();
         assert_eq!(loaded.page.title, "Original");
         assert_eq!(loaded.scripts.attempted, 0);
-        assert!(loaded.session.is_none());
+        assert!(!loaded.scripting_enabled);
         assert_eq!(loaded.base.as_str(), "https://example.com/docs/");
         assert!(!loaded.page.is_empty());
     }
@@ -1449,62 +1434,123 @@ mod tests {
         assert_eq!(loaded.scripts.console[0], "Harvest calculated: 39");
     }
     #[test]
-    fn enabled_web_session_executes_once_and_retains_globals_for_worker_clicks() {
+    fn tabs_keep_independent_state_and_closing_preserves_selection() {
         let ctx = egui::Context::default();
-        let source = LoadedDocument {
-            location: Location::from_input("https://example.com/demo").unwrap(),
-            bytes: br#"<!doctype html><title>Before</title><script>
-                let count=1; document.title='Loaded '+count;
-                function increment(){count++; document.title='Clicked '+count; alert(count)}
-                </script><button id=increment onclick='increment(); return false'>Increment</button>"#.to_vec(),
-            status: Some(200), plain_text: false,
+        let (mut first, shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/first")).unwrap(),
+        );
+        first.address = "unfinished address".into();
+        first.focus_mode = true;
+        first.focus_settings.font_size = 28.0;
+        let mut browser = OliveApp {
+            shared,
+            tabs: vec![first],
+            active: 0,
+            next_id: 1,
+            focus_address: false,
+            reveal_tab: false,
         };
-        let (sender, receiver) = mpsc::channel();
-        let (target_sender, target_receiver) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let prepared =
-                prepare_page_with_loader(source, &DocumentLoader::new().unwrap(), true).unwrap();
-            let target = prepared.session.as_ref().unwrap().with_document(|doc| {
-                doc.descendants(doc.root())
-                    .find(|&id| {
-                        doc.node(id)
-                            .unwrap()
-                            .as_element()
-                            .is_some_and(|e| e.attribute("id") == Some("increment"))
-                    })
-                    .unwrap()
-            });
-            target_sender.send(target).unwrap();
-            serve_page(prepared, sender, &ctx);
+        browser.new_tab(None, &ctx);
+        let second_id = browser.tabs[1].id;
+        assert_eq!(browser.active, 1);
+        assert!(browser.tabs[1].address.is_empty());
+        assert!(browser.tabs[1].history.back().is_none());
+        assert!(!browser.tabs[1].focus_mode);
+        browser.tabs[1].address = "second draft".into();
+        browser.select(0);
+        assert_eq!(browser.tabs[0].address, "unfinished address");
+        assert!(browser.tabs[0].focus_mode);
+        assert_eq!(browser.tabs[0].focus_settings.font_size, 28.0);
+        browser.new_tab(None, &ctx);
+        browser.select(1);
+        browser.close_tab(0, &ctx);
+        assert_eq!(browser.active, 0);
+        assert_eq!(browser.tabs[0].id, second_id);
+        assert_eq!(browser.tabs[0].address, "second draft");
+        browser.close_tab(1, &ctx);
+        browser.close_tab(0, &ctx);
+        assert_eq!(browser.tabs.len(), 1);
+        assert_eq!(browser.active, 0);
+        assert!(browser.tabs[0].loaded.is_none());
+        assert!(browser.tabs[0].id > second_id);
+    }
+
+    #[test]
+    fn background_completion_and_failure_are_routed_to_their_own_tab() {
+        let ctx = egui::Context::default();
+        let (mut first, mut shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/first")).unwrap(),
+        );
+        let mut second = Tab::new(1);
+        let (worker, sender) = Worker::mock();
+        assert!(
+            sender
+                .send(Ok(Event::Loaded(Box::new(
+                    prepare_page(remote_source("https://example.com/second")).unwrap()
+                ))))
+                .is_ok()
+        );
+        second.pending = Some(PendingPage {
+            worker,
+            requested: Location::from_input("https://example.com/second").unwrap(),
+            navigation: Navigation::New,
         });
-        let mut loaded = receiver
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap()
-            .unwrap();
-        assert!(loaded.scripting_enabled);
-        assert_eq!(loaded.page.title, "Loaded 1");
-        let target = target_receiver.recv().unwrap();
-        let session = loaded.session.take().unwrap();
-        for count in [2, 3] {
-            session
-                .sender
-                .send(ClickRequest {
-                    target,
-                    href: Some("/must-not-navigate".into()),
-                })
-                .unwrap();
-            let update = session
-                .receiver
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
-            assert_eq!(update.page.title, format!("Clicked {count}"));
-            assert!(update.reading.is_empty()); // A button-only page has no reading content.
-            assert_eq!(update.scripts.executed, 1);
-            assert!(update.scripts.diagnostics.is_empty());
-            assert_eq!(update.alert, Some(count.to_string()));
-            assert!(update.link.is_none());
+        second.receive(&ctx, &mut shared);
+        assert_eq!(first.address, "https://example.com/first");
+        assert_eq!(second.address, "https://example.com/second");
+        assert_eq!(shared.browsing_history.entries().len(), 2);
+        let (worker, failed) = Worker::mock();
+        first.worker = Some(worker);
+        assert!(failed.send(Err("Simulated process crash".into())).is_ok());
+        first.receive(&ctx, &mut shared);
+        assert!(first.crashed);
+        assert!(first.worker.is_none());
+        assert!(second.worker.is_some());
+        assert!(!second.crashed);
+        assert!(second.error.is_none());
+        second.receive(&ctx, &mut shared);
+        assert!(second.error.is_none());
+    }
+
+    #[test]
+    fn tab_strip_and_page_fit_a_small_window_and_scroll_state_is_tab_local() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        let (first, shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/first")).unwrap(),
+        );
+        let mut browser = OliveApp {
+            shared,
+            tabs: vec![first],
+            active: 0,
+            next_id: 1,
+            focus_address: false,
+            reveal_tab: false,
+        };
+        for _ in 0..8 {
+            browser.new_tab(None, &ctx);
         }
-        drop(session);
-        worker.join().unwrap();
+        browser.select(0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(480.0, 360.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                browser.tab_bar(ui);
+                assert!(ui.available_height() >= 300.0);
+                let _ = browser.tabs[0].ui(ui, &mut browser.shared, false);
+            },
+        );
+        assert!(!output.shapes.is_empty());
+        output.textures_delta.clear();
+        let scroll_id = |tab: &Tab| egui::Id::new(("document", tab.id, tab.generation, false));
+        assert_ne!(scroll_id(&browser.tabs[0]), scroll_id(&browser.tabs[1]));
     }
 }

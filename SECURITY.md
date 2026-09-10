@@ -1,4 +1,4 @@
-# Security boundary in 0.4.0
+# Security boundary in 0.7.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG images, and linked/embedded/inline CSS.
@@ -22,8 +22,10 @@ Olive's flat arena avoids ownership cycles and recursive DOM drop, and all
 first-party Rust targets forbid unsafe code.
 
 The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
-display limit, reads files on one background worker, and retains the previous page
-if a new document cannot be read.
+display limit. Each document loads and executes in a dedicated child process.
+The previous page and its process remain available if a new document cannot be read.
+Up to 32 tabs are open at once; a tab can temporarily own an old document process
+and a pending replacement. Empty tabs do not start a process.
 Its CSS parser, JavaScript engine/garbage collector, font and native UI dependencies
 expand the trust boundary beyond the HTML parser.
 Links navigate only after a user click. HTTP(S) pages cannot navigate to `file:`;
@@ -40,7 +42,8 @@ redirect limit. Document responses are bounded to 1 MiB after decompression and
 again after decoding; document types other than HTML/XHTML/plain text are rejected. Plain text
 is escaped before display. URL inputs are capped at 8 KiB and the session's
 Back/Forward stack at 256 entries.
-Only one navigation load runs at a time. Navigation waits for that load to finish.
+One navigation load runs per tab. Starting another navigation cancels that tab's
+pending load. Other tabs continue loading and responding independently.
 No cookies, HTTP authentication, automatic Referer headers, persistent network
 cache, forms, downloads or automatic document navigation are enabled.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
@@ -90,8 +93,9 @@ box layout are iterative. Font sizes, geometry and line heights are clamped as
 documented in README.md. CSS can change the document area but not browser
 controls or the file picker.
 
-JavaScript uses Boa 0.22.0 in-process, with one fresh realm per document retained
-on its worker for initial scripts and subsequent clicks. Initial scripts execute
+GUI JavaScript uses Boa 0.22.0 inside the document child process, with one fresh
+realm per document retained for initial scripts and subsequent clicks. The
+standalone JavaScript CLI continues to execute in its own process. Initial scripts execute
 once; the UI receives only the presentation and bounded reports. No network/filesystem APIs, timers, module loader, dynamic
 code compilation (`eval`/function constructors), or asynchronous job execution
 are enabled. The host dispatches only inline `onclick` handlers on rendered
@@ -136,16 +140,34 @@ inside native built-ins such as regular expressions and large string/array
 operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents and enable web
 JavaScript only for pages and their script providers you trust. Web scripting is
-an explicit experimental opt-in, not safe execution of untrusted code. Process
-isolation with enforceable memory/time limits remains required before automatic
-execution of untrusted remote JavaScript. The UI worker is not a security boundary.
+an explicit experimental opt-in, not safe execution of untrusted code. Enforceable memory limits and OS sandboxing remain required before automatic
+execution of untrusted remote JavaScript. Tab processes provide fault isolation,
+not a security boundary against compromised native code.
 
-These controls do not provide a hard memory ceiling or processing deadline.
+The browser supervises child processes with 60-second load and 10-second click
+wall-clock deadlines, checked while polling all tabs every 100 ms. Stop, closing
+a tab, replacing a load and browser shutdown terminate the affected workers;
+process reaping happens outside the UI thread. A worker watches the private
+stdin pipe on a separate thread and exits on parent disconnect even if its main
+thread is stuck. The same executable enters worker mode before creating any
+window or reading browser history.
+
+IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
+files. Messages have a four-byte length prefix: commands are limited to 32 KiB,
+presentation responses to 128 MiB. Pipe reads, writes, JSON decoding, image
+validation and presentation-index checks happen off the UI thread. Only inert
+text/style/image presentation data and bounded reports cross into the browser;
+DOMs and JavaScript realms stay in their document process. The UI retains shared
+text layout, GPU uploads and window composition, so faults in that common UI
+code can still affect the application. The protocol assumes the bundled worker
+executable; it is not a hardened interface to compromised native code.
+
+These controls do not provide a hard memory ceiling or per-process CPU quota.
 DOM construction expands input, parser recovery can be expensive, allocations
-can fail, and dependencies can contain defects and unsafe code. The parser has
-not undergone an independent security audit. HTTP fetching is bounded, but HTML
-and CSS processing remain in-process. Browsing is experimental; process isolation
-and enforceable CPU/memory budgets remain necessary hardening work.
+can fail, and dependencies can contain defects and unsafe code. OS-wide memory
+exhaustion can still affect the browser and other applications. The parser has
+not undergone an independent security audit. Browsing remains experimental;
+OS sandboxing and enforceable memory/CPU budgets remain necessary hardening work.
 
 ## Reporting
 

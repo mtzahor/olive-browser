@@ -35,6 +35,23 @@ pub struct LoadedResource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Location(Url);
 
+// Deserialize through the same validation used by normal navigation.
+#[cfg(feature = "gui")]
+impl serde::Serialize for Location {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+#[cfg(feature = "gui")]
+impl<'de> serde::Deserialize<'de> for Location {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        check_input(&value).map_err(serde::de::Error::custom)?;
+        let url = Url::parse(&value).map_err(serde::de::Error::custom)?;
+        Self::from_url(url).map_err(serde::de::Error::custom)
+    }
+}
+
 impl Location {
     /// Address-bar input: explicit URLs, file paths, or a host (HTTPS by default).
     /// Loopback addresses without a scheme use HTTP for local development.

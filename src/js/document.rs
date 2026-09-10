@@ -3,6 +3,7 @@ use crate::{Document, ExternalSource, NodeId, NodeKind};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptDiagnostic {
     /// Script element, or `None` for runtime setup errors.
     pub node: Option<NodeId>,
@@ -12,6 +13,7 @@ pub struct ScriptDiagnostic {
     pub message: String,
 }
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptReport {
     pub attempted: usize,
     pub executed: usize,

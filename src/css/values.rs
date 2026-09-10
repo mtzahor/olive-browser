@@ -2,10 +2,12 @@ use cssparser::{Parser, Token};
 
 /// An sRGB color, with unpremultiplied alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 /// A length retained until its containing block is known.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum Length {
     Px(f32),
     Em(f32),
@@ -28,12 +30,14 @@ impl Length {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum Display {
     Inline,
     Block,
     None,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum WhiteSpace {
     Normal,
     Pre,
@@ -41,12 +45,14 @@ pub enum WhiteSpace {
     NoWrap,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextAlign {
     Left,
     Center,
     Right,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineHeight {
     Number(f32),
     Px(f32),
@@ -55,6 +61,7 @@ pub enum LineHeight {
 /// Computed text styles and the supported block box properties. Lengths in the
 /// box model are resolved by the renderer; inherited font sizes are absolute.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComputedStyle {
     pub color: Color,
     pub background: Color,

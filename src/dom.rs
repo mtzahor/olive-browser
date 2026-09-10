@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 
 /// An arena index. Only use an ID with the document that produced it.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeId(NonZeroUsize);
 
 impl NodeId {

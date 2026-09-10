@@ -60,12 +60,14 @@ impl Style {
         }
     }
 }
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Block {
+    #[serde(with = "wire_text")]
     job: LayoutJob,
     indent: usize,
     rule: bool,
     style: ComputedStyle,
+    #[serde(skip)]
     layout: Option<(f32, f32, Arc<egui::Galley>)>,
     actions: Vec<(Range<usize>, Action)>,
     characters: usize,
@@ -80,9 +82,11 @@ pub struct ImageAsset {
     pub image: Arc<ColorImage>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RenderedImage {
     node: NodeId,
     reference: String,
+    #[serde(with = "crate::worker::wire_image")]
     image: Arc<ColorImage>,
     alt: Option<String>,
     style: ComputedStyle,
@@ -115,16 +119,17 @@ impl ImageTextureCache {
         texture
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Action {
     target: Option<NodeId>,
     link: Option<NodeId>,
 }
 pub struct PageClick {
+    pub new_tab: bool,
     pub target: Option<NodeId>,
     pub href: Option<String>,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum Command {
     Open(usize),
     Close,
@@ -132,7 +137,7 @@ enum Command {
     Image(usize),
     Anchor(usize),
 }
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Page {
     pub title: String,
     pub truncated: bool,
@@ -143,6 +148,7 @@ pub struct Page {
     boxes: Vec<ComputedStyle>,
     images: Vec<RenderedImage>,
     commands: Vec<Command>,
+    #[serde(skip)]
     box_rects: Vec<egui::Rect>,
     root_font: f32,
     links: HashMap<NodeId, String>,
@@ -150,6 +156,30 @@ pub struct Page {
     scroll_to: Option<String>,
     reading_style: Option<Settings>,
 }
+// Wrapping and layout caches belong to the local viewport. Transmit the text,
+// runs and alignment only; egui's default infinite wrap width is not JSON data.
+mod wire_text {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+    pub fn serialize<S: serde::Serializer>(
+        job: &LayoutJob,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        (&job.text, &job.sections, job.halign).serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<LayoutJob, D::Error> {
+        let (text, sections, halign) = Deserialize::deserialize(deserializer)?;
+        Ok(LayoutJob {
+            text,
+            sections,
+            halign,
+            ..Default::default()
+        })
+    }
+}
+
 struct Builder {
     page: Page,
     current: Block,
@@ -440,6 +470,64 @@ impl Page {
         builder.page
     }
 
+    /// Reject malformed indices and excessive presentation work before the UI sees IPC data.
+    pub fn validate(&self) -> Result<(), String> {
+        let invalid = || "Invalid tab presentation".to_owned();
+        if self.blocks.len() > MAX_BLOCKS
+            || self.boxes.len() > MAX_BOXES
+            || self.images.len() > MAX_IMAGES
+            || self.commands.len() > 100_000
+            || self.anchors.len() > 100_000
+        {
+            return Err(invalid());
+        }
+        let mut depth = 0usize;
+        for command in &self.commands {
+            match *command {
+                Command::Open(index) if index < self.boxes.len() => depth += 1,
+                Command::Close if depth > 0 => depth -= 1,
+                Command::Text(index) if index < self.blocks.len() => {}
+                Command::Image(index) if index < self.images.len() => {}
+                Command::Anchor(index) if index < self.anchors.len() => {}
+                _ => return Err(invalid()),
+            }
+        }
+        if depth != 0 {
+            return Err(invalid());
+        }
+        let mut characters = 0;
+        for block in &self.blocks {
+            let count = block.job.text.chars().count();
+            characters += count;
+            if characters > MAX_TEXT
+                || block.job.sections.len() > count
+                || block.actions.len() > count
+            {
+                return Err(invalid());
+            }
+            let mut end = 0;
+            for section in &block.job.sections {
+                let range = section.byte_range.start.0..section.byte_range.end.0;
+                if range.start != end
+                    || range.is_empty()
+                    || block.job.text.get(range.clone()).is_none()
+                {
+                    return Err(invalid());
+                }
+                end = range.end;
+            }
+            if end != block.job.text.len()
+                || block
+                    .actions
+                    .iter()
+                    .any(|(range, _)| range.start > range.end || range.end > count)
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
     /// Reflow the retained reader presentation without reloading or running scripts.
     pub fn set_reading_style(&mut self, settings: Settings) {
         let Some(previous) = self.reading_style else {
@@ -627,8 +715,12 @@ impl Page {
                         {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             let href = action.link.and_then(|id| self.links.get(&id)).cloned();
-                            if response.clicked() {
+                            if response.clicked()
+                                || response.clicked_by(egui::PointerButton::Middle)
+                            {
                                 clicked = Some(PageClick {
+                                    new_tab: response.clicked_by(egui::PointerButton::Middle)
+                                        || ui.input(|input| input.modifiers.command),
                                     target: action.target,
                                     href: href.clone(),
                                 });
@@ -687,8 +779,10 @@ impl Page {
                             .link
                             .and_then(|id| self.links.get(&id))
                             .cloned();
-                        if response.clicked() {
+                        if response.clicked() || response.clicked_by(egui::PointerButton::Middle) {
                             clicked = Some(PageClick {
+                                new_tab: response.clicked_by(egui::PointerButton::Middle)
+                                    || ui.input(|input| input.modifiers.command),
                                 target: image.action.target,
                                 href: href.clone(),
                             });
@@ -1098,6 +1192,80 @@ mod tests {
             &Stylesheet::from_document(&doc),
             &HashMap::new(),
         )
+    }
+
+    #[test]
+    fn normal_command_and_middle_clicks_keep_the_same_link_and_target() {
+        let ctx = egui::Context::default();
+        let doc = parse("<a href='/next' onclick='alert(1)'>Open another page</a>")
+            .unwrap()
+            .document;
+        let mut page = Page::from_document(&doc);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            page.show(ui);
+        });
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Open another page" => {
+                    Some(text.pos + egui::vec2(8.0, 8.0))
+                }
+                _ => None,
+            })
+            .unwrap();
+        output.textures_delta.clear();
+        for (button, modifiers, new_tab) in [
+            (egui::PointerButton::Primary, egui::Modifiers::NONE, false),
+            (egui::PointerButton::Primary, egui::Modifiers::COMMAND, true),
+            (egui::PointerButton::Middle, egui::Modifiers::NONE, true),
+        ] {
+            let mut click = None;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: true,
+                            modifiers,
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: false,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    click = page.show(ui).or(click.take());
+                },
+            );
+            output.textures_delta.clear();
+            let click = click.expect("link click must be delivered");
+            assert_eq!(click.href.as_deref(), Some("/next"));
+            assert!(click.target.is_some());
+            assert_eq!(click.new_tab, new_tab);
+        }
+    }
+
+    #[test]
+    fn presentation_validation_rejects_unbalanced_boxes_and_invalid_text_ranges() {
+        let doc = parse("<p>Hello</p>").unwrap().document;
+        let mut page = Page::from_document(&doc);
+        assert!(page.validate().is_ok());
+        page.commands.push(Command::Text(page.blocks.len()));
+        assert!(page.validate().is_err());
+        page.commands.pop();
+        page.commands.insert(0, Command::Close);
+        assert!(page.validate().is_err());
+        page.commands.remove(0);
+        page.blocks[0].job.sections[0].byte_range.end.0 += 1;
+        assert!(page.validate().is_err());
     }
 
     #[test]
