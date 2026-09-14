@@ -59,7 +59,7 @@ reqwest = { version = "0.12.28", optional = true, default-features = false, feat
 url = { version = "2.5.8", optional = true }
 encoding_rs = { version = "0.8.35", optional = true }
 percent-encoding = { version = "2.3.2", optional = true }
-zune-jpeg = { version = "0.4.21", optional = true, default-features = false, features = ["std"] }
+zune-jpeg = { version = "0.5.15", optional = true, default-features = false, features = ["std"] }
 serde = { version = "1.0.229", optional = true, features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", optional = true }
 tempfile = { version = "3.27.0", optional = true }
