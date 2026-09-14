@@ -6,6 +6,7 @@ use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
 use olive_html::{
     ExternalSource, NodeId,
     css::Stylesheet,
+    net::CookieUpdate,
     net::{DocumentLoader, LoadedDocument, Location},
     resources::{PageResources, ResourceReport},
 };
@@ -24,6 +25,8 @@ pub struct LoadedPage {
     pub scripts: ScriptReport,
     pub scripting_enabled: bool,
     pub resources: ResourceReport,
+    #[serde(default)]
+    pub cookie_updates: Vec<CookieUpdate>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -40,6 +43,8 @@ pub struct PageUpdate {
     pub scripts: ScriptReport,
     pub alert: Option<String>,
     pub link: Option<String>,
+    #[serde(default)]
+    pub cookie_updates: Vec<CookieUpdate>,
 }
 pub struct PreparedPage {
     pub loaded: LoadedPage,
@@ -67,10 +72,12 @@ pub fn prepare_page_with_loader(
     let mut resource_report = resources.report;
     let images = decode_images(&resources.images, &mut resource_report);
     let (page, reading, base, scripts, session) = if scripting_enabled {
-        let session = DocumentSession::with_sources(
+        let session = DocumentSession::with_sources_and_cookies(
             parsed.document,
             ScriptOptions::browser(),
             &resources.scripts,
+            loader.cookies(),
+            source.location.clone(),
         );
         let (page, reading, base) = session.with_document(|document| {
             let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
@@ -95,6 +102,12 @@ pub fn prepare_page_with_loader(
             None,
         )
     };
+    let mut cookie_updates = loader.take_cookie_updates();
+    if let Some(session) = &session {
+        for update in session.take_cookie_updates() {
+            update.record(&mut cookie_updates);
+        }
+    }
     Ok(PreparedPage {
         loaded: LoadedPage {
             location: source.location,
@@ -106,6 +119,7 @@ pub fn prepare_page_with_loader(
             scripts,
             scripting_enabled,
             resources: resource_report,
+            cookie_updates,
         },
         session,
         styles: resources.styles,
@@ -240,6 +254,7 @@ impl PreparedPage {
                 self.loaded.location.document_base(document),
             )
         });
+        let cookie_updates = session.take_cookie_updates();
         Some(PageUpdate {
             default_allowed: allowed,
             page,
@@ -248,6 +263,7 @@ impl PreparedPage {
             scripts: session.report().clone(),
             alert: session.take_alerts().into_iter().next(),
             link: if allowed { click.href } else { None },
+            cookie_updates,
         })
     }
 }
@@ -255,6 +271,28 @@ impl PreparedPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decodes_webp_alpha_and_rejects_excessive_dimensions_and_truncation() {
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 128];
+        let mut encoded = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut encoded)
+            .encode(&rgba, 2, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let (decoded, pixels) = decode_image(&encoded).unwrap();
+        assert_eq!(pixels, 2);
+        assert_eq!(decoded.size, [2, 1]);
+        assert_eq!(decoded.pixels[0], egui::Color32::RED);
+        assert_eq!(
+            decoded.pixels[1],
+            egui::Color32::from_rgba_unmultiplied(0, 255, 0, 128)
+        );
+        assert!(decode_image(&encoded[..16]).is_err());
+        encoded.clear();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut encoded)
+            .encode(&vec![0; 4097 * 4], 4097, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        assert!(decode_image(&encoded).is_err());
+    }
     #[test]
     fn decodes_png_images_with_bounded_dimensions() {
         let (image, pixels) =

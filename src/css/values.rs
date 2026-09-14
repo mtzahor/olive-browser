@@ -47,9 +47,19 @@ pub enum WhiteSpace {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextAlign {
+    Start,
+    End,
     Left,
     Center,
     Right,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+    Auto,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
@@ -74,6 +84,7 @@ pub struct ComputedStyle {
     pub line_height: LineHeight,
     pub white_space: WhiteSpace,
     pub text_align: TextAlign,
+    pub direction: Direction,
     pub display: Display,
     /// Top, right, bottom, left.
     pub margin: [Length; 4],
@@ -100,7 +111,8 @@ impl Default for ComputedStyle {
             strike: false,
             line_height: LineHeight::Number(1.45),
             white_space: WhiteSpace::Normal,
-            text_align: TextAlign::Left,
+            text_align: TextAlign::Start,
+            direction: Direction::Ltr,
             display: Display::Inline,
             margin: [Length::Px(0.0); 4],
             padding: [Length::Px(0.0); 4],
@@ -127,6 +139,7 @@ impl ComputedStyle {
             line_height: parent.line_height,
             white_space: parent.white_space,
             text_align: parent.text_align,
+            direction: parent.direction,
             border_color: parent.color,
             ..Self::default()
         }
@@ -153,6 +166,7 @@ pub(super) enum Property {
     LineHeight,
     WhiteSpace,
     Align,
+    Direction,
     Display,
     MarginTop,
     MarginRight,
@@ -171,7 +185,7 @@ pub(super) enum Property {
     BorderRadius,
     BoxShadow,
 }
-pub(super) const PROPERTIES: [Property; 27] = [
+pub(super) const PROPERTIES: [Property; 28] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -182,6 +196,7 @@ pub(super) const PROPERTIES: [Property; 27] = [
     Property::LineHeight,
     Property::WhiteSpace,
     Property::Align,
+    Property::Direction,
     Property::Display,
     Property::MarginTop,
     Property::MarginRight,
@@ -212,6 +227,7 @@ impl Property {
                 | Self::LineHeight
                 | Self::WhiteSpace
                 | Self::Align
+                | Self::Direction
         )
     }
 }
@@ -225,6 +241,7 @@ pub(super) enum Value {
     Decoration(bool, bool),
     WhiteSpace(WhiteSpace),
     Align(TextAlign),
+    Direction(Direction),
     Display(Display),
     Inherit,
     Initial,
@@ -357,6 +374,7 @@ pub(super) fn parse_values<'i>(
         "line-height" => &[P::LineHeight],
         "white-space" => &[P::WhiteSpace],
         "text-align" => &[P::Align],
+        "direction" => &[P::Direction],
         "display" => &[P::Display],
         "margin" => &[P::MarginTop, P::MarginRight, P::MarginBottom, P::MarginLeft],
         "margin-top" => &[P::MarginTop],
@@ -560,9 +578,16 @@ pub(super) fn parse_values<'i>(
             _ => return Err(input.new_custom_error(())),
         }),
         P::Align => Value::Align(match keyword(input)?.as_str() {
-            "left" | "start" => TextAlign::Left,
-            "right" | "end" => TextAlign::Right,
+            "left" => TextAlign::Left,
+            "right" => TextAlign::Right,
+            "start" => TextAlign::Start,
+            "end" => TextAlign::End,
             "center" => TextAlign::Center,
+            _ => return Err(input.new_custom_error(())),
+        }),
+        P::Direction => Value::Direction(match keyword(input)?.as_str() {
+            "ltr" => Direction::Ltr,
+            "rtl" => Direction::Rtl,
             _ => return Err(input.new_custom_error(())),
         }),
         P::Display => Value::Display(match keyword(input)?.as_str() {
@@ -642,6 +667,7 @@ pub(super) fn apply(
             P::LineHeight => style.line_height = source.line_height,
             P::WhiteSpace => style.white_space = source.white_space,
             P::Align => style.text_align = source.text_align,
+            P::Direction => style.direction = source.direction,
             P::Display => style.display = source.display,
             P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft => {
                 let i = prop as usize - P::MarginTop as usize;
@@ -687,6 +713,7 @@ pub(super) fn apply(
         }
         (P::WhiteSpace, Value::WhiteSpace(v)) => style.white_space = v,
         (P::Align, Value::Align(v)) => style.text_align = v,
+        (P::Direction, Value::Direction(v)) => style.direction = v,
         (P::Display, Value::Display(v)) => style.display = v,
         (P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft, Value::Length(v)) => {
             style.margin[prop as usize - P::MarginTop as usize] = v

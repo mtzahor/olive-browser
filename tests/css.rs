@@ -2,8 +2,8 @@
 use olive_html::{
     NodeId,
     css::{
-        Color, ComputedStyle, Display, Length, LineHeight, StyleBudget, Stylesheet, TextAlign,
-        WhiteSpace,
+        Color, ComputedStyle, Direction, Display, Length, LineHeight, StyleBudget, Stylesheet,
+        TextAlign, WhiteSpace,
     },
     parse,
 };
@@ -208,6 +208,30 @@ fn font_whitespace_alignment_and_display_override_html_defaults() {
     assert_eq!(s["a"].display, Display::Inline);
     assert_eq!(s["b"].display, Display::None);
     assert_eq!(s["c"].display, Display::None);
+}
+#[test]
+fn direction_is_inherited_and_html_dir_is_used_as_the_initial_value() {
+    let (s, _, _) = styles(
+        r#"<html dir=rtl><body><p id=a><span id=b>שלום</span></p>
+        <p id=c style="direction:ltr"><span id=d>hello</span></p>"#,
+    );
+    assert_eq!(s["a"].direction, Direction::Rtl);
+    assert_eq!(s["b"].direction, Direction::Rtl);
+    assert_eq!(s["c"].direction, Direction::Ltr);
+    assert_eq!(s["d"].direction, Direction::Ltr);
+    let (s, _, _) = styles("<p id=a dir=auto>x");
+    assert_eq!(s["a"].direction, Direction::Auto);
+}
+#[test]
+fn language_direction_fills_in_missing_dir_without_beating_explicit_css() {
+    let (s, _, _) = styles(
+        r#"<html lang=he><body><p id=he>שלום</p><p id=en lang=en>Hello</p>
+        <p id=css lang=he style="direction:ltr">Hello</p><p id=dir lang=he dir=ltr>Hello</p>"#,
+    );
+    assert_eq!(s["he"].direction, Direction::Rtl);
+    assert_eq!(s["en"].direction, Direction::Ltr);
+    assert_eq!(s["css"].direction, Direction::Ltr);
+    assert_eq!(s["dir"].direction, Direction::Ltr);
 }
 #[test]
 fn colors_support_named_hex_alpha_and_rgb_notation() {

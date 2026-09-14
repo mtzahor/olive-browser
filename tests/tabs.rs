@@ -291,7 +291,7 @@ fn the_watchdog_terminates_a_hung_tab_without_resetting_other_tabs() {
 
 #[test]
 fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
-    use olive_html::net::FormRequest;
+    use olive_html::net::{CookieJar, FormRequest};
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let action = format!("http://{}/submit", listener.local_addr().unwrap());
@@ -309,6 +309,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
                 headers.push(byte[0]);
             }
             let headers = String::from_utf8(headers).unwrap();
+            assert!(headers.to_ascii_lowercase().contains("cookie: session=one"));
             let length = headers
                 .lines()
                 .find_map(|line| {
@@ -321,7 +322,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
             stream.read_exact(&mut body).unwrap();
             methods.push((headers.lines().next().unwrap().to_owned(), body));
             let body = b"<title>Submitted</title><p>Form received</p><script>document.title='Must stay disabled'</script>";
-            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nSet-Cookie: response=two; HttpOnly; Path=/\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
             stream.write_all(body).unwrap();
         }
         methods
@@ -343,8 +344,19 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     let body = request.body.clone().unwrap();
     let executable = Path::new(env!("CARGO_BIN_EXE_olive-gui"));
     let ctx = egui::Context::default();
-    let mut submitted =
-        Worker::spawn_command_at(executable, Command::Submit(request), &ctx).unwrap();
+    let mut cookies = CookieJar::default();
+    cookies.set_document_cookie(&request.location, "session=one; Path=/");
+    let initiator = Some(request.location.clone());
+    let mut submitted = Worker::spawn_command_at(
+        executable,
+        Command::SubmitWithCookies {
+            request,
+            cookies: cookies.clone(),
+            initiator,
+        },
+        &ctx,
+    )
+    .unwrap();
     assert_ne!(original.pid(), submitted.pid());
     let loaded = match reply(&mut submitted).unwrap() {
         Event::Loaded(page) => page,
@@ -352,7 +364,29 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     };
     assert_eq!(loaded.page.title, "Submitted");
     assert!(!loaded.scripting_enabled);
-    let mut reloaded = Worker::spawn_at(executable, loaded.location, false, &ctx).unwrap();
+    cookies.apply_updates(&loaded.cookie_updates);
+    assert!(
+        cookies
+            .cookie_header(&loaded.location)
+            .unwrap()
+            .contains("response=two")
+    );
+    assert!(
+        !cookies
+            .document_cookie(&loaded.location)
+            .contains("response=two")
+    );
+    let mut reloaded = Worker::spawn_command_at(
+        executable,
+        Command::LoadWithCookies {
+            location: loaded.location,
+            scripting: false,
+            cookies,
+            initiator: None,
+        },
+        &ctx,
+    )
+    .unwrap();
     assert!(matches!(reply(&mut reloaded).unwrap(), Event::Loaded(_)));
     let requests = server.join().unwrap();
     assert_eq!(

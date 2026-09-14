@@ -1,6 +1,8 @@
 mod browser;
 
 use super::{ScriptOptions, preview};
+#[cfg(feature = "net")]
+use crate::net::{CookieJar, CookieUpdate, Location};
 use crate::{Document, Element, NodeId, NodeKind};
 use boa_engine::{
     Context, JsData, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
@@ -26,6 +28,12 @@ struct Host {
     alerts: Vec<String>,
     alert_count: usize,
     omitted_alerts: usize,
+    #[cfg(feature = "net")]
+    cookies: Option<CookieJar>,
+    #[cfg(feature = "net")]
+    cookie_location: Option<Location>,
+    #[cfg(feature = "net")]
+    cookie_updates: Vec<CookieUpdate>,
 }
 impl Host {
     fn spend(&mut self, operations: usize, bytes: usize, nodes: usize) -> JsResult<()> {
@@ -145,6 +153,12 @@ pub(super) fn install_console(context: &mut Context, options: ScriptOptions) -> 
         alerts: Vec::new(),
         alert_count: 0,
         omitted_alerts: 0,
+        #[cfg(feature = "net")]
+        cookies: None,
+        #[cfg(feature = "net")]
+        cookie_location: None,
+        #[cfg(feature = "net")]
+        cookie_updates: Vec::new(),
     }));
     let console = ObjectInitializer::new(context)
         .function(NativeFunction::from_fn_ptr(log), js_string!("log"), 0)
@@ -196,6 +210,47 @@ fn accessor(builder: &mut ObjectInitializer<'_>, name: &str, get: Callback, set:
 }
 
 pub(super) fn install_document(context: &mut Context, document: Document) -> JsResult<()> {
+    #[cfg(feature = "net")]
+    {
+        install_document_with_cookie_state(context, document, None, None)
+    }
+    #[cfg(not(feature = "net"))]
+    {
+        install_document_with_cookie_state(context, document)
+    }
+}
+
+#[cfg(feature = "net")]
+pub(super) fn install_document_with_cookies(
+    context: &mut Context,
+    document: Document,
+    cookies: CookieJar,
+    location: Location,
+) -> JsResult<()> {
+    install_document_with_cookie_state(context, document, Some(cookies), Some(location))
+}
+
+#[cfg(feature = "net")]
+fn install_document_with_cookie_state(
+    context: &mut Context,
+    document: Document,
+    cookies: Option<CookieJar>,
+    location: Option<Location>,
+) -> JsResult<()> {
+    let mut host = host(context).borrow_mut();
+    host.cookies = cookies;
+    host.cookie_location = location;
+    host.cookie_updates.clear();
+    drop(host);
+    install_document_globals(context, document)
+}
+
+#[cfg(not(feature = "net"))]
+fn install_document_with_cookie_state(context: &mut Context, document: Document) -> JsResult<()> {
+    install_document_globals(context, document)
+}
+
+fn install_document_globals(context: &mut Context, document: Document) -> JsResult<()> {
     host(context).borrow_mut().document = Some(document);
     context.register_global_builtin_callable(
         js_string!("alert"),
@@ -228,6 +283,8 @@ pub(super) fn install_document(context: &mut Context, document: Document) -> JsR
     accessor(&mut builder, "body", body, None);
     accessor(&mut builder, "documentElement", document_element, None);
     accessor(&mut builder, "title", title, Some(set_title));
+    #[cfg(feature = "net")]
+    accessor(&mut builder, "cookie", cookie, Some(set_cookie));
     let document = builder.build();
     context.register_global_property(js_string!("document"), document, Attribute::all())?;
     let global = context.global_object();
@@ -432,6 +489,31 @@ fn set_title(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<J
         }
     };
     host.set_text(id, text)?;
+    Ok(JsValue::undefined())
+}
+#[cfg(feature = "net")]
+fn cookie(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let mut host = host(context).borrow_mut();
+    host.spend(1, 0, 0)?;
+    let location = host.cookie_location.clone();
+    let value = match (host.cookies.as_mut(), location.as_ref()) {
+        (Some(cookies), Some(location)) => cookies.document_cookie(location),
+        _ => String::new(),
+    };
+    Ok(JsString::from(value).into())
+}
+
+#[cfg(feature = "net")]
+fn set_cookie(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let value = string_arg(args, 0, context)?;
+    let mut host = host(context).borrow_mut();
+    host.spend(1, value.len(), 0)?;
+    let location = host.cookie_location.clone();
+    if let (Some(cookies), Some(location)) = (host.cookies.as_mut(), location) {
+        if cookies.set_document_cookie(&location, &value) {
+            CookieUpdate::from_script(location, value).record(&mut host.cookie_updates);
+        }
+    }
     Ok(JsValue::undefined())
 }
 fn element(name: &str) -> NodeKind {
@@ -668,6 +750,14 @@ pub(super) fn take_alerts(context: &Context) -> Vec<String> {
 }
 pub(super) fn omitted_alerts(context: &Context) -> usize {
     host(context).borrow().omitted_alerts
+}
+#[cfg(feature = "net")]
+pub(super) fn take_cookie_updates(context: &Context) -> Vec<CookieUpdate> {
+    std::mem::take(&mut host(context).borrow_mut().cookie_updates)
+}
+#[cfg(feature = "net")]
+pub(super) fn replace_cookies(context: &Context, cookies: CookieJar) {
+    host(context).borrow_mut().cookies = Some(cookies);
 }
 fn alert(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let mut host = host(context).borrow_mut();

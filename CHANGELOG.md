@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 — Web compatibility
+
+- Retain bounded session cookies across redirects, subresources, reloads and tabs;
+  expose filtered `document.cookie` and `navigator.cookieEnabled` to page scripts.
+  Enforce expiry, public-suffix checks, secure prefixes, HttpOnly and SameSite.
+- Decode and render WebP images alongside PNG and JPEG, retaining existing byte,
+  dimension and pixel budgets with alt-text fallback on failure.
+- Prescan the first 1,024 HTML bytes for `<meta charset>` and legacy
+  `http-equiv=Content-Type` declarations after BOM and HTTP charset handling.
+- Apply Unicode BiDi per wrapped line, including bracket mirroring and combining
+  marks; preserve logical find/link mappings and support HTML `dir`, CSS `direction`
+  and direction-aware `text-align: start/end`.
+
 ## 0.8.0 — Interaction
 
 - Render editable native inputs, checkboxes, radio groups, text areas, selects,

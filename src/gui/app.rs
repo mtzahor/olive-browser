@@ -12,7 +12,7 @@ use crate::{
     worker::{Command, Event, Worker},
 };
 use eframe::egui::{self, Color32, RichText};
-use olive_html::net::Location;
+use olive_html::net::{CookieJar, Location};
 use std::{ffi::OsString, path::PathBuf};
 
 const PAPER: Color32 = Color32::from_rgb(250, 250, 246);
@@ -27,6 +27,7 @@ struct Shared {
     icon: egui::TextureHandle,
     browsing_history: BrowsingHistory,
     history_window: HistoryWindow,
+    cookies: CookieJar,
 }
 
 pub struct Tab {
@@ -35,6 +36,7 @@ pub struct Tab {
     crashed: bool,
     loaded: Option<LoadedPage>,
     pending: Option<PendingPage>,
+    opener: Option<Location>,
     address: String,
     history: History,
     error: Option<String>,
@@ -150,6 +152,7 @@ impl Tab {
             crashed: false,
             loaded: None,
             pending: None,
+            opener: None,
             address: String::new(),
             history: History::default(),
             error: None,
@@ -164,7 +167,7 @@ impl Tab {
         }
     }
 
-    fn activate_form(&mut self, activation: Activation, ctx: &egui::Context) {
+    fn activate_form(&mut self, activation: Activation, ctx: &egui::Context, shared: &Shared) {
         if self.pending.is_some() || self.crashed {
             return;
         }
@@ -199,7 +202,12 @@ impl Tab {
         {
             Ok(request) => {
                 let requested = request.location.clone();
-                match Worker::spawn_form(request, ctx) {
+                match Worker::spawn_form_with_cookies(
+                    request,
+                    shared.cookies.clone(),
+                    Some(loaded.location.clone()),
+                    ctx,
+                ) {
                     Ok(worker) => {
                         self.address = requested.as_str().into();
                         self.error = None;
@@ -296,7 +304,18 @@ impl Tab {
             }
         }
         let requested = location.clone();
-        match Worker::spawn(location, scripting, ctx) {
+        let initiator = self
+            .loaded
+            .as_ref()
+            .map(|loaded| loaded.location.clone())
+            .or_else(|| self.opener.take());
+        match Worker::spawn_with_cookies(
+            location,
+            scripting,
+            shared.cookies.clone(),
+            initiator,
+            ctx,
+        ) {
             Ok(worker) => {
                 self.pending = Some(PendingPage {
                     worker,
@@ -317,6 +336,7 @@ impl Tab {
             let pending = self.pending.take().unwrap();
             match event {
                 Ok(Event::Loaded(mut loaded)) => {
+                    shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history
                         .commit(loaded.location.clone(), pending.navigation);
                     shared
@@ -353,6 +373,7 @@ impl Tab {
         let event = self.worker.as_mut().and_then(Worker::poll);
         match event {
             Some(Ok(Event::Updated(mut update))) => {
+                shared.cookies.apply_updates(&update.cookie_updates);
                 let activation = self.pending_form.take().filter(|_| update.default_allowed);
                 if let Some(loaded) = &mut self.loaded {
                     update.page.forms.preserve_edits(&loaded.page.forms);
@@ -373,7 +394,7 @@ impl Tab {
                     }
                 }
                 if let Some(activation) = activation {
-                    self.activate_form(activation, ctx);
+                    self.activate_form(activation, ctx, shared);
                 }
             }
             Some(event) => {
@@ -837,7 +858,7 @@ impl Tab {
                                             if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
                                                 if !worker.busy() {
                                                     self.pending_form = form_activation.take();
-                                                    if let Err(error) = worker.send(Command::Click(ClickRequest { target, href: link.take() })) {
+                                                    if let Err(error) = worker.send(Command::ClickWithCookies { click: ClickRequest { target, href: link.take() }, cookies: shared.cookies.clone() }) {
                                                         self.error = Some(error);
                                                         self.pending_form = None;
                                                     }
@@ -965,7 +986,7 @@ impl Tab {
                     );
                 }
             } else if let Some(activation) = form_activation {
-                self.activate_form(activation, &ctx);
+                self.activate_form(activation, &ctx, shared);
             } else if let (Some(href), Some(loaded)) = (link, &self.loaded) {
                 let location = loaded.base.resolve(&href);
                 if link_new_tab {
@@ -1018,6 +1039,7 @@ impl OliveApp {
                 icon,
                 browsing_history: BrowsingHistory::load_default(),
                 history_window: HistoryWindow::default(),
+                cookies: CookieJar::default(),
             },
             tabs: vec![Tab::new(0)],
             active: 0,
@@ -1045,6 +1067,10 @@ impl OliveApp {
         self.next_id += 1;
         self.focus_address = location.is_none();
         if let Some(location) = location {
+            tab.opener = self.tabs[self.active]
+                .loaded
+                .as_ref()
+                .map(|loaded| loaded.location.clone());
             tab.open(location, Navigation::New, ctx, &mut self.shared);
         }
         self.tabs.push(tab);
@@ -1272,6 +1298,7 @@ mod tests {
             ),
             browsing_history: BrowsingHistory::default(),
             history_window: HistoryWindow::default(),
+            cookies: CookieJar::default(),
         };
         shared
             .browsing_history

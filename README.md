@@ -1,8 +1,8 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.8.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.9.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
-into an owned DOM, renders bounded PNG and JPEG images, applies a bounded CSS subset, and
+into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
 CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
@@ -163,16 +163,19 @@ remain readable and show their status. The status bar distinguishes HTTPS,
 unencrypted HTTP, and local files. HTTPS verifies certificates using Rustls and
 WebPKI roots plus the operating system's trusted certificates. Requests time out
 after 20 seconds and follow at most 10 redirects.
-Gzip/deflate and declared HTTP character encodings are supported. A BOM takes
-precedence over the HTTP charset; otherwise UTF-8 is used. HTML meta charset
-sniffing is not yet implemented. Responses are capped at 1 MiB after decompression
+Gzip/deflate, declared HTTP character encodings and the HTML `<meta charset>`
+prescan are supported. A BOM takes precedence over the HTTP charset, followed by
+the HTML declaration and then UTF-8. Responses are capped at 1 MiB after decompression
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
-The viewer renders text, basic boxes, PNG and JPEG images, and linked/embedded/inline styles.
-GIF, WebP, SVG and CSS background images, downloads, cookies,
-authentication and restoring tabs across launches are not implemented. Sites that require a full DOM, CSS
-layout engine, or browser
-JavaScript APIs will have limited presentation or functionality.
+The viewer renders text, basic boxes, PNG, JPEG and WebP images, and linked/embedded/inline styles.
+GIF, SVG and CSS background images, downloads, HTTP authentication and restoring tabs
+across launches are not implemented. Cookies are shared in memory between tabs and
+discarded when the browser closes. Domain/path scoping, Secure, HttpOnly, SameSite,
+Max-Age and Expires are supported, with a 256-cookie / 64 KiB jar limit and a 4 KiB
+per-cookie limit. Public-suffix domains and invalid secure cookie prefixes are rejected.
+Sites that require a full DOM, CSS layout engine, or browser JavaScript APIs will
+have limited presentation or functionality.
 
 Linked `<link rel="stylesheet" href="…">`, classic `<script src="…">`, and
 `<img src="…">` sources resolve against the final document URL and first
@@ -256,22 +259,26 @@ the result preview goes to stdout.
 ## Supported rendering
 
 The GUI renders headings, paragraphs, lists, emphasis, code and preformatted
-text, block quotes, rules, PNG and JPEG images with alt-text fallbacks, and selectable text.
+text, block quotes, rules, PNG, JPEG and WebP images with alt-text fallbacks, and selectable text.
 Images use their intrinsic dimensions unless numeric HTML `width`/`height` or
 the supported CSS width/height properties specify another size; oversized images
 scale down to fit the content column.
 The GUI bundles Inter with Noto Sans Hebrew fallback for page text, code blocks,
 and browser controls, so Hebrew letters and vowel marks do not become missing-glyph
-rectangles. Full bidirectional paragraph layout and website font downloads are
-not yet implemented.
+rectangles. Mixed-direction text uses the Unicode Bidirectional Algorithm on each
+wrapped line, including numbers, bracket mirroring and combining marks. HTML `dir`
+and CSS `direction` control paragraph direction; `text-align: start/end` follows it.
+Find and link hit targets retain logical character mappings. Complex-script shaping,
+advanced inline `unicode-bidi` CSS, and website font downloads are not implemented;
+native text selection currently copies characters in visual order.
 CSS comes from stylesheet links, `<style>` elements and inline `style` attributes,
 with linked and embedded rules merged in document order. The supported
 subset includes:
 
 - type, class, ID, compound, descendant, child, and static `:hover` selectors;
-- the author cascade, specificity, inheritance, inline precedence, and CSS-wide keywords;
-- text styles, whitespace modes, colors, borders, rounded corners, spacing,
-  widths, and `display: block`, `inline`, `inline-block`, or `none`.
+  - the author cascade, specificity, inheritance, inline precedence, and CSS-wide keywords;
+  - text styles, whitespace modes, colors, borders, rounded corners, spacing,
+  widths, `direction`, and `display: block`, `inline`, `inline-block`, or `none`.
 
 Unsupported CSS is skipped and reported in the status bar. See the [styled
 example](examples/styled.html) for a working sample.
@@ -289,8 +296,11 @@ Document sessions provide basic `navigator` metadata and method-based
 `localStorage`/`sessionStorage` (`getItem`, `setItem`, `removeItem`, `clear`, `key`,
 `length`). Each store holds up to 64 KiB and 128 keys in memory for that document
 only; storage does not survive reload or cross into another page. Storage writes
-also consume the shared DOM write budget. Navigator reports Olive's user agent,
-`en-US` language, no cookies and no touch points.
+also consume the shared DOM write budget. `document.cookie` exposes bounded,
+domain/path/secure-filtered cookies, excluding HttpOnly cookies. Cookie writes are
+returned to the shared browser session, which refreshes each tab before click handlers.
+Navigator reports Olive's user agent, `en-US` language, cookie support,
+and no touch points.
 
 The viewer allows 32 MiB of combined script source and 256 attempted scripts;
 standalone runtimes retain the 256 KiB / 64-script defaults. The source preflight
@@ -329,7 +339,7 @@ engines with `--features css` or `--features js`; the GUI enables both.
 `olive_html::net::{Location, DocumentLoader}` provides explicit URL resolution
 and bounded HTTP(S)/file loading with `--features net`. `load` fetches only the
 requested document; `submit(FormRequest)` explicitly sends a bounded URL-encoded
-GET/POST form navigation; `load_resource` explicitly requests a typed CSS, JS, or PNG/JPEG
+GET/POST form navigation; `load_resource` explicitly requests a typed CSS, JS, or PNG/JPEG/WebP
 image resource. With `net`, `css` and `js`, `resources::PageResources::load`
 collects page resources.
 

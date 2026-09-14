@@ -11,7 +11,9 @@ use cssparser::{
 };
 use selectors::Selector;
 use std::collections::HashMap;
-pub use values::{Color, ComputedStyle, Display, Length, LineHeight, TextAlign, WhiteSpace};
+pub use values::{
+    Color, ComputedStyle, Direction, Display, Length, LineHeight, TextAlign, WhiteSpace,
+};
 use values::{Declaration, PROPERTIES, Value};
 
 pub const MAX_CSS_BYTES: usize = 8 * 1024 * 1024;
@@ -355,6 +357,20 @@ fn declarations(input: &mut Parser<'_, '_>, diagnostics: &mut Diagnostics) -> Ve
 }
 fn user_agent(element: &Element, style: &mut ComputedStyle) {
     let tag = element.name.local.as_ref();
+    if let Some(direction) = element.attribute("dir") {
+        style.direction = match direction.trim().to_ascii_lowercase().as_str() {
+            "rtl" => Direction::Rtl,
+            "auto" => Direction::Auto,
+            "ltr" => Direction::Ltr,
+            _ => style.direction,
+        };
+    } else if let Some(direction) = element.attribute("lang").and_then(language_direction) {
+        // Many real-world pages, including Hebrew news sites, declare the
+        // document language but omit dir on the content subtree. Treat the
+        // language as a UA-level direction hint; author CSS still overrides it
+        // below, and an explicit dir always wins this fallback.
+        style.direction = direction;
+    }
     if matches!(
         tag,
         "html"
@@ -434,5 +450,98 @@ fn user_agent(element: &Element, style: &mut ComputedStyle) {
             }
         }
         _ => {}
+    }
+}
+
+fn language_direction(language: &str) -> Option<Direction> {
+    let primary = language
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .filter(|language| !language.is_empty())?
+        .to_ascii_lowercase();
+    if matches!(
+        primary.as_str(),
+        "ar" | "ckb"
+            | "dv"
+            | "fa"
+            | "he"
+            | "iw"
+            | "ku"
+            | "nqo"
+            | "ps"
+            | "sd"
+            | "syr"
+            | "ug"
+            | "ur"
+            | "yi"
+    ) {
+        Some(Direction::Rtl)
+    } else if matches!(
+        primary.as_str(),
+        "af" | "am"
+            | "az"
+            | "bg"
+            | "bn"
+            | "ca"
+            | "cs"
+            | "da"
+            | "de"
+            | "el"
+            | "en"
+            | "es"
+            | "et"
+            | "eu"
+            | "fi"
+            | "fr"
+            | "gl"
+            | "gu"
+            | "hi"
+            | "hr"
+            | "hu"
+            | "hy"
+            | "id"
+            | "is"
+            | "it"
+            | "ja"
+            | "ka"
+            | "kk"
+            | "km"
+            | "kn"
+            | "ko"
+            | "lo"
+            | "lt"
+            | "lv"
+            | "mk"
+            | "ml"
+            | "mn"
+            | "mr"
+            | "ms"
+            | "my"
+            | "ne"
+            | "nl"
+            | "no"
+            | "pa"
+            | "pl"
+            | "pt"
+            | "ro"
+            | "ru"
+            | "sk"
+            | "sl"
+            | "sq"
+            | "sr"
+            | "sv"
+            | "sw"
+            | "ta"
+            | "te"
+            | "th"
+            | "tr"
+            | "uk"
+            | "vi"
+            | "zh"
+    ) {
+        Some(Direction::Ltr)
+    } else {
+        None
     }
 }

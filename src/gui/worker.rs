@@ -2,7 +2,7 @@
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
 use crate::document::{ClickRequest, LoadedPage, PageUpdate, prepare_page_with_loader};
 use eframe::egui;
-use olive_html::net::{DocumentLoader, FormRequest, Location};
+use olive_html::net::{CookieJar, DocumentLoader, FormRequest, Location};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, Read, Write},
@@ -13,16 +13,34 @@ use std::{
 };
 
 pub const WORKER_ARG: &str = "--olive-tab-worker";
-const MAX_COMMAND_BYTES: usize = 128 * 1024;
+const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 128 * 1024 * 1024;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize)]
 pub enum Command {
-    Load { location: Location, scripting: bool },
+    Load {
+        location: Location,
+        scripting: bool,
+    },
+    LoadWithCookies {
+        location: Location,
+        scripting: bool,
+        cookies: CookieJar,
+        initiator: Option<Location>,
+    },
     Click(ClickRequest),
+    ClickWithCookies {
+        click: ClickRequest,
+        cookies: CookieJar,
+    },
     Submit(FormRequest),
+    SubmitWithCookies {
+        request: FormRequest,
+        cookies: CookieJar,
+        initiator: Option<Location>,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum Event {
@@ -43,11 +61,13 @@ pub struct Worker {
 }
 
 impl Worker {
+    #[allow(dead_code)]
     pub fn spawn(location: Location, scripting: bool, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         Self::spawn_at(&executable, location, scripting, ctx)
     }
 
+    #[allow(dead_code)]
     pub fn spawn_at(
         executable: &Path,
         location: Location,
@@ -64,9 +84,48 @@ impl Worker {
         )
     }
 
+    pub fn spawn_with_cookies(
+        location: Location,
+        scripting: bool,
+        cookies: CookieJar,
+        initiator: Option<Location>,
+        ctx: &egui::Context,
+    ) -> Result<Self, String> {
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        Self::spawn_command_at(
+            &executable,
+            Command::LoadWithCookies {
+                location,
+                scripting,
+                cookies,
+                initiator,
+            },
+            ctx,
+        )
+    }
+
+    #[allow(dead_code)]
     pub fn spawn_form(request: FormRequest, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         Self::spawn_command_at(&executable, Command::Submit(request), ctx)
+    }
+
+    pub fn spawn_form_with_cookies(
+        request: FormRequest,
+        cookies: CookieJar,
+        initiator: Option<Location>,
+        ctx: &egui::Context,
+    ) -> Result<Self, String> {
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        Self::spawn_command_at(
+            &executable,
+            Command::SubmitWithCookies {
+                request,
+                cookies,
+                initiator,
+            },
+            ctx,
+        )
     }
 
     pub fn spawn_command_at(
@@ -162,8 +221,11 @@ impl Worker {
             return Err("The tab is still working. Stop or reload it to continue.".into());
         }
         let timeout = match command {
-            Command::Load { .. } | Command::Submit(_) => LOAD_TIMEOUT,
-            Command::Click(_) => CLICK_TIMEOUT,
+            Command::Load { .. }
+            | Command::LoadWithCookies { .. }
+            | Command::Submit(_)
+            | Command::SubmitWithCookies { .. } => LOAD_TIMEOUT,
+            Command::Click(_) | Command::ClickWithCookies { .. } => CLICK_TIMEOUT,
         };
         self.sender
             .as_ref()
@@ -262,17 +324,52 @@ pub fn run() -> io::Result<()> {
             }
         })?;
     let mut output = io::stdout().lock();
-    let mut prepared = None;
+    let mut prepared: Option<crate::document::PreparedPage> = None;
     for command in commands {
-        let (command, form) = match command {
+        let (command, form, cookies, initiator) = match command {
+            Command::ClickWithCookies { click, cookies } => {
+                if let Some(session) = prepared.as_mut().and_then(|page| page.session.as_mut()) {
+                    session.replace_cookies(cookies);
+                }
+                (Command::Click(click), None, CookieJar::default(), None)
+            }
             Command::Submit(request) => (
                 Command::Load {
                     location: request.location.clone(),
                     scripting: false,
                 },
                 Some(request),
+                CookieJar::default(),
+                None,
             ),
-            command => (command, None),
+            Command::SubmitWithCookies {
+                request,
+                cookies,
+                initiator,
+            } => (
+                Command::Load {
+                    location: request.location.clone(),
+                    scripting: false,
+                },
+                Some(request),
+                cookies,
+                initiator,
+            ),
+            Command::LoadWithCookies {
+                location,
+                scripting,
+                cookies,
+                initiator,
+            } => (
+                Command::Load {
+                    location,
+                    scripting,
+                },
+                None,
+                cookies,
+                initiator,
+            ),
+            command => (command, None, CookieJar::default(), None),
         };
         let event = match command {
             Command::Load {
@@ -284,7 +381,8 @@ pub fn run() -> io::Result<()> {
                     return Err(io::Error::other("Unexpected second load"));
                 }
                 let result = (|| {
-                    let loader = DocumentLoader::new()?;
+                    let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
+                        .with_cookie_initiator(initiator);
                     let source = if let Some(request) = form {
                         loader.submit(request)?
                     } else {
@@ -313,7 +411,10 @@ pub fn run() -> io::Result<()> {
                     Err(error) => Event::Error(error),
                 }
             }
-            Command::Submit(_) => return Err(io::Error::other("Unexpected form command")),
+            Command::LoadWithCookies { .. } | Command::ClickWithCookies { .. } => unreachable!(),
+            Command::Submit(_) | Command::SubmitWithCookies { .. } => {
+                return Err(io::Error::other("Unexpected form command"));
+            }
             Command::Click(click) => match prepared.as_mut().and_then(|page| page.click(click)) {
                 Some(update) => Event::Updated(Box::new(update)),
                 None => Event::Error("No live scripting session. Reload this tab.".into()),

@@ -1,7 +1,7 @@
 #![cfg(feature = "net")]
 
 use flate2::{Compression, write::GzEncoder};
-use olive_html::net::{DocumentLoader, Location, MAX_DOCUMENT_BYTES};
+use olive_html::net::{CookieJar, DocumentLoader, Location, MAX_DOCUMENT_BYTES};
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -63,6 +63,46 @@ fn response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn html_meta_and_webp_resources_keep_response_cookies() {
+    use olive_html::net::ResourceKind;
+    let encoded = b"RIFF\x00\x01\xff\xfeWEBP";
+    let (location, handle) = server(vec![
+        response(
+            "200 OK",
+            "Content-Type: text/html\r\nSet-Cookie: session=one; Path=/; HttpOnly\r\n",
+            b"<meta charset=windows-1252><title>caf\xe9</title>",
+        ),
+        response(
+            "200 OK",
+            "Content-Type: image/webp\r\nSet-Cookie: resource=two; Path=/\r\n",
+            encoded,
+        ),
+    ]);
+    let loader = DocumentLoader::new().unwrap();
+    let loaded = loader.load(location.clone()).unwrap();
+    assert!(String::from_utf8(loaded.bytes).unwrap().contains("café"));
+    let image = loader
+        .load_resource(
+            &location,
+            location.resolve("/picture.webp").unwrap(),
+            ResourceKind::Image,
+            Duration::from_secs(3),
+            1024,
+        )
+        .unwrap();
+    assert_eq!(image.bytes, encoded);
+    let requests = handle.join().unwrap();
+    assert!(
+        requests[1]
+            .to_ascii_lowercase()
+            .contains("cookie: session=one")
+    );
+    assert!(requests[1].to_ascii_lowercase().contains("image/webp"));
+    assert_eq!(loader.cookies().document_cookie(&location), "resource=two");
+    assert_eq!(loader.take_cookie_updates().len(), 2);
+}
+
+#[test]
 fn fetches_html_follows_relative_redirects_and_preserves_final_url() {
     let (location, server) = server(vec![
         response("302 Found", "Location: /docs/page?q=olive\r\n", b""),
@@ -89,6 +129,33 @@ fn fetches_html_follows_relative_redirects_and_preserves_final_url() {
         env!("CARGO_PKG_VERSION")
     )));
     assert!(!requests[1].to_ascii_lowercase().contains("referer:"));
+}
+
+#[test]
+fn cookies_round_trip_across_requests_and_redirects() {
+    let (location, server) = server(vec![
+        response(
+            "302 Found",
+            "Location: /next\r\nSet-Cookie: session=one; Path=/\r\n",
+            b"",
+        ),
+        response(
+            "200 OK",
+            "Content-Type: text/html\r\nSet-Cookie: seen=two; Path=/\r\n",
+            b"<p>ok",
+        ),
+    ]);
+    let loader =
+        DocumentLoader::with_timeout_and_cookies(Duration::from_secs(2), CookieJar::default())
+            .unwrap();
+    loader.load(location).unwrap();
+    let requests = server.join().unwrap();
+    assert!(
+        requests[1]
+            .to_ascii_lowercase()
+            .contains("cookie: session=one")
+    );
+    assert_eq!(loader.take_cookie_updates().len(), 2);
 }
 
 #[test]

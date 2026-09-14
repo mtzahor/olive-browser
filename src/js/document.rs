@@ -1,4 +1,6 @@
 use super::{ErrorKind, Runtime, ScriptError, ScriptOptions, bindings, truncate};
+#[cfg(feature = "net")]
+use crate::net::{CookieJar, CookieUpdate, Location};
 use crate::{Document, ExternalSource, NodeId, NodeKind};
 use std::collections::HashMap;
 
@@ -113,6 +115,59 @@ impl DocumentSession {
         options: ScriptOptions,
         sources: &HashMap<NodeId, ExternalSource>,
     ) -> Self {
+        #[cfg(feature = "net")]
+        {
+            Self::with_sources_inner(document, options, sources, None)
+        }
+        #[cfg(not(feature = "net"))]
+        {
+            Self::with_sources_inner(document, options, sources)
+        }
+    }
+
+    #[cfg(feature = "net")]
+    pub fn with_sources_and_cookies(
+        document: Document,
+        options: ScriptOptions,
+        sources: &HashMap<NodeId, ExternalSource>,
+        cookies: CookieJar,
+        location: Location,
+    ) -> Self {
+        Self::with_sources_inner(document, options, sources, Some((cookies, location)))
+    }
+
+    #[cfg(feature = "net")]
+    fn with_sources_inner(
+        document: Document,
+        options: ScriptOptions,
+        sources: &HashMap<NodeId, ExternalSource>,
+        cookie_state: Option<(CookieJar, Location)>,
+    ) -> Self {
+        let install = |context: &mut boa_engine::Context, document| {
+            if let Some((cookies, location)) = cookie_state.clone() {
+                bindings::install_document_with_cookies(context, document, cookies, location)
+            } else {
+                bindings::install_document(context, document)
+            }
+        };
+        Self::with_sources_impl(document, options, sources, install)
+    }
+
+    #[cfg(not(feature = "net"))]
+    fn with_sources_inner(
+        document: Document,
+        options: ScriptOptions,
+        sources: &HashMap<NodeId, ExternalSource>,
+    ) -> Self {
+        Self::with_sources_impl(document, options, sources, bindings::install_document)
+    }
+
+    fn with_sources_impl(
+        document: Document,
+        options: ScriptOptions,
+        sources: &HashMap<NodeId, ExternalSource>,
+        install: impl Fn(&mut boa_engine::Context, Document) -> boa_engine::JsResult<()>,
+    ) -> Self {
         let mut report = ScriptReport::default();
         // Snapshot only IDs, never sources. Later scripts can change or remove an
         // earlier-discovered element; newly-created scripts never execute this pass.
@@ -152,7 +207,7 @@ impl DocumentSession {
                 };
             }
         };
-        if let Err(error) = bindings::install_document(&mut runtime.context, document) {
+        if let Err(error) = install(&mut runtime.context, document) {
             report.error(
                 None,
                 ScriptError::engine(error, ErrorKind::Runtime),
@@ -255,6 +310,20 @@ impl DocumentSession {
     }
     pub fn report(&self) -> &ScriptReport {
         &self.report
+    }
+    #[cfg(feature = "net")]
+    pub fn take_cookie_updates(&self) -> Vec<CookieUpdate> {
+        self.runtime
+            .as_ref()
+            .map(|runtime| bindings::take_cookie_updates(&runtime.context))
+            .unwrap_or_default()
+    }
+    /// Refresh the browser's shared cookie snapshot before dispatching an event.
+    #[cfg(feature = "net")]
+    pub fn replace_cookies(&mut self, cookies: CookieJar) {
+        if let Some(runtime) = &self.runtime {
+            bindings::replace_cookies(&runtime.context, cookies);
+        }
     }
     pub fn take_alerts(&mut self) -> Vec<String> {
         self.runtime

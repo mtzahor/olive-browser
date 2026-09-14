@@ -1,7 +1,7 @@
-# Security boundary in 0.8.0
+# Security boundary in 0.9.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
-The optional GUI renders text, bounded PNG/JPEG images, and linked/embedded/inline CSS.
+The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
 Local documents run
 inline and external classic JavaScript automatically. Web documents start with
 JavaScript disabled: no script sources are fetched and no handlers run until the
@@ -44,8 +44,14 @@ is escaped before display. URL inputs are capped at 8 KiB and the session's
 Back/Forward stack at 256 entries.
 One navigation load runs per tab. Starting another navigation cancels that tab's
 pending load. Other tabs continue loading and responding independently.
-No cookies, HTTP authentication, automatic Referer headers, persistent network
-cache, downloads or automatic document navigation are enabled.
+Cookies are shared in memory between tabs, with at most 256 cookies and 64 KiB of
+stored data, 4 KiB per cookie, and 256 pending mutations per worker event. Domain/path,
+Secure, HttpOnly, SameSite, Max-Age and Expires are enforced. Public-suffix domains
+and invalid secure prefixes are rejected; scripts cannot read or overwrite HttpOnly
+cookies, and insecure responses cannot overwrite overlapping secure cookies.
+Cookies are not persisted to disk. HTTP authentication,
+automatic Referer headers, persistent network cache, downloads or automatic document
+navigation are not enabled.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
 addresses are allowed, including for subresources; this is not an SSRF-filtering API.
 
@@ -53,8 +59,9 @@ Native forms submit only after user activation, through a fresh document worker.
 Only UTF-8 URL-encoded HTTP(S) GET/POST is supported, with a 64 KiB encoded-body
 limit and the existing 8 KiB URL limit. HTTPS form targets and redirects must stay
 HTTPS. The loader bounds POST responses exactly like GET responses. Redirects
-301/302/303 change POST to GET; 307/308 retain its body. No credentials or Referer
-are added. POST data lives only in memory/worker pipes for the request and is not
+301/302/303 change POST to GET; 307/308 retain its body. Cookie selection accounts
+for the initiating site, method and redirects. No HTTP authentication or Referer
+is added. POST data lives only in memory/worker pipes for the request and is not
 saved to history. Reload and history traversal fetch URLs with GET, without replaying
 POST. A stopped or failed request might already have reached the server.
 Native password widgets mask their display; entered values are not encrypted in memory.
@@ -79,7 +86,7 @@ documented in README.md; multiple instances sharing a file use last-writer wins.
 Page resources resolve against the final document URL and first base href, with
 at most 64 attempts and a shared 20-second network deadline after document loading.
 Each resource is capped at 8 MiB after decompression, with at most 8 MiB of
-external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG images
+external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG/WebP images
 retained per page. Image decoding additionally caps each dimension at 4,096,
 decoder allocation at 32 MiB, and the page at 8,388,608 decoded pixels.
 A response that does not fit the remaining page budget is discarded; its error
@@ -89,8 +96,11 @@ failures. Raising the byte ceilings does not relax VM or DOM execution limits. H
 incorrect CSS/JavaScript MIME types are rejected. HTTPS pages cannot load HTTP
 resources, and web pages cannot load files, including via redirects or base href.
 Local documents can load local and remote sources. Cross-origin classic scripts
-and stylesheets are allowed; no credentials or Referer are sent. Nonempty integrity
-attributes are rejected because integrity verification is not implemented.
+and stylesheets are allowed. Cookies follow domain/path, Secure and SameSite rules;
+cross-site subresources can use only cookies marked SameSite=None; Secure.
+No HTTP authentication or Referer is sent. Nonempty integrity
+attributes are rejected because integrity verification is not implemented. HTML
+encoding prescans examine only the first 1,024 bytes for `<meta charset>` declarations.
 Failures leave other resources and the document available; up to 64 resource
 errors plus one budget notice are retained, at most 1,024 bytes per message.
 Resource collection is a single initial snapshot; CSS imports and dynamically

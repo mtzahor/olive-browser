@@ -75,7 +75,11 @@ pub(super) fn install(context: &mut Context) -> JsResult<()> {
             Attribute::READONLY,
         )
         .property(js_string!("languages"), languages, Attribute::READONLY)
-        .property(js_string!("cookieEnabled"), false, Attribute::READONLY)
+        .property(
+            js_string!("cookieEnabled"),
+            cfg!(feature = "net"),
+            Attribute::READONLY,
+        )
         .property(js_string!("maxTouchPoints"), 0, Attribute::READONLY)
         .build();
     context.register_global_property(js_string!("navigator"), navigator, Attribute::READONLY)

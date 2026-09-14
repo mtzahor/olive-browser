@@ -2,7 +2,10 @@
 use eframe::egui::{self, Color32};
 use olive_html::{
     Document, Element, NodeId, NodeKind,
-    css::{Color, ComputedStyle, Display, Length, LineHeight, StyleBudget, Stylesheet, WhiteSpace},
+    css::{
+        Color, ComputedStyle, Direction, Display, Length, LineHeight, StyleBudget, Stylesheet,
+        WhiteSpace,
+    },
 };
 use std::collections::{HashMap, HashSet};
 
@@ -91,12 +94,14 @@ pub struct Content {
     pub excluded: HashSet<NodeId>,
     pub has_heading: bool,
     pub has_text: bool,
+    pub direction: Direction,
 }
 
 #[derive(Clone, Copy, Default)]
 struct Score {
     text: usize,
     linked: usize,
+    direction: Direction,
 }
 
 impl Score {
@@ -150,6 +155,7 @@ impl Content {
                 Score {
                     text,
                     linked: if linked { text } else { 0 },
+                    direction: style.direction,
                 },
             );
             order.push(id);
@@ -211,6 +217,9 @@ impl Content {
             excluded,
             has_heading,
             has_text: scores.get(&root).is_some_and(|score| score.text > 0),
+            direction: scores
+                .get(&root)
+                .map_or(Direction::Ltr, |score| score.direction),
         }
     }
 }
@@ -313,8 +322,17 @@ pub fn style(element: &Element, parent: ComputedStyle) -> ComputedStyle {
         strike: parent.strike,
         white_space: parent.white_space,
         line_height: parent.line_height,
+        direction: parent.direction,
         ..Default::default()
     };
+    if let Some(direction) = element.attribute("dir") {
+        style.direction = match direction.to_ascii_lowercase().as_str() {
+            "rtl" => olive_html::css::Direction::Rtl,
+            "ltr" => olive_html::css::Direction::Ltr,
+            "auto" => olive_html::css::Direction::Auto,
+            _ => style.direction,
+        };
+    }
     if matches!(
         tag,
         "html"

@@ -11,6 +11,7 @@ use eframe::egui::{
 };
 use olive_html::{
     Document, NodeId, NodeKind,
+    css::Direction,
     css::{Color, ComputedStyle, Display, Length, StyleBudget, Stylesheet, TextAlign, WhiteSpace},
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -68,12 +69,18 @@ impl Style {
 struct Block {
     #[serde(with = "wire_text")]
     job: LayoutJob,
+    #[serde(skip)]
+    visual_job: LayoutJob,
     indent: usize,
     rule: bool,
     style: ComputedStyle,
     #[serde(skip)]
     layout: Option<(f32, f32, Arc<egui::Galley>)>,
     actions: Vec<(Range<usize>, Action)>,
+    #[serde(skip)]
+    visual_actions: Vec<(Range<usize>, Action)>,
+    #[serde(skip)]
+    visual_to_logical: Vec<usize>,
     characters: usize,
 }
 
@@ -286,6 +293,7 @@ impl Page {
         }
         let mut initial = Style::default();
         if let Some(content) = reading {
+            initial.css.direction = content.direction;
             initial.css.font_size = focus::DEFAULT_FONT_SIZE;
             initial.css.color = focus::Theme::Light.ink();
             initial.css.line_height = olive_html::css::LineHeight::Number(1.65);
@@ -569,6 +577,39 @@ impl Page {
             {
                 return Err(invalid());
             }
+            if !block.visual_job.text.is_empty()
+                || !block.visual_to_logical.is_empty()
+                || !block.visual_actions.is_empty()
+            {
+                if block.visual_job.text.chars().count() != count
+                    || block.visual_to_logical.len() != count
+                    || block.visual_actions.len() > count
+                    || block
+                        .visual_to_logical
+                        .iter()
+                        .any(|&source| source >= count)
+                    || block
+                        .visual_actions
+                        .iter()
+                        .any(|(range, _)| range.start > range.end || range.end > count)
+                {
+                    return Err(invalid());
+                }
+                let mut visual_end = 0;
+                for section in &block.visual_job.sections {
+                    let range = section.byte_range.start.0..section.byte_range.end.0;
+                    if range.start != visual_end
+                        || range.is_empty()
+                        || block.visual_job.text.get(range.clone()).is_none()
+                    {
+                        return Err(invalid());
+                    }
+                    visual_end = range.end;
+                }
+                if visual_end != block.visual_job.text.len() {
+                    return Err(invalid());
+                }
+            }
         }
         Ok(())
     }
@@ -601,17 +642,20 @@ impl Page {
         };
         for block in &mut self.blocks {
             restyle(&mut block.style);
-            for section in &mut block.job.sections {
-                let format = &mut section.format;
-                format.font_id.size *= scale;
-                if let Some(height) = &mut format.line_height {
-                    *height *= scale;
+            for job in [&mut block.job, &mut block.visual_job] {
+                for section in &mut job.sections {
+                    let format = &mut section.format;
+                    format.font_id.size *= scale;
+                    if let Some(height) = &mut format.line_height {
+                        *height *= scale;
+                    }
+                    let update_color =
+                        |c: Color32| color(recolor(Color(c.r(), c.g(), c.b(), c.a())));
+                    format.color = update_color(format.color);
+                    format.background = update_color(format.background);
+                    format.underline.color = update_color(format.underline.color);
+                    format.strikethrough.color = update_color(format.strikethrough.color);
                 }
-                let update_color = |c: Color32| color(recolor(Color(c.r(), c.g(), c.b(), c.a())));
-                format.color = update_color(format.color);
-                format.background = update_color(format.background);
-                format.underline.color = update_color(format.underline.color);
-                format.strikethrough.color = update_color(format.strikethrough.color);
             }
             block.layout = None;
         }
@@ -730,32 +774,28 @@ impl Page {
                             (previous - width).abs() > 0.5 || *previous_scale != scale
                         })
                     {
-                        let mut job = block.job.clone();
-                        job.wrap.max_width = if matches!(
-                            block.style.white_space,
-                            WhiteSpace::Pre | WhiteSpace::NoWrap
-                        ) {
-                            f32::INFINITY
-                        } else {
-                            width
-                        };
-                        block.layout =
-                            Some((width, scale, ui.fonts_mut(|fonts| fonts.layout_job(job))));
+                        let galley = layout_bidi(block, ui, width);
+                        block.layout = Some((width, scale, galley));
                     }
                     let galley = block.layout.as_ref().unwrap().2.clone();
-                    let offset = match block.style.text_align {
-                        TextAlign::Left => 0.0,
-                        TextAlign::Center => (width - galley.size().x).max(0.0) / 2.0,
-                        TextAlign::Right => (width - galley.size().x).max(0.0),
+                    let offset = match galley.job.halign {
+                        egui::Align::Min => 0.0,
+                        egui::Align::Center => (width - galley.size().x).max(0.0) / 2.0,
+                        egui::Align::Max => (width - galley.size().x).max(0.0),
                     };
                     let rect = egui::Rect::from_min_size(
                         egui::pos2(x + offset, parent.cursor),
                         galley.size(),
                     );
+                    let galley_origin = match galley.job.halign {
+                        egui::Align::Min => rect.left_top(),
+                        egui::Align::Center => rect.center_top(),
+                        egui::Align::Max => rect.right_top(),
+                    };
                     let response = text_ui.put(
                         rect,
                         egui::Label::new(galley.clone()).selectable(true).sense(
-                            if !block.actions.is_empty() {
+                            if !block.visual_actions.is_empty() {
                                 egui::Sense::click()
                             } else {
                                 egui::Sense::hover()
@@ -766,7 +806,7 @@ impl Page {
                         if let Some(action) = ui
                             .ctx()
                             .pointer_hover_pos()
-                            .and_then(|pos| action_at(block, &galley, pos - rect.min))
+                            .and_then(|pos| action_at(block, &galley, pos - galley_origin))
                         {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             let href = action.link.and_then(|id| self.links.get(&id)).cloned();
@@ -788,7 +828,9 @@ impl Page {
                     }
                     if let Some(matches) = self.find.blocks.get(index) {
                         let active = self.find_current.checked_sub(match_offset);
-                        if let Some(target) = paint_matches(ui, &galley, rect.min, matches, active)
+                        let visual_matches = visual_match_ranges(block, matches);
+                        if let Some(target) =
+                            paint_matches(ui, &galley, galley_origin, &visual_matches, active)
                         {
                             if self.find_scroll {
                                 ui.scroll_to_rect(target, Some(egui::Align::Center));
@@ -927,7 +969,7 @@ fn paint_matches(
     ui: &egui::Ui,
     galley: &egui::Galley,
     origin: egui::Pos2,
-    matches: &[Range<usize>],
+    matches: &[(Range<usize>, usize)],
     active: Option<usize>,
 ) -> Option<egui::Rect> {
     let mut offset = 0;
@@ -935,8 +977,8 @@ fn paint_matches(
     let mut target = None;
     for row in &galley.rows {
         let end = offset + row.glyphs.len();
-        while index < matches.len() && matches[index].start < end {
-            let range = &matches[index];
+        while index < matches.len() && matches[index].0.start < end {
+            let (range, logical_index) = &matches[index];
             let start = range.start.max(offset) - offset;
             let stop = range.end.min(end) - offset;
             if start < stop {
@@ -948,7 +990,7 @@ fn paint_matches(
                             row.pos.y + row.size.y,
                         ),
                 );
-                let current = active == Some(index);
+                let current = active == Some(*logical_index);
                 ui.painter().rect_filled(
                     rect,
                     2.0,
@@ -968,11 +1010,32 @@ fn paint_matches(
             index += 1;
         }
         offset = end + usize::from(row.ends_with_newline);
-        while index < matches.len() && matches[index].end <= offset {
+        while index < matches.len() && matches[index].0.end <= offset {
             index += 1;
         }
     }
     target
+}
+
+fn visual_match_ranges(block: &Block, matches: &[Range<usize>]) -> Vec<(Range<usize>, usize)> {
+    let mut logical_matches = vec![None; block.job.text.chars().count()];
+    for (index, range) in matches.iter().enumerate() {
+        logical_matches[range.clone()].fill(Some(index));
+    }
+    let mut result: Vec<(Range<usize>, usize)> = Vec::new();
+    for (visual, &logical) in block.visual_to_logical.iter().enumerate() {
+        if let Some(index) = logical_matches[logical] {
+            if let Some((range, _)) = result
+                .last_mut()
+                .filter(|(range, previous)| range.end == visual && *previous == index)
+            {
+                range.end += 1;
+            } else {
+                result.push((visual..visual + 1, index));
+            }
+        }
+    }
+    result
 }
 
 // Hit-test actual glyphs, so adjacent links and surrounding text retain their
@@ -985,7 +1048,7 @@ fn action_at(block: &Block, galley: &egui::Galley, position: egui::Vec2) -> Opti
                 position.x >= row.pos.x + glyph.pos.x && position.x < row.pos.x + glyph.max_x()
             })?;
             return block
-                .actions
+                .visual_actions
                 .iter()
                 .find(|(range, _)| range.contains(&(offset + column)))
                 .map(|(_, action)| *action);
@@ -1276,11 +1339,8 @@ impl Builder {
         }
         if self.current.job.text.is_empty() {
             self.current.style = style.css;
-            self.current.job.halign = match style.css.text_align {
-                TextAlign::Left => egui::Align::Min,
-                TextAlign::Center => egui::Align::Center,
-                TextAlign::Right => egui::Align::Max,
-            };
+            self.current.job.halign =
+                text_alignment(style.css.text_align, style.css.direction == Direction::Rtl);
         }
         self.current.indent = style.indent;
         let characters = accepted.chars().count();
@@ -1334,6 +1394,248 @@ impl Builder {
         self.pending_space = trailing_space;
     }
 }
+
+/// Resolve Unicode levels in logical order, wrap that logical text, then apply
+/// the visual ordering separately to each displayed line. Formats, links and
+/// search offsets follow the same character map. Only logical text crosses IPC.
+fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<egui::Galley> {
+    use unicode_bidi::{BidiInfo, Level};
+    let base = match block.style.direction {
+        Direction::Ltr => Some(Level::ltr()),
+        Direction::Rtl => Some(Level::rtl()),
+        Direction::Auto => None,
+    };
+    let bidi = BidiInfo::new(&block.job.text, base);
+    let mut logical_job = block.job.clone();
+    logical_job.halign = text_alignment(
+        block.style.text_align,
+        bidi.paragraphs
+            .first()
+            .is_some_and(|paragraph| paragraph.level.is_rtl()),
+    );
+    logical_job.wrap.max_width = if matches!(
+        block.style.white_space,
+        WhiteSpace::Pre | WhiteSpace::NoWrap
+    ) {
+        f32::INFINITY
+    } else {
+        width
+    };
+    let logical = ui.fonts_mut(|fonts| fonts.layout_job(logical_job));
+    let chars: Vec<_> = block.job.text.char_indices().collect();
+    block.visual_to_logical.clear();
+    block.visual_actions.clear();
+    if !bidi.has_rtl() {
+        block.visual_job = (*logical.job).clone();
+        block.visual_to_logical.extend(0..chars.len());
+        block.visual_actions.clone_from(&block.actions);
+        return logical;
+    }
+    let mut format_index = 0;
+    let formats: Vec<_> = chars
+        .iter()
+        .map(|&(byte, _)| {
+            while block.job.sections[format_index].byte_range.end.0 <= byte {
+                format_index += 1;
+            }
+            &block.job.sections[format_index].format
+        })
+        .collect();
+    let mut actions = vec![None; chars.len()];
+    for (range, action) in &block.actions {
+        actions[range.clone()].fill(Some(*action));
+    }
+    let mut visual_job = LayoutJob {
+        halign: logical.job.halign,
+        ..Default::default()
+    };
+    let mut lines = Vec::with_capacity(logical.rows.len());
+    let mut first = 0;
+    for row in &logical.rows {
+        let end = first + row.glyphs.len();
+        let start_byte = chars
+            .get(first)
+            .map_or(block.job.text.len(), |&(byte, _)| byte);
+        let end_byte = chars
+            .get(end)
+            .map_or(block.job.text.len(), |&(byte, _)| byte);
+        let paragraph_index = bidi
+            .paragraphs
+            .partition_point(|p| p.range.end <= start_byte);
+        let paragraph = bidi
+            .paragraphs
+            .get(paragraph_index)
+            .or_else(|| bidi.paragraphs.last());
+        let para_level = paragraph.map_or(Level::ltr(), |p| p.level);
+        let order = bidi_line_order(&bidi, start_byte..end_byte, first, para_level);
+        let mut line = LayoutJob {
+            halign: logical.job.halign,
+            ..Default::default()
+        };
+        for (source, mirrored) in order {
+            let mut character = chars[source].1;
+            if mirrored {
+                character = unicode_bidi_mirroring::get_mirrored(character).unwrap_or(character);
+            }
+            append_character(&mut line, character, formats[source]);
+            append_character(&mut visual_job, character, formats[source]);
+            let visual = block.visual_to_logical.len();
+            block.visual_to_logical.push(source);
+            if let Some(action) = actions[source] {
+                if let Some((range, previous)) = block
+                    .visual_actions
+                    .last_mut()
+                    .filter(|(range, previous)| range.end == visual && *previous == action)
+                {
+                    let _ = previous;
+                    range.end += 1;
+                } else {
+                    block.visual_actions.push((visual..visual + 1, action));
+                }
+            }
+        }
+        // A hard break remains a logical character; soft wraps do not insert
+        // synthetic characters into selection or find offsets.
+        if row.ends_with_newline {
+            append_character(&mut visual_job, '\n', formats[end]);
+            block.visual_to_logical.push(end);
+        }
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(line));
+        lines.push(galley);
+        first = end + usize::from(row.ends_with_newline);
+    }
+    block.visual_job = visual_job;
+    let mut galley = egui::Galley::concat(
+        Arc::new(block.visual_job.clone()),
+        &lines,
+        logical.pixels_per_point,
+    );
+    for (visual, original) in galley.rows.iter_mut().zip(&logical.rows) {
+        visual.ends_with_newline = original.ends_with_newline;
+    }
+    Arc::new(galley)
+}
+
+fn append_character(job: &mut LayoutJob, character: char, format: &TextFormat) {
+    if let Some(last) = job
+        .sections
+        .last_mut()
+        .filter(|last| last.format == *format)
+    {
+        job.text.push(character);
+        last.byte_range.end.0 = job.text.len();
+    } else {
+        job.append(character.encode_utf8(&mut [0; 4]), 0.0, format.clone());
+    }
+}
+
+/// Apply line-specific L1 whitespace resets to a small slice, avoiding a copy
+/// of the whole paragraph for every wrapped row. L2 comes from unicode-bidi;
+/// grapheme clusters retain base/mark order (L3), and glyph mirroring follows L4.
+fn bidi_line_order(
+    bidi: &unicode_bidi::BidiInfo<'_>,
+    line: Range<usize>,
+    first_character: usize,
+    base: unicode_bidi::Level,
+) -> Vec<(usize, bool)> {
+    use unicode_bidi::{BidiClass::*, BidiInfo};
+    use unicode_segmentation::UnicodeSegmentation;
+    let text = &bidi.text[line.clone()];
+    let mut levels = bidi.levels[line.clone()].to_vec();
+    let mut whitespace_start = Some(0);
+    let mut previous_level = base;
+    for (byte, character) in text.char_indices() {
+        let end = byte + character.len_utf8();
+        match bidi.original_classes[line.start + byte] {
+            B | S => {
+                let start = whitespace_start.take().unwrap_or(byte);
+                levels[start..end].fill(base);
+            }
+            WS | FSI | LRI | RLI | PDI => {
+                whitespace_start.get_or_insert(byte);
+            }
+            RLE | LRE | RLO | LRO | PDF | BN => {
+                whitespace_start.get_or_insert(byte);
+                levels[byte..end].fill(previous_level);
+            }
+            _ => {
+                whitespace_start = None;
+            }
+        }
+        previous_level = levels[byte];
+    }
+    if let Some(start) = whitespace_start {
+        levels[start..].fill(base);
+    }
+    let mut next_character = first_character;
+    let clusters: Vec<_> = text
+        .grapheme_indices(true)
+        .map(|(byte, cluster)| {
+            let start = next_character;
+            next_character += cluster.chars().count();
+            let bidi_class = bidi.original_classes[line.start + byte];
+            (
+                start..next_character,
+                levels[byte],
+                levels[byte].is_rtl() && matches!(bidi_class, R | AL),
+            )
+        })
+        .collect();
+    let cluster_levels: Vec<_> = clusters.iter().map(|(_, level, _)| *level).collect();
+    // epaint delegates each script run to HarfRust. HarfRust already emits
+    // RTL glyphs in visual glyph order, so reverse only the order of visual
+    // runs here and keep the characters inside an RTL run logical. Reversing
+    // both would make Hebrew/Arabic words read backwards a second time.
+    let visual_clusters = BidiInfo::reorder_visual(&cluster_levels);
+    let mut result = Vec::with_capacity(next_character - first_character);
+    let mut visual_index = 0;
+    while visual_index < visual_clusters.len() {
+        let index = visual_clusters[visual_index];
+        let rtl_text = clusters[index].2;
+        let mut end = visual_index + 1;
+        if rtl_text {
+            while end < visual_clusters.len() && clusters[visual_clusters[end]].2 {
+                end += 1;
+            }
+        }
+        let indices = &visual_clusters[visual_index..end];
+        if rtl_text {
+            for &index in indices.iter().rev() {
+                let (range, level, _) = &clusters[index];
+                result.extend(range.clone().map(|source| (source, level.is_rtl())));
+            }
+        } else {
+            for &index in indices {
+                let (range, level, _) = &clusters[index];
+                result.extend(range.clone().map(|source| (source, level.is_rtl())));
+            }
+        }
+        visual_index = end;
+    }
+    result
+}
+
+fn text_alignment(align: TextAlign, rtl: bool) -> egui::Align {
+    match align {
+        TextAlign::Left => egui::Align::Min,
+        TextAlign::Right => egui::Align::Max,
+        TextAlign::Center => egui::Align::Center,
+        TextAlign::Start => {
+            if rtl {
+                egui::Align::Max
+            } else {
+                egui::Align::Min
+            }
+        }
+        TextAlign::End => {
+            if rtl {
+                egui::Align::Min
+            } else {
+                egui::Align::Max
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1357,11 +1659,96 @@ mod tests {
     }
 
     #[test]
+    fn unicode_bidi_reorders_visual_text_but_keeps_logical_search_text() {
+        let mut page = page("<html lang=he><body><p>שלום world 123</p></body></html>");
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            page.show(ui);
+        });
+        output.textures_delta.clear();
+        assert_eq!(texts(&page), ["שלום world 123"]);
+        assert_eq!(page.blocks[0].visual_job.text, "world 123 שלום");
+        let rendered: String = page.blocks[0]
+            .layout
+            .as_ref()
+            .unwrap()
+            .2
+            .rows
+            .iter()
+            .flat_map(|row| &row.glyphs)
+            .filter(|glyph| glyph.advance_width > 0.0)
+            .map(|glyph| glyph.chr)
+            .collect();
+        assert_eq!(rendered, "world 123 םולש");
+        assert_eq!(page.blocks[0].visual_to_logical.len(), 14);
+        assert_eq!(page.find_query("שלום"), 1);
+        assert_eq!(
+            visual_match_ranges(&page.blocks[0], &page.find.blocks[0]),
+            [(10..14, 0)]
+        );
+        let reading =
+            reading("<html dir=rtl><body><article><p>שלום world 123</p></article></body></html>");
+        assert_eq!(reading.blocks[0].style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn bidi_handles_brackets_combining_marks_overrides_and_wrapped_links() {
+        let mut page = page(
+            "<p dir=rtl><a href='/hebrew'>שָׁלוֹם</a> (123) abc</p><p dir=auto>אבג דהו זחט יכל מנס עפר צקת</p><p dir=ltr>abc &#x202e;DEF&#x202c;</p>",
+        );
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        let mut wide = Vec::new();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            for block in &mut page.blocks {
+                layout_bidi(block, ui, 800.0);
+                wide.push(block.visual_job.text.clone());
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(wide[0], "abc (123) שָׁלוֹם");
+        assert!(wide[2].contains("FED"));
+        let block = &page.blocks[0];
+        assert_eq!(block.visual_actions.len(), 1);
+        let (range, action) = &block.visual_actions[0];
+        assert_eq!(
+            block
+                .visual_job
+                .text
+                .chars()
+                .skip(range.start)
+                .take(range.len())
+                .collect::<String>(),
+            "שָׁלוֹם"
+        );
+        assert!(action.link.is_some());
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let block = &mut page.blocks[1];
+            let galley = layout_bidi(block, ui, 80.0);
+            assert!(galley.rows.len() > 1);
+            let first_line: String = galley.rows[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.chr)
+                .collect();
+            assert!(first_line.contains("גבא"), "{first_line}");
+            let mut offsets = block.visual_to_logical.clone();
+            offsets.sort_unstable();
+            assert_eq!(
+                offsets,
+                (0..block.job.text.chars().count()).collect::<Vec<_>>()
+            );
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn normal_command_and_middle_clicks_keep_the_same_link_and_target() {
         let ctx = egui::Context::default();
-        let doc = parse("<a href='/next' onclick='alert(1)'>Open another page</a>")
-            .unwrap()
-            .document;
+        let doc =
+            parse("<p dir=rtl><a href='/next' onclick='alert(1)'>שלום Open another page</a></p>")
+                .unwrap()
+                .document;
         let mut page = Page::from_document(&doc);
         let mut output = ctx.run_ui(Default::default(), |ui| {
             page.show(ui);
@@ -1370,8 +1757,8 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Open another page" => {
-                    Some(text.pos + egui::vec2(8.0, 8.0))
+                egui::Shape::Text(text) if text.galley.text().contains("Open another page") => {
+                    Some(text.pos + text.galley.rows[0].rect().center().to_vec2())
                 }
                 _ => None,
             })

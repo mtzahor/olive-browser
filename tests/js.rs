@@ -1,5 +1,7 @@
 #![cfg(feature = "js")]
 use olive_html::js::{DocumentSession, ErrorKind, Runtime, ScriptOptions, run_document};
+#[cfg(feature = "net")]
+use olive_html::net::{CookieJar, Location};
 use olive_html::{Document, NodeId, NodeKind, ParseOptions, parse, parse_utf8};
 use std::{collections::HashSet, io};
 
@@ -587,7 +589,75 @@ fn navigator_and_tag_collection_support_common_bootstrap_scripts() {
     assert_eq!(report.executed, 2);
     assert_eq!(
         report.console,
-        ["true en-US en-US false", "false", "2 2", "wrong parent"]
+        [
+            format!(
+                "true en-US en-US {}",
+                if cfg!(feature = "net") {
+                    "true"
+                } else {
+                    "false"
+                }
+            ),
+            "false".into(),
+            "2 2".into(),
+            "wrong parent".into(),
+        ]
     );
     integrity(&document);
+}
+
+#[cfg(feature = "net")]
+#[test]
+fn document_cookie_is_available_to_scripts_and_returns_cookie_mutations() {
+    let location = Location::from_input("https://example.com/app/page").unwrap();
+    let document = parse(
+        "<script>document.cookie='from-script=one; Path=/app'; console.log(document.cookie, navigator.cookieEnabled)</script>",
+    )
+    .unwrap()
+    .document;
+    let session = DocumentSession::with_sources_and_cookies(
+        document,
+        ScriptOptions::default(),
+        &Default::default(),
+        CookieJar::default(),
+        location.clone(),
+    );
+    assert_eq!(session.report().console, ["from-script=one true"]);
+    let updates = session.take_cookie_updates();
+    assert_eq!(updates.len(), 1);
+    let mut jar = CookieJar::default();
+    jar.apply_updates(&updates);
+    assert_eq!(jar.document_cookie(&location), "from-script=one");
+}
+
+#[cfg(feature = "net")]
+#[test]
+fn document_cookie_refreshes_from_other_tabs_before_a_click() {
+    let location = Location::from_input("https://example.com/").unwrap();
+    let document = parse("<title id=result></title><button onclick='document.title=document.cookie; document.cookie=\"click=done; Path=/\"'>Read cookies</button>").unwrap().document;
+    let target = document
+        .descendants(document.root())
+        .find(|&id| {
+            document
+                .node(id)
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| element.name.local.as_ref() == "button")
+        })
+        .unwrap();
+    let mut session = DocumentSession::with_sources_and_cookies(
+        document,
+        ScriptOptions::default(),
+        &Default::default(),
+        CookieJar::default(),
+        location.clone(),
+    );
+    let mut shared = CookieJar::default();
+    shared.set_document_cookie(&location, "other=tab; Path=/");
+    session.replace_cookies(shared.clone());
+    assert!(session.click(target));
+    session.with_document(|document| {
+        assert_eq!(text(document, "result"), "other=tab");
+    });
+    shared.apply_updates(&session.take_cookie_updates());
+    assert_eq!(shared.document_cookie(&location), "other=tab; click=done");
 }
