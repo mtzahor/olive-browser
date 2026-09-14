@@ -40,7 +40,7 @@ gui = ["css", "js", "net", "dep:eframe", "dep:epaint", "dep:base64", "dep:image"
 
 [dependencies]
 html5ever = "0.39.0"
-cssparser = { version = "0.37.0", optional = true }
+cssparser = { version = "0.38.0", optional = true }
 # Boa exposes its total VM instruction counter through the `fuzz` feature.
 boa_engine = { version = "0.22.0", optional = true, default-features = false, features = ["annex-b", "fuzz"] }
 boa_gc = { version = "0.22.0", optional = true }
