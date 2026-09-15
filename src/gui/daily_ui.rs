@@ -151,10 +151,10 @@ impl DailyWindows {
                             );
                             ui.horizontal(|ui| {
                                 ui.label(&item.state);
-                                if item.state == "Downloading…" || item.state == "Starting…" {
-                                    if ui.button("Cancel").clicked() {
-                                        cancel_id = Some(item.id);
-                                    }
+                                if (item.state == "Downloading…" || item.state == "Starting…")
+                                    && ui.button("Cancel").clicked()
+                                {
+                                    cancel_id = Some(item.id);
                                 }
                             });
                             ui.separator();
