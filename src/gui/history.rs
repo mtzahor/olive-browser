@@ -197,7 +197,7 @@ impl BrowsingHistory {
     }
 }
 
-fn bounded_title(title: &str) -> String {
+pub(crate) fn bounded_title(title: &str) -> String {
     let mut result = String::new();
     for word in title.split_whitespace() {
         if !result.is_empty() && result.len() < MAX_TITLE_BYTES {
@@ -287,7 +287,7 @@ fn write_entries(path: &Path, entries: &[HistoryEntry]) -> Result<(), String> {
     Ok(())
 }
 
-fn default_path() -> Result<PathBuf, String> {
+pub(crate) fn default_path() -> Result<PathBuf, String> {
     let env_path = |name| {
         std::env::var_os(name)
             .filter(|value| !value.is_empty())
@@ -295,6 +295,9 @@ fn default_path() -> Result<PathBuf, String> {
     };
     if let Some(path) = env_path("OLIVE_HISTORY_FILE") {
         return Ok(path);
+    }
+    if let Some(path) = env_path("OLIVE_PROFILE_DIR") {
+        return Ok(path.join("history.json"));
     }
     #[cfg(target_os = "macos")]
     let directory =

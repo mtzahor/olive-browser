@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 — Daily-driver usability
+
+- Add persistent bookmarks, settings, page zoom and session restore with bounded,
+  versioned atomic profile storage.
+- Add a streaming download manager with progress, cancellation, safe file names,
+  redirect policy and a 100 MiB limit.
+- Add toolbar windows for bookmarks, downloads and settings; restore tab addresses
+  with web JavaScript disabled and preserve per-tab zoom and reading preferences.
+
 ## 0.9.0 — Web compatibility
 
 - Retain bounded session cookies across redirects, subresources, reloads and tabs;

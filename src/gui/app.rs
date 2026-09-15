@@ -1,5 +1,7 @@
 use crate::{
+    daily_ui::DailyWindows,
     document::{ClickRequest, LoadedPage},
+    downloads::Downloads,
     find::FindBar,
     focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings, Theme as FocusTheme},
     forms::{Activation, Kind},
@@ -7,9 +9,11 @@ use crate::{
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
+    profile::{MAX_ZOOM, MIN_ZOOM, Profile, SavedTab},
     render::{INK, ImageTextureCache, OLIVE},
     ui_icons::{self, Icon, IconButton},
     worker::{Command, Event, Worker},
+    zoom,
 };
 use eframe::egui::{self, Color32, RichText};
 use olive_html::net::{CookieJar, Location};
@@ -28,6 +32,9 @@ struct Shared {
     browsing_history: BrowsingHistory,
     history_window: HistoryWindow,
     cookies: CookieJar,
+    profile: Profile,
+    downloads: Downloads,
+    daily_windows: DailyWindows,
 }
 
 pub struct Tab {
@@ -49,6 +56,7 @@ pub struct Tab {
     focus_mode: bool,
     focus_panel: bool,
     focus_settings: FocusSettings,
+    zoom: u16,
 }
 
 impl Tab {
@@ -164,6 +172,7 @@ impl Tab {
             focus_mode: false,
             focus_panel: true,
             focus_settings: FocusSettings::default(),
+            zoom: 100,
         }
     }
 
@@ -532,6 +541,24 @@ impl Tab {
             || shortcut(egui::Modifiers::NONE, egui::Key::F5);
         let mut go = false;
         let mut toggle_scripts = false;
+        let mut toggle_bookmark = false;
+        let mut show_bookmarks = false;
+        let mut show_settings = false;
+        let mut show_downloads = false;
+        let mut download_current = false;
+        let mut zoom_in = shortcut(egui::Modifiers::COMMAND, egui::Key::Plus)
+            || shortcut(egui::Modifiers::COMMAND, egui::Key::Equals);
+        let mut zoom_out = shortcut(egui::Modifiers::COMMAND, egui::Key::Minus);
+        let mut zoom_reset = shortcut(egui::Modifiers::COMMAND, egui::Key::Num0);
+        if zoom_in {
+            self.zoom = zoom::step(self.zoom, true);
+        }
+        if zoom_out {
+            self.zoom = zoom::step(self.zoom, false);
+        }
+        if zoom_reset {
+            self.zoom = 100;
+        }
         let mut link = None;
         let mut form_activation = None;
         let mut link_new_tab = false;
@@ -596,12 +623,14 @@ impl Tab {
                                 .size()
                                 .x
                         };
-                        let trailing_width = 4.0 * 36.0
-                            + 4.0 * 6.0
+                        let trailing_width = 5.0 * 36.0
+                            + 5.0 * 6.0
                             + if compact {
                                 0.0
                             } else {
-                                label_width("Open…")
+                                3.0 * 36.0
+                                    + 3.0 * 6.0
+                                    + label_width("Open…")
                                     + label_width("History")
                                     + label_width("Focus")
                                     + 3.0 * 7.0
@@ -630,6 +659,26 @@ impl Tab {
                             .add(IconButton::icon_only(Icon::Go, "Go").primary())
                             .on_hover_text("Open address")
                             .clicked();
+                        if let Some(loaded) = &self.loaded {
+                            let marked = shared.profile.is_bookmarked(loaded.location.as_str());
+                            let mut bookmark = IconButton::icon_only(
+                                Icon::Star,
+                                if marked {
+                                    "Remove bookmark"
+                                } else {
+                                    "Add bookmark"
+                                },
+                            );
+                            bookmark.button = bookmark.button.selected(marked);
+                            toggle_bookmark |= ui
+                                .add(bookmark)
+                                .on_hover_text(if marked {
+                                    "Remove bookmark"
+                                } else {
+                                    "Add bookmark"
+                                })
+                                .clicked();
+                        }
                         let readable = self
                             .loaded
                             .as_ref()
@@ -680,6 +729,17 @@ impl Tab {
                                 "Browsing history (Cmd/Ctrl+Shift+H)"
                             })
                             .clicked();
+                        if !compact {
+                            show_bookmarks |= ui
+                                .add(IconButton::icon_only(Icon::Bookmark, "Bookmarks"))
+                                .clicked();
+                            show_downloads |= ui
+                                .add(IconButton::icon_only(Icon::Download, "Downloads"))
+                                .clicked();
+                            show_settings |= ui
+                                .add(IconButton::icon_only(Icon::Settings, "Settings"))
+                                .clicked();
+                        }
                     });
                 });
             egui::Panel::bottom("status")
@@ -705,6 +765,10 @@ impl Tab {
                         }).unwrap_or_else(|| "Ready".into())
                     };
                     ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
+                    zoom_out |= ui.add(IconButton::icon_only(Icon::Minus, "Zoom out").small()).on_hover_text("Zoom out (Cmd/Ctrl−)").clicked();
+                    ui.label(format!("{}%", self.zoom)).on_hover_text("Page zoom");
+                    zoom_in |= ui.add(IconButton::icon_only(Icon::Plus, "Zoom in").small()).on_hover_text("Zoom in (Cmd/Ctrl+)").clicked();
+                    zoom_reset |= ui.button("Reset").on_hover_text("Reset page zoom (Cmd/Ctrl+0)").clicked();
                     if let Some(loaded) = &self.loaded {
                         if ui.add(IconButton::new(Icon::Search, "Find").small()).on_hover_text("Find in page (Cmd/Ctrl+F)").clicked() {
                             self.find.open = true; self.find.focus = true; self.find.scroll = true;
@@ -715,6 +779,10 @@ impl Tab {
                                 if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
                             ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run in this tab's process without an OS security sandbox. New addresses start with web JavaScript disabled.").clicked();
                         }
+                        show_bookmarks |= ui.add(IconButton::icon_only(Icon::Bookmark, "Bookmarks").small()).clicked();
+                        show_downloads |= ui.add(IconButton::icon_only(Icon::Download, "Downloads").small()).clicked();
+                        show_settings |= ui.add(IconButton::icon_only(Icon::Settings, "Settings").small()).clicked();
+                        if ui.add(IconButton::new(Icon::Download, "Download").small()).on_hover_text("Save this page").clicked() { download_current = true; }
                         if loaded.resources.attempted > 0 || loaded.resources.limited {
                             ui_icons::menu(ui, if loaded.resources.diagnostics.is_empty() { Icon::Resources } else { Icon::Warning }, if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
                                 ui.label(format!("{} of {} resources loaded", loaded.resources.loaded, loaded.resources.attempted));
@@ -773,6 +841,11 @@ impl Tab {
                                     .weak(),
                             );
                         }
+                    }
+                    if self.loaded.is_none() {
+                        show_bookmarks |= ui.add(IconButton::icon_only(Icon::Bookmark, "Bookmarks").small()).clicked();
+                        show_downloads |= ui.add(IconButton::icon_only(Icon::Download, "Downloads").small()).clicked();
+                        show_settings |= ui.add(IconButton::icon_only(Icon::Settings, "Settings").small()).clicked();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
@@ -848,7 +921,10 @@ impl Tab {
                                     }
                                     if let Some(click) =
                                         ui.push_id((self.id, self.generation), |ui| {
-                                            ui.add_enabled_ui(!busy && !self.crashed && !self.worker.as_ref().is_some_and(Worker::busy), |ui| page.show_with_textures(ui, &mut self.image_textures)).inner
+                                            ui.add_enabled_ui(!busy && !self.crashed && !self.worker.as_ref().is_some_and(Worker::busy), |ui| {
+                                                let page_zoom = self.zoom;
+                                                zoom::show(ui, self.id, page_zoom, |ui| page.show_with_textures(ui, &mut self.image_textures))
+                                            }).inner
                                         }).inner
                                     {
                                         link = click.href;
@@ -928,6 +1004,38 @@ impl Tab {
         if show_history {
             shared.history_window.toggle();
         }
+        if show_bookmarks {
+            shared.daily_windows.bookmarks = true;
+        }
+        if show_settings {
+            shared.daily_windows.settings = true;
+        }
+        if show_downloads {
+            shared.downloads.open = true;
+        }
+        if toggle_bookmark {
+            if let Some(loaded) = &self.loaded {
+                if let Err(error) = shared
+                    .profile
+                    .toggle_bookmark(&loaded.location, &loaded.page.title)
+                {
+                    self.error = Some(error);
+                }
+            }
+        }
+        if download_current {
+            if let Some(loaded) = &self.loaded {
+                shared.downloads.start(
+                    loaded.location.clone(),
+                    shared.profile.data.settings.download_directory.clone(),
+                );
+                shared.downloads.open = true;
+            }
+        }
+        let daily_location =
+            shared
+                .daily_windows
+                .show(&ctx, &mut shared.profile, &mut shared.downloads);
         let history_location =
             shared
                 .history_window
@@ -940,7 +1048,9 @@ impl Tab {
         if choose {
             self.choose_file(&ctx, shared);
         } else {
-            if let Some(location) = history_location {
+            if let Some(location) = history_location
+                .or_else(|| daily_location.and_then(|url| Location::from_input(&url).ok()))
+            {
                 self.open(location, Navigation::New, &ctx, shared);
             } else if go {
                 let location = Location::from_input(&self.address);
@@ -1034,12 +1144,16 @@ impl OliveApp {
             egui::TextureOptions::LINEAR,
         );
 
+        let profile = Profile::load_default();
         let mut app = Self {
             shared: Shared {
                 icon,
                 browsing_history: BrowsingHistory::load_default(),
                 history_window: HistoryWindow::default(),
                 cookies: CookieJar::default(),
+                profile,
+                downloads: Downloads::default(),
+                daily_windows: DailyWindows::default(),
             },
             tabs: vec![Tab::new(0)],
             active: 0,
@@ -1047,12 +1161,44 @@ impl OliveApp {
             focus_address: source.is_none(),
             reveal_tab: false,
         };
+        let defaults = app.shared.profile.data.settings.clone();
+        app.tabs[0].zoom = defaults.default_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        app.tabs[0].focus_settings = defaults.focus;
         if let Some(source) = source {
             let location = match source.to_str() {
                 Some(input) => Location::from_input(input),
                 None => Location::from_path(PathBuf::from(source)),
             };
             app.tabs[0].open_result(location, Navigation::New, ctx, &mut app.shared);
+        } else if app.shared.profile.data.settings.restore_session {
+            let session = app.shared.profile.data.session.clone();
+            if !session.tabs.is_empty() {
+                app.tabs.clear();
+                for saved in session.tabs.into_iter().take(MAX_TABS) {
+                    let mut tab = Tab::new(app.next_id);
+                    app.next_id += 1;
+                    tab.zoom = saved.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+                    tab.focus_settings = saved.focus;
+                    if let Some(url) = saved.url {
+                        if let Ok(location) = Location::from_input(&url) {
+                            tab.open_with_scripts(
+                                location,
+                                Navigation::New,
+                                ctx,
+                                false,
+                                &mut app.shared,
+                            );
+                        }
+                    }
+                    app.tabs.push(tab);
+                }
+                if app.tabs.is_empty() {
+                    app.tabs.push(Tab::new(app.next_id));
+                    app.next_id += 1;
+                }
+                app.active = session.active.min(app.tabs.len() - 1);
+                app.focus_address = false;
+            }
         }
         app
     }
@@ -1065,6 +1211,14 @@ impl OliveApp {
         }
         let mut tab = Tab::new(self.next_id);
         self.next_id += 1;
+        tab.zoom = self
+            .shared
+            .profile
+            .data
+            .settings
+            .default_zoom
+            .clamp(MIN_ZOOM, MAX_ZOOM);
+        tab.focus_settings = self.shared.profile.data.settings.focus;
         self.focus_address = location.is_none();
         if let Some(location) = location {
             tab.opener = self.tabs[self.active]
@@ -1204,6 +1358,7 @@ impl eframe::App for OliveApp {
         PAPER.to_normalized_gamma_f32()
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.shared.downloads.poll(ctx);
         for tab in &mut self.tabs {
             tab.receive(ctx, &mut self.shared);
         }
@@ -1264,6 +1419,20 @@ impl eframe::App for OliveApp {
         if let Some(location) = self.tabs[self.active].ui(ui, &mut self.shared, autofocus) {
             self.new_tab(Some(location), &ctx);
         }
+        self.shared.profile.data.session.tabs = self
+            .tabs
+            .iter()
+            .map(|tab| SavedTab {
+                url: tab
+                    .loaded
+                    .as_ref()
+                    .map(|loaded| loaded.location.as_str().to_owned()),
+                zoom: tab.zoom,
+                focus: tab.focus_settings,
+            })
+            .collect();
+        self.shared.profile.data.session.active = self.active;
+        self.shared.profile.save_if_changed();
         let title: String = self.tabs[self.active].title().chars().take(200).collect();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
             "{title} — Olive Browser"
@@ -1299,6 +1468,9 @@ mod tests {
             browsing_history: BrowsingHistory::default(),
             history_window: HistoryWindow::default(),
             cookies: CookieJar::default(),
+            profile: Profile::default(),
+            downloads: Downloads::default(),
+            daily_windows: DailyWindows::default(),
         };
         shared
             .browsing_history

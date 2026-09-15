@@ -9,6 +9,7 @@ use eframe::egui::{
 #[derive(Clone, Copy)]
 pub enum Icon {
     Plus,
+    Minus,
     Search,
     Back,
     Forward,
@@ -26,6 +27,10 @@ pub enum Icon {
     Page,
     Focus,
     Appearance,
+    Bookmark,
+    Star,
+    Download,
+    Settings,
 }
 
 impl Icon {
@@ -60,6 +65,7 @@ impl Icon {
                 path(&[[5.0, 12.0], [19.0, 12.0]]);
                 path(&[[12.0, 5.0], [12.0, 19.0]]);
             }
+            Self::Minus => path(&[[5.0, 12.0], [19.0, 12.0]]),
             Self::Focus => {
                 path(&[[8.0, 3.0], [3.0, 3.0], [3.0, 8.0]]);
                 path(&[[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]]);
@@ -74,6 +80,44 @@ impl Icon {
                 path(&[[5.0, 14.0], [13.0, 14.0]]);
                 path(&[[17.0, 10.0], [21.0, 10.0], [21.0, 19.0]]);
                 path(&[[21.0, 14.0], [17.0, 14.0], [17.0, 19.0], [21.0, 19.0]]);
+            }
+            Self::Bookmark => {
+                path(&[
+                    [5.0, 4.0],
+                    [19.0, 4.0],
+                    [19.0, 21.0],
+                    [12.0, 17.0],
+                    [5.0, 21.0],
+                    [5.0, 4.0],
+                ]);
+            }
+            Self::Star => {
+                let points: Vec<[f32; 2]> = (0..10)
+                    .map(|index| {
+                        let angle = -std::f32::consts::FRAC_PI_2
+                            + index as f32 * std::f32::consts::PI / 5.0;
+                        let radius = if index % 2 == 0 { 9.0 } else { 4.0 };
+                        [12.0 + radius * angle.cos(), 12.0 + radius * angle.sin()]
+                    })
+                    .collect();
+                path(&points);
+                path(&[[points[9][0], points[9][1]], [points[0][0], points[0][1]]]);
+            }
+            Self::Download => {
+                path(&[[12.0, 3.0], [12.0, 16.0]]);
+                path(&[[7.0, 11.0], [12.0, 16.0], [17.0, 11.0]]);
+                path(&[[4.0, 21.0], [20.0, 21.0]]);
+            }
+            Self::Settings => {
+                arc(12.0, 12.0, 7.0, 0.0, 360.0);
+                painter.circle_filled(point(12.0, 12.0), 2.0 * scale, color);
+                for angle in [0.0_f32, 60.0, 120.0, 180.0, 240.0, 300.0] {
+                    let a = angle.to_radians();
+                    path(&[
+                        [12.0 + 8.0 * a.cos(), 12.0 + 8.0 * a.sin()],
+                        [12.0 + 10.0 * a.cos(), 12.0 + 10.0 * a.sin()],
+                    ]);
+                }
             }
             Self::Back => {
                 path(&[[19.0, 12.0], [5.0, 12.0]]);

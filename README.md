@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.9.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.10.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -155,7 +155,14 @@ appear as an amber badge on the **History** button and in the history window;
 browsing continues with history in memory. An unreadable or unsupported file is
 preserved until you explicitly clear history. History is intended for one running Olive instance
 per file; simultaneous instances can overwrite each other's changes. History
-does not restore tabs, page state, or the Back/Forward stack at startup.
+The session profile restores open addresses, page zoom and Focus preferences at startup;
+page contents and Back/Forward stacks are reloaded rather than serialized.
+
+Bookmarks, settings and the session profile are stored beside history in `profile.json`.
+Set `OLIVE_PROFILE_DIR` to use an isolated profile directory. The **Bookmarks**,
+**Downloads** and **Settings** buttons are available in the toolbar. Page zoom ranges
+from 50% to 200% with `Cmd/Ctrl`+`+`, `-` and `0`; downloads are bounded to 100 MiB
+and use a temporary file before publishing the completed result.
 
 Documents load independently in their tab processes. Redirects update the displayed URL;
 failed loads retain the previous page and history. HTTP error pages such as 404
@@ -169,8 +176,9 @@ the HTML declaration and then UTF-8. Responses are capped at 1 MiB after decompr
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
 The viewer renders text, basic boxes, PNG, JPEG and WebP images, and linked/embedded/inline styles.
-GIF, SVG and CSS background images, downloads, HTTP authentication and restoring tabs
-across launches are not implemented. Cookies are shared in memory between tabs and
+GIF, SVG and CSS background images and HTTP authentication are not implemented. Downloads,
+bookmarks, page zoom, persistent settings and restoring tabs across launches are supported.
+Cookies are shared in memory between tabs and
 discarded when the browser closes. Domain/path scoping, Secure, HttpOnly, SameSite,
 Max-Age and Expires are supported, with a 256-cookie / 64 KiB jar limit and a 4 KiB
 per-cookie limit. Public-suffix domains and invalid secure cookie prefixes are rejected.

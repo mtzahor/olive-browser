@@ -1,7 +1,9 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
+mod daily_ui;
 mod document;
+mod downloads;
 mod find;
 mod focus;
 mod fonts;
@@ -10,9 +12,11 @@ mod history;
 mod history_ui;
 mod icon;
 mod navigation;
+mod profile;
 mod render;
 mod ui_icons;
 mod worker;
+mod zoom;
 
 use eframe::egui;
 
