@@ -253,17 +253,17 @@ pub(super) struct Declaration {
     pub value: Value,
     pub important: bool,
 }
-type Error<'i> = cssparser::ParseError<'i, ()>;
+type Error = cssparser::ParseError<()>;
 
-fn keyword<'i>(input: &mut Parser<'i, '_>) -> Result<String, Error<'i>> {
+fn keyword(input: &mut Parser<'_>) -> Result<String, Error> {
     Ok(input.expect_ident()?.to_ascii_lowercase())
 }
-fn length<'i>(
-    input: &mut Parser<'i, '_>,
+fn length(
+    input: &mut Parser<'_>,
     auto: bool,
     negative: bool,
     percent: bool,
-) -> Result<Length, Error<'i>> {
+) -> Result<Length, Error> {
     let value = match input.next()? {
         Token::Number { value: 0.0, .. } => Length::Px(0.0),
         Token::Dimension { value, unit, .. }
@@ -273,7 +273,7 @@ fn length<'i>(
                 "px" => Length::Px(*value),
                 "em" => Length::Em(*value),
                 "rem" => Length::Rem(*value),
-                _ => return Err(input.new_custom_error(())),
+                _ => return Err(cssparser::ParseError::custom(())),
             }
         }
         Token::Percentage { unit_value, .. }
@@ -282,11 +282,11 @@ fn length<'i>(
             Length::Percent(*unit_value)
         }
         Token::Ident(s) if auto && s.eq_ignore_ascii_case("auto") => Length::Auto,
-        _ => return Err(input.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
     Ok(value)
 }
-fn component<'i>(input: &mut Parser<'i, '_>, alpha: bool) -> Result<f32, Error<'i>> {
+fn component(input: &mut Parser<'_>, alpha: bool) -> Result<f32, Error> {
     let n = match input.next()? {
         Token::Number { value, .. } => {
             if alpha {
@@ -296,20 +296,20 @@ fn component<'i>(input: &mut Parser<'i, '_>, alpha: bool) -> Result<f32, Error<'
             }
         }
         Token::Percentage { unit_value, .. } => *unit_value,
-        _ => return Err(input.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
     if n.is_finite() {
         Ok(n.clamp(0.0, 1.0))
     } else {
-        Err(input.new_custom_error(()))
+        Err(cssparser::ParseError::custom(()))
     }
 }
-fn color<'i>(input: &mut Parser<'i, '_>) -> Result<Value, Error<'i>> {
+fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
     let token = input.next()?.clone();
     let rgba = match token {
         Token::Hash(v) | Token::IDHash(v) => {
             let (r, g, b, a) = cssparser::color::parse_hash_color(v.as_bytes())
-                .map_err(|_| input.new_custom_error(()))?;
+                .map_err(|_| cssparser::ParseError::custom(()))?;
             Color(r, g, b, (a * 255.0).round() as u8)
         }
         Token::Ident(v) if v.eq_ignore_ascii_case("currentcolor") => {
@@ -317,8 +317,8 @@ fn color<'i>(input: &mut Parser<'i, '_>) -> Result<Value, Error<'i>> {
         }
         Token::Ident(v) if v.eq_ignore_ascii_case("transparent") => Color(0, 0, 0, 0),
         Token::Ident(v) => {
-            let (r, g, b) =
-                cssparser::color::parse_named_color(&v).map_err(|_| input.new_custom_error(()))?;
+            let (r, g, b) = cssparser::color::parse_named_color(&v)
+                .map_err(|_| cssparser::ParseError::custom(()))?;
             Color(r, g, b, 255)
         }
         Token::Function(v) if v.eq_ignore_ascii_case("rgb") || v.eq_ignore_ascii_case("rgba") => {
@@ -353,15 +353,15 @@ fn color<'i>(input: &mut Parser<'i, '_>) -> Result<Value, Error<'i>> {
                 ))
             })?
         }
-        _ => return Err(input.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
     Ok(Value::Color(rgba))
 }
 
-pub(super) fn parse_values<'i>(
+pub(super) fn parse_values(
     name: &str,
-    input: &mut Parser<'i, '_>,
-) -> Result<Vec<(Property, Value)>, Error<'i>> {
+    input: &mut Parser<'_>,
+) -> Result<Vec<(Property, Value)>, Error> {
     use Property as P;
     let props: &[P] = match name {
         "color" => &[P::Color],
@@ -400,14 +400,14 @@ pub(super) fn parse_values<'i>(
         "border-color" => &[P::BorderColor],
         "border-radius" => &[P::BorderRadius],
         "box-shadow" => &[P::BoxShadow],
-        _ => return Err(input.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
-    if let Ok(wide) = input.try_parse(|p| -> Result<Value, Error<'i>> {
+    if let Ok(wide) = input.try_parse(|p| -> Result<Value, Error> {
         match keyword(p)?.as_str() {
             "inherit" => Ok(Value::Inherit),
             "initial" => Ok(Value::Initial),
             "unset" => Ok(Value::Unset),
-            _ => Err(p.new_custom_error(())),
+            _ => Err(cssparser::ParseError::custom(())),
         }
     }) {
         return Ok(props.iter().map(|p| (*p, wide)).collect());
@@ -461,7 +461,7 @@ pub(super) fn parse_values<'i>(
             break;
         }
         if width.is_none() && solid.is_none() && ink.is_none() {
-            return Err(input.new_custom_error(()));
+            return Err(cssparser::ParseError::custom(()));
         }
         return Ok(vec![
             (
@@ -489,7 +489,7 @@ pub(super) fn parse_values<'i>(
                         "xx-large" => Length::Px(34.0),
                         "smaller" => Length::Em(0.8),
                         "larger" => Length::Em(1.2),
-                        _ => return Err(input.new_custom_error(())),
+                        _ => return Err(cssparser::ParseError::custom(())),
                     })
                 })?;
             Value::Length(size)
@@ -499,18 +499,18 @@ pub(super) fn parse_values<'i>(
                 match keyword(input)?.as_str() {
                     "normal" => Ok(400.0),
                     "bold" => Ok(700.0),
-                    _ => Err(input.new_custom_error(())),
+                    _ => Err(cssparser::ParseError::custom(())),
                 }
             })?;
             if !weight.is_finite() || !(1.0..=1000.0).contains(&weight) {
-                return Err(input.new_custom_error(()));
+                return Err(cssparser::ParseError::custom(()));
             }
             Value::Number(weight)
         }
         P::Italic => Value::Bool(match keyword(input)?.as_str() {
             "normal" => false,
             "italic" | "oblique" => true,
-            _ => return Err(input.new_custom_error(())),
+            _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Family => {
             let names = input.parse_comma_separated(|p| {
@@ -519,7 +519,7 @@ pub(super) fn parse_values<'i>(
                     words.push(word.to_ascii_lowercase());
                 }
                 if words.is_empty() {
-                    return Err(p.new_custom_error(()));
+                    return Err(cssparser::ParseError::custom(()));
                 }
                 Ok(words.join(" "))
             })?;
@@ -546,11 +546,11 @@ pub(super) fn parse_values<'i>(
                     match word.as_str() {
                         "underline" if !underline => underline = true,
                         "line-through" if !strike => strike = true,
-                        _ => return Err(input.new_custom_error(())),
+                        _ => return Err(cssparser::ParseError::custom(())),
                     }
                 }
                 if !underline && !strike {
-                    return Err(input.new_custom_error(()));
+                    return Err(cssparser::ParseError::custom(()));
                 }
                 Value::Decoration(underline, strike)
             }
@@ -563,7 +563,7 @@ pub(super) fn parse_values<'i>(
                 Value::Number(1.45)
             } else if let Ok(n) = input.try_parse(|p| p.expect_number()) {
                 if !n.is_finite() || n < 0.0 {
-                    return Err(input.new_custom_error(()));
+                    return Err(cssparser::ParseError::custom(()));
                 }
                 Value::Number(n)
             } else {
@@ -575,7 +575,7 @@ pub(super) fn parse_values<'i>(
             "pre" => WhiteSpace::Pre,
             "pre-wrap" => WhiteSpace::PreWrap,
             "nowrap" => WhiteSpace::NoWrap,
-            _ => return Err(input.new_custom_error(())),
+            _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Align => Value::Align(match keyword(input)?.as_str() {
             "left" => TextAlign::Left,
@@ -583,18 +583,18 @@ pub(super) fn parse_values<'i>(
             "start" => TextAlign::Start,
             "end" => TextAlign::End,
             "center" => TextAlign::Center,
-            _ => return Err(input.new_custom_error(())),
+            _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Direction => Value::Direction(match keyword(input)?.as_str() {
             "ltr" => Direction::Ltr,
             "rtl" => Direction::Rtl,
-            _ => return Err(input.new_custom_error(())),
+            _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Display => Value::Display(match keyword(input)?.as_str() {
             "inline" => Display::Inline,
             "block" | "list-item" | "inline-block" => Display::Block,
             "none" => Display::None,
-            _ => return Err(input.new_custom_error(())),
+            _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::BorderWidth => Value::Length(border_width(input)?),
         P::BorderStyle => Value::Bool(border_style(input)?),
@@ -619,7 +619,7 @@ pub(super) fn parse_values<'i>(
     };
     Ok(vec![(p, value)])
 }
-fn border_width<'i>(input: &mut Parser<'i, '_>) -> Result<Length, Error<'i>> {
+fn border_width(input: &mut Parser<'_>) -> Result<Length, Error> {
     input
         .try_parse(|p| length(p, false, false, false))
         .or_else(|_| {
@@ -627,15 +627,15 @@ fn border_width<'i>(input: &mut Parser<'i, '_>) -> Result<Length, Error<'i>> {
                 "thin" => 1.0,
                 "medium" => 3.0,
                 "thick" => 5.0,
-                _ => return Err(input.new_custom_error(())),
+                _ => return Err(cssparser::ParseError::custom(())),
             }))
         })
 }
-fn border_style<'i>(input: &mut Parser<'i, '_>) -> Result<bool, Error<'i>> {
+fn border_style(input: &mut Parser<'_>) -> Result<bool, Error> {
     match keyword(input)?.as_str() {
         "solid" => Ok(true),
         "none" | "hidden" => Ok(false),
-        _ => Err(input.new_custom_error(())),
+        _ => Err(cssparser::ParseError::custom(())),
     }
 }
 
