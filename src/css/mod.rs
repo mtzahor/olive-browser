@@ -6,8 +6,8 @@ mod values;
 
 use crate::{Document, Element, ExternalSource, NodeId, NodeKind};
 use cssparser::{
-    AtRuleParser, CowRcStr, DeclarationParser, Delimiter, Parser, ParserInput, ParserState,
-    QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
+    AtRuleParser, CowRcStr, DeclarationParser, Delimiter, Parser, ParserState, QualifiedRuleParser,
+    RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
 };
 use selectors::Selector;
 use std::collections::HashMap;
@@ -114,8 +114,7 @@ impl Stylesheet {
             return;
         }
         self.bytes += source.len();
-        let mut input = ParserInput::new(source);
-        let mut input = Parser::new(&mut input);
+        let mut input = Parser::new(source);
         let mut parser = Rules {
             diagnostics: &mut self.diagnostics,
         };
@@ -185,9 +184,9 @@ impl Stylesheet {
                 <= MAX_CSS_BYTES
             {
                 budget.inline_bytes += inline.len();
-                let mut input = ParserInput::new(inline);
+                let mut input = Parser::new(inline);
                 let mut diagnostics = Diagnostics::default();
-                let declarations = declarations(&mut Parser::new(&mut input), &mut diagnostics);
+                let declarations = declarations(&mut input, &mut diagnostics);
                 budget.limited |= diagnostics.limited;
                 budget.ignored += diagnostics.ignored;
                 consider(&declarations, true, (0, 0, 0));
@@ -270,26 +269,26 @@ impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
     type Prelude = Vec<Selector>;
     type QualifiedRule = Rule;
     type Error = ();
-    fn parse_prelude<'t>(
+    fn parse_prelude(
         &mut self,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, cssparser::ParseError<'i, ()>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, cssparser::ParseError<()>> {
         let mut count = 0;
         input.parse_comma_separated(|input| {
             count += 1;
             if count > MAX_SELECTORS {
                 self.diagnostics.limited = true;
-                return Err(input.new_custom_error(()));
+                return Err(cssparser::ParseError::custom(()));
             }
             Selector::parse(input)
         })
     }
-    fn parse_block<'t>(
+    fn parse_block(
         &mut self,
         selectors: Self::Prelude,
         _: &ParserState,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Rule, cssparser::ParseError<'i, ()>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Rule, cssparser::ParseError<()>> {
         Ok(Rule {
             selectors,
             declarations: declarations(input, self.diagnostics),
@@ -318,12 +317,12 @@ impl<'i> RuleBodyItemParser<'i, Vec<Declaration>, ()> for Declarations {
 impl<'i> DeclarationParser<'i> for Declarations {
     type Declaration = Vec<Declaration>;
     type Error = ();
-    fn parse_value<'t>(
+    fn parse_value(
         &mut self,
         name: CowRcStr<'i>,
-        input: &mut Parser<'i, 't>,
+        input: &mut Parser<'i>,
         _: &ParserState,
-    ) -> Result<Self::Declaration, cssparser::ParseError<'i, ()>> {
+    ) -> Result<Self::Declaration, cssparser::ParseError<()>> {
         let values = input.parse_until_before(Delimiter::Bang, |p| {
             let values = values::parse_values(&name.to_ascii_lowercase(), p)?;
             p.expect_exhausted()?;
@@ -341,7 +340,7 @@ impl<'i> DeclarationParser<'i> for Declarations {
             .collect())
     }
 }
-fn declarations(input: &mut Parser<'_, '_>, diagnostics: &mut Diagnostics) -> Vec<Declaration> {
+fn declarations(input: &mut Parser<'_>, diagnostics: &mut Diagnostics) -> Vec<Declaration> {
     let mut result = vec![];
     for (count, item) in RuleBodyParser::new(input, &mut Declarations).enumerate() {
         if count == MAX_DECLARATIONS {
