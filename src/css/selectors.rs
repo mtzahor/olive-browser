@@ -25,7 +25,7 @@ pub(super) struct Selector {
     pub specificity: (u16, u16, u16),
 }
 impl Selector {
-    pub fn parse<'i>(input: &mut Parser<'i, '_>) -> Result<Self, cssparser::ParseError<'i, ()>> {
+    pub fn parse(input: &mut Parser<'_>) -> Result<Self, cssparser::ParseError<()>> {
         let mut result = Self {
             parts: vec![],
             specificity: (0, 0, 0),
@@ -40,7 +40,7 @@ impl Selector {
             }
             if matches!(token, Token::Delim('>')) {
                 if simple.is_empty() {
-                    return Err(input.new_custom_error(()));
+                    return Err(cssparser::ParseError::custom(()));
                 }
                 result.parts.push(Compound {
                     simple: std::mem::take(&mut simple),
@@ -72,26 +72,26 @@ impl Selector {
                     result.specificity.1 += 1;
                     Simple::Class(match input.next_including_whitespace()? {
                         Token::Ident(name) => name.to_string(),
-                        _ => return Err(input.new_custom_error(())),
+                        _ => return Err(cssparser::ParseError::custom(())),
                     })
                 }
                 Token::Colon => {
                     let name = input.expect_ident()?.to_ascii_lowercase();
                     if name != "hover" {
-                        return Err(input.new_custom_error(()));
+                        return Err(cssparser::ParseError::custom(()));
                     }
                     result.specificity.1 += 1;
                     Simple::Pseudo(name)
                 }
-                _ => return Err(input.new_custom_error(())),
+                _ => return Err(cssparser::ParseError::custom(())),
             };
             simple.push(value);
             if result.parts.len() >= 32 || simple.len() > 64 {
-                return Err(input.new_custom_error(()));
+                return Err(cssparser::ParseError::custom(()));
             }
         }
         if simple.is_empty() {
-            return Err(input.new_custom_error(()));
+            return Err(cssparser::ParseError::custom(()));
         }
         result.parts.push(Compound { simple, relation });
         Ok(result)
