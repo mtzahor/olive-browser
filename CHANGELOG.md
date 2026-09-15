@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.0-rc1 — Hardening
+
+- Add crash recovery with an explicit restore/start-fresh choice after an
+  interrupted session; preserve pending and background tab addresses.
+- Load restored background tabs on selection to keep startup responsive.
+- Keep normal restored pages script-enabled for client-rendered sites while
+  crash recovery remains safe to inspect with scripts disabled.
+- Fix transformed page overflow so long pages scroll without losing their
+  rendered body.
+- Keep the transformed viewport clip aligned while scrolling so lower page
+  content remains visible.
+- Apply page zoom controls immediately when the status-bar buttons are clicked.
+- Add a reproducible compatibility snapshot for the top ten sites in Israel and
+  worldwide (fourteen unique domains), plus an opt-in live smoke test.
+- Keep the macOS bundle versioned from Cargo metadata for release packaging.
+
 ## 0.10.0 — Daily-driver usability
 
 - Add persistent bookmarks, settings, page zoom and session restore with bounded,

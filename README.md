@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.10.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.11.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -156,7 +156,10 @@ browsing continues with history in memory. An unreadable or unsupported file is
 preserved until you explicitly clear history. History is intended for one running Olive instance
 per file; simultaneous instances can overwrite each other's changes. History
 The session profile restores open addresses, page zoom and Focus preferences at startup;
-page contents and Back/Forward stacks are reloaded rather than serialized.
+page contents and Back/Forward stacks are reloaded rather than serialized. Olive records
+whether the previous session closed cleanly and offers to restore the last checkpoint after
+an interrupted launch. Normal session restores load with scripting enabled so client-rendered
+sites can resume; the explicit crash-recovery restore keeps scripting disabled until you opt in.
 
 Bookmarks, settings and the session profile are stored beside history in `profile.json`.
 Set `OLIVE_PROFILE_DIR` to use an isolated profile directory. The **Bookmarks**,
@@ -223,6 +226,26 @@ To inspect downloads without executing page scripts:
 ```sh
 cargo run --locked --all-features --example resource-report -- https://www.ynet.co.il/
 ```
+
+## Release-candidate compatibility suite
+
+The RC suite tracks the July 2026 [Semrush top websites in Israel](https://www.semrush.com/website/top/israel/all/)
+and [worldwide](https://www.semrush.com/website/top/global/all/). It contains
+fourteen unique domains after overlap and checks that each target can be
+addressed over HTTPS. Run the deterministic checks with:
+
+```sh
+cargo test --locked --all-features --test compatibility
+```
+
+The live network smoke test is opt-in and keeps web JavaScript disabled:
+
+```sh
+OLIVE_LIVE_COMPAT=1 cargo test --locked --all-features --test compatibility
+```
+
+Live results depend on site availability, redirects and rate limits; the pinned
+ranking snapshot keeps CI deterministic.
 
 Build a release binary with:
 

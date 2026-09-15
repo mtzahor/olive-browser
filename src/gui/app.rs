@@ -9,7 +9,7 @@ use crate::{
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
-    profile::{MAX_ZOOM, MIN_ZOOM, Profile, SavedTab},
+    profile::{MAX_ZOOM, MIN_ZOOM, Profile, SavedTab, Session},
     render::{INK, ImageTextureCache, OLIVE},
     ui_icons::{self, Icon, IconButton},
     worker::{Command, Event, Worker},
@@ -44,6 +44,9 @@ pub struct Tab {
     loaded: Option<LoadedPage>,
     pending: Option<PendingPage>,
     opener: Option<Location>,
+    deferred: Option<Location>,
+    deferred_scripts: bool,
+    last_requested: Option<Location>,
     address: String,
     history: History,
     error: Option<String>,
@@ -161,6 +164,9 @@ impl Tab {
             loaded: None,
             pending: None,
             opener: None,
+            deferred: None,
+            deferred_scripts: true,
+            last_requested: None,
             address: String::new(),
             history: History::default(),
             error: None,
@@ -287,6 +293,8 @@ impl Tab {
         scripting: bool,
         shared: &mut Shared,
     ) {
+        self.deferred = None;
+        self.last_requested = Some(location.clone());
         self.pending_form = None;
         self.pending = None; // Cancels and reaps a replaced navigation.
         self.error = None;
@@ -433,6 +441,21 @@ impl Tab {
         }
     }
 
+    fn saved_tab(&self) -> SavedTab {
+        let location = self
+            .pending
+            .as_ref()
+            .map(|pending| &pending.requested)
+            .or_else(|| self.loaded.as_ref().map(|page| &page.location))
+            .or(self.deferred.as_ref())
+            .or(self.last_requested.as_ref());
+        SavedTab {
+            url: location.map(|location| location.as_str().to_owned()),
+            zoom: self.zoom,
+            focus: self.focus_settings,
+        }
+    }
+
     fn title(&self) -> &str {
         self.loaded
             .as_ref()
@@ -550,15 +573,6 @@ impl Tab {
             || shortcut(egui::Modifiers::COMMAND, egui::Key::Equals);
         let mut zoom_out = shortcut(egui::Modifiers::COMMAND, egui::Key::Minus);
         let mut zoom_reset = shortcut(egui::Modifiers::COMMAND, egui::Key::Num0);
-        if zoom_in {
-            self.zoom = zoom::step(self.zoom, true);
-        }
-        if zoom_out {
-            self.zoom = zoom::step(self.zoom, false);
-        }
-        if zoom_reset {
-            self.zoom = 100;
-        }
         let mut link = None;
         let mut form_activation = None;
         let mut link_new_tab = false;
@@ -859,6 +873,19 @@ impl Tab {
         } else {
             self.focus_toolbar(ui, busy);
         }
+
+        // Apply keyboard shortcuts and status-bar button clicks together, after
+        // the controls have had a chance to update their local flags.
+        if zoom_in {
+            self.zoom = zoom::step(self.zoom, true);
+        }
+        if zoom_out {
+            self.zoom = zoom::step(self.zoom, false);
+        }
+        if zoom_reset {
+            self.zoom = 100;
+        }
+
         if self.find.open {
             ui.push_id(self.id, |ui| self.find.show(ui, find_count));
         }
@@ -908,25 +935,39 @@ impl Tab {
                             rect.min.x += inset;
                             rect.max.x -= inset;
                             ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                            egui::Frame::new()
-                                .inner_margin(egui::Margin {
-                                    left: margin.min(100.0) as i8,
-                                    right: margin.min(100.0) as i8,
-                                    top: 34,
-                                    bottom: 40,
-                                })
-                                .show(ui, |ui| {
+                                let mut overflow = egui::Vec2::ZERO;
+                                egui::Frame::new()
+                                    .inner_margin(egui::Margin {
+                                        left: margin.min(100.0) as i8,
+                                        right: margin.min(100.0) as i8,
+                                        top: 34,
+                                        bottom: 40,
+                                    })
+                                    .show(ui, |ui| {
                                     if page.is_empty() {
                                         ui.label("This document has no visible content.");
                                     }
-                                    if let Some(click) =
-                                        ui.push_id((self.id, self.generation), |ui| {
-                                            ui.add_enabled_ui(!busy && !self.crashed && !self.worker.as_ref().is_some_and(Worker::busy), |ui| {
-                                                let page_zoom = self.zoom;
-                                                zoom::show(ui, self.id, page_zoom, |ui| page.show_with_textures(ui, &mut self.image_textures))
-                                            }).inner
-                                        }).inner
-                                    {
+                                    let rendered = ui
+                                        .push_id((self.id, self.generation), |ui| {
+                                            ui.add_enabled_ui(
+                                                !busy
+                                                    && !self.crashed
+                                                    && !self.worker.as_ref().is_some_and(Worker::busy),
+                                                |ui| {
+                                                    let page_zoom = self.zoom;
+                                                    zoom::show(ui, self.id, page_zoom, |ui| {
+                                                        page.show_with_textures(
+                                                            ui,
+                                                            &mut self.image_textures,
+                                                        )
+                                                    })
+                                                },
+                                            )
+                                            .inner
+                                        })
+                                        .inner;
+                                    overflow = rendered.overflow;
+                                    if let Some(click) = rendered.inner {
                                         link = click.href;
                                         link_new_tab = click.new_tab;
                                         form_activation = click.form;
@@ -947,7 +988,10 @@ impl Tab {
                                     if focus && page.truncated {
                                         ui.label("This reading view was shortened to keep the page responsive.");
                                     }
-                                });
+                                    });
+                                // Reserve the portion of the transformed document that extends
+                                // beyond the viewport after the frame has painted.
+                                ui.allocate_space(overflow);
                             });
                         });
                 } else {
@@ -1122,6 +1166,8 @@ pub struct OliveApp {
     next_id: u64,
     focus_address: bool,
     reveal_tab: bool,
+    recovery: Option<Session>,
+    window_title: String,
 }
 impl OliveApp {
     pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
@@ -1144,7 +1190,8 @@ impl OliveApp {
             egui::TextureOptions::LINEAR,
         );
 
-        let profile = Profile::load_default();
+        let mut profile = Profile::load_default();
+        let interrupted = profile.begin_session();
         let mut app = Self {
             shared: Shared {
                 icon,
@@ -1160,6 +1207,8 @@ impl OliveApp {
             next_id: 1,
             focus_address: source.is_none(),
             reveal_tab: false,
+            recovery: None,
+            window_title: String::new(),
         };
         let defaults = app.shared.profile.data.settings.clone();
         app.tabs[0].zoom = defaults.default_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -1172,35 +1221,67 @@ impl OliveApp {
             app.tabs[0].open_result(location, Navigation::New, ctx, &mut app.shared);
         } else if app.shared.profile.data.settings.restore_session {
             let session = app.shared.profile.data.session.clone();
-            if !session.tabs.is_empty() {
-                app.tabs.clear();
-                for saved in session.tabs.into_iter().take(MAX_TABS) {
-                    let mut tab = Tab::new(app.next_id);
-                    app.next_id += 1;
-                    tab.zoom = saved.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-                    tab.focus_settings = saved.focus;
-                    if let Some(url) = saved.url {
-                        if let Ok(location) = Location::from_input(&url) {
-                            tab.open_with_scripts(
-                                location,
-                                Navigation::New,
-                                ctx,
-                                false,
-                                &mut app.shared,
-                            );
-                        }
-                    }
-                    app.tabs.push(tab);
-                }
-                if app.tabs.is_empty() {
-                    app.tabs.push(Tab::new(app.next_id));
-                    app.next_id += 1;
-                }
-                app.active = session.active.min(app.tabs.len() - 1);
-                app.focus_address = false;
+            if interrupted && !session.tabs.is_empty() {
+                app.recovery = Some(session);
+            } else {
+                app.restore_session(session, true);
             }
         }
         app
+    }
+
+    fn restore_session(&mut self, session: Session, scripting: bool) {
+        if session.tabs.is_empty() {
+            return;
+        }
+        self.tabs.clear();
+        for saved in session.tabs.into_iter().take(MAX_TABS) {
+            let mut tab = Tab::new(self.next_id);
+            self.next_id += 1;
+            tab.zoom = saved.zoom;
+            tab.focus_settings = saved.focus;
+            tab.deferred_scripts = scripting;
+            tab.deferred = saved.url.and_then(|url| Location::from_input(&url).ok());
+            if let Some(location) = &tab.deferred {
+                tab.address = location.as_str().into();
+            }
+            self.tabs.push(tab);
+        }
+        self.active = session.active.min(self.tabs.len() - 1);
+        self.focus_address = false;
+    }
+
+    fn checkpoint(&mut self) {
+        // Preserve the recovery snapshot until the user chooses what to do with it.
+        if self.recovery.is_none() {
+            self.shared.profile.data.session = Session {
+                tabs: self.tabs.iter().map(Tab::saved_tab).collect(),
+                active: self.active,
+            };
+        }
+        self.shared.profile.save_if_changed();
+    }
+
+    fn recovery_bar(&mut self, ui: &mut egui::Ui) {
+        if self.recovery.is_none() {
+            return;
+        }
+        let mut restore = false;
+        let mut discard = false;
+        egui::Panel::top("session-recovery").show(ui, |ui| {
+            ui.label("Olive did not close normally. Restore your saved tabs or start fresh.");
+            ui.small("Restored pages start with JavaScript disabled. Background tabs load when selected.");
+            ui.horizontal_wrapped(|ui| {
+                restore = ui.button("Restore tabs").clicked();
+                discard = ui.button("Start fresh").clicked();
+            });
+        });
+        if restore {
+            let session = self.recovery.take().unwrap();
+            self.restore_session(session, false);
+        } else if discard {
+            self.recovery = None;
+        }
     }
 
     fn new_tab(&mut self, location: Option<Location>, ctx: &egui::Context) {
@@ -1354,6 +1435,13 @@ impl OliveApp {
     }
 }
 impl eframe::App for OliveApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.checkpoint();
+        if self.recovery.is_none() {
+            self.shared.profile.finish_session();
+        }
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         PAPER.to_normalized_gamma_f32()
     }
@@ -1365,7 +1453,7 @@ impl eframe::App for OliveApp {
         if self
             .tabs
             .iter()
-            .any(|tab| tab.worker.is_some() || tab.pending.is_some())
+            .any(|tab| tab.worker.as_ref().is_some_and(Worker::busy) || tab.pending.is_some())
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -1414,29 +1502,30 @@ impl eframe::App for OliveApp {
             }
         }
         ui.spacing_mut().item_spacing.y = 0.0;
+        self.recovery_bar(ui);
         self.tab_bar(ui);
+        if let Some(location) = self.tabs[self.active].deferred.take() {
+            let scripting = self.tabs[self.active].deferred_scripts;
+            self.tabs[self.active].open_with_scripts(
+                location,
+                Navigation::New,
+                &ctx,
+                scripting,
+                &mut self.shared,
+            );
+        }
         let autofocus = std::mem::take(&mut self.focus_address);
         if let Some(location) = self.tabs[self.active].ui(ui, &mut self.shared, autofocus) {
             self.new_tab(Some(location), &ctx);
         }
-        self.shared.profile.data.session.tabs = self
-            .tabs
-            .iter()
-            .map(|tab| SavedTab {
-                url: tab
-                    .loaded
-                    .as_ref()
-                    .map(|loaded| loaded.location.as_str().to_owned()),
-                zoom: tab.zoom,
-                focus: tab.focus_settings,
-            })
-            .collect();
-        self.shared.profile.data.session.active = self.active;
-        self.shared.profile.save_if_changed();
+        self.checkpoint();
         let title: String = self.tabs[self.active].title().chars().take(200).collect();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-            "{title} — Olive Browser"
-        )));
+        if self.window_title != title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                "{title} — Olive Browser"
+            )));
+            self.window_title = title;
+        }
     }
 }
 #[cfg(test)]
@@ -1775,6 +1864,8 @@ mod tests {
             next_id: 1,
             focus_address: false,
             reveal_tab: false,
+            recovery: None,
+            window_title: String::new(),
         };
         browser.new_tab(None, &ctx);
         let second_id = browser.tabs[1].id;
@@ -1799,6 +1890,63 @@ mod tests {
         assert_eq!(browser.active, 0);
         assert!(browser.tabs[0].loaded.is_none());
         assert!(browser.tabs[0].id > second_id);
+    }
+
+    #[test]
+    fn session_checkpoint_keeps_a_navigation_that_has_not_loaded_yet() {
+        let mut tab = Tab::new(7);
+        let location = Location::from_input("https://example.com/pending").unwrap();
+        tab.last_requested = Some(location.clone());
+        assert_eq!(tab.saved_tab().url.as_deref(), Some(location.as_str()));
+
+        let loaded = prepare_page(remote_source("https://example.com/old")).unwrap();
+        let destination = Location::from_input("https://example.com/new").unwrap();
+        let (worker, _events) = Worker::mock();
+        tab.loaded = Some(loaded);
+        tab.pending = Some(PendingPage {
+            worker,
+            navigation: Navigation::New,
+            requested: destination.clone(),
+        });
+        assert_eq!(tab.saved_tab().url.as_deref(), Some(destination.as_str()));
+
+        let deferred = Location::from_input("https://example.com/background").unwrap();
+        tab.pending = None;
+        tab.loaded = None;
+        tab.last_requested = None;
+        tab.deferred = Some(deferred.clone());
+        assert_eq!(tab.saved_tab().url.as_deref(), Some(deferred.as_str()));
+    }
+
+    #[test]
+    fn clean_session_restore_enables_scripts_but_crash_restore_does_not() {
+        let ctx = egui::Context::default();
+        let (tab, shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/story")).unwrap(),
+        );
+        let mut browser = OliveApp {
+            shared,
+            tabs: vec![tab],
+            active: 0,
+            next_id: 1,
+            focus_address: false,
+            reveal_tab: false,
+            recovery: None,
+            window_title: String::new(),
+        };
+        let session = Session {
+            tabs: vec![SavedTab {
+                url: Some("https://example.com/restored".into()),
+                zoom: 100,
+                focus: FocusSettings::default(),
+            }],
+            active: 0,
+        };
+        browser.restore_session(session.clone(), true);
+        assert!(browser.tabs[0].deferred_scripts);
+        browser.restore_session(session, false);
+        assert!(!browser.tabs[0].deferred_scripts);
     }
 
     #[test]
@@ -1854,6 +2002,8 @@ mod tests {
             next_id: 1,
             focus_address: false,
             reveal_tab: false,
+            recovery: None,
+            window_title: String::new(),
         };
         for _ in 0..8 {
             browser.new_tab(None, &ctx);

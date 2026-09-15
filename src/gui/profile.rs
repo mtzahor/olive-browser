@@ -60,6 +60,12 @@ pub struct Data {
     pub settings: Settings,
     pub bookmarks: Vec<Bookmark>,
     pub session: Session,
+    #[serde(default = "clean_shutdown_default")]
+    pub clean_shutdown: bool,
+}
+
+fn clean_shutdown_default() -> bool {
+    true // Profiles written before v0.11 have no crash marker.
 }
 impl Default for Data {
     fn default() -> Self {
@@ -68,6 +74,7 @@ impl Default for Data {
             settings: Settings::default(),
             bookmarks: Vec::new(),
             session: Session::default(),
+            clean_shutdown: true,
         }
     }
 }
@@ -110,6 +117,19 @@ impl Profile {
             }
         }
         profile
+    }
+
+    /// Persist the marker before starting any document workers.
+    pub fn begin_session(&mut self) -> bool {
+        let interrupted = !self.data.clean_shutdown;
+        self.data.clean_shutdown = false;
+        self.save_if_changed();
+        interrupted
+    }
+
+    pub fn finish_session(&mut self) {
+        self.data.clean_shutdown = true;
+        self.save_if_changed();
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -168,6 +188,7 @@ impl Profile {
 
     pub fn reset(&mut self) {
         self.data = Data::default();
+        self.data.clean_shutdown = false;
         self.load_failed = false;
         self.save();
     }
@@ -338,5 +359,20 @@ mod tests {
         fs::remove_file(parent).unwrap();
         profile.save();
         assert!(!Profile::load(path).data.settings.restore_session);
+    }
+
+    #[test]
+    fn session_marker_detects_interrupted_launches_and_closes_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.json");
+        let mut first = Profile::load(path.clone());
+        assert!(!first.begin_session());
+        assert!(!Profile::load(path.clone()).data.clean_shutdown);
+
+        // A second launch sees the marker left by the interrupted first launch.
+        let mut recovered = Profile::load(path.clone());
+        assert!(recovered.begin_session());
+        recovered.finish_session();
+        assert!(Profile::load(path).data.clean_shutdown);
     }
 }
