@@ -196,7 +196,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), 
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_use_unsafe(false);
-    let mut decoder = JpegDecoder::new_with_options(bytes, options);
+    let mut decoder = JpegDecoder::new_with_options(Cursor::new(bytes), options);
     decoder
         .decode_headers()
         .map_err(|error| format!("could not read image dimensions: {error}"))?;
@@ -292,6 +292,31 @@ mod tests {
             .encode(&vec![0; 4097 * 4], 4097, 1, image::ExtendedColorType::Rgba8)
             .unwrap();
         assert!(decode_image(&encoded).is_err());
+    }
+    #[test]
+    fn decodes_jpeg_rgba_and_rejects_excessive_dimensions_and_truncation() {
+        let encoded = include_bytes!("../../tests/fixtures/images/red-2x1.jpg");
+        let (decoded, pixels) = decode_image(encoded).unwrap();
+        assert_eq!(pixels, 2);
+        assert_eq!(decoded.size, [2, 1]);
+        for pixel in &decoded.pixels {
+            let [r, g, b, a] = pixel.to_array();
+            // JPEG is lossy, so allow small rounding differences in the red pixels.
+            assert!(r >= 250 && g <= 5 && b <= 5);
+            assert_eq!(a, 255);
+        }
+        assert!(decode_image(&encoded[..16]).is_err());
+
+        // Increase the baseline frame width without allocating a large image.
+        let mut oversized = encoded.to_vec();
+        let frame = oversized
+            .windows(2)
+            .position(|marker| marker == [0xff, 0xc0])
+            .unwrap();
+        oversized[frame + 7..frame + 9]
+            .copy_from_slice(&((MAX_IMAGE_DIMENSION + 1) as u16).to_be_bytes());
+        let error = decode_image(&oversized).unwrap_err();
+        assert!(error.contains("image dimensions exceed"), "{error}");
     }
     #[test]
     fn decodes_png_images_with_bounded_dimensions() {
