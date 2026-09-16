@@ -1,6 +1,7 @@
 use crate::{
     downloads::{Downloads, fraction},
     profile::Profile,
+    theme::Theme,
     ui_icons::{Icon, IconButton},
 };
 use eframe::egui::{self, RichText};
@@ -22,7 +23,10 @@ impl DailyWindows {
             let mut open = true;
             egui::Window::new("Bookmarks")
                 .open(&mut open)
+                .collapsible(false)
                 .default_width(560.0)
+                .max_height((ctx.content_rect().height() - 80.0).max(160.0))
+                .vscroll(true)
                 .show(ctx, |ui| {
                     if profile.data.bookmarks.is_empty() {
                         ui.label(
@@ -31,8 +35,10 @@ impl DailyWindows {
                     }
                     for bookmark in profile.data.bookmarks.clone() {
                         ui.horizontal(|ui| {
-                            if ui
-                                .add(IconButton::new(
+                            let text_width = (ui.available_width() - 48.0).max(120.0);
+                            ui.vertical(|ui| {
+                                ui.set_width(text_width);
+                                let mut button = IconButton::new(
                                     Icon::Page,
                                     RichText::new(if bookmark.title.is_empty() {
                                         &bookmark.url
@@ -40,13 +46,23 @@ impl DailyWindows {
                                         &bookmark.title
                                     })
                                     .strong(),
-                                ))
-                                .clicked()
-                            {
-                                open_url = Some(bookmark.url.clone());
-                            }
-                            ui.label(RichText::new(bookmark.url.clone()).small().weak())
+                                )
+                                .quiet();
+                                button.button = button
+                                    .button
+                                    .truncate()
+                                    .min_size(egui::vec2(text_width, 32.0));
+                                if ui.add(button).clicked() {
+                                    open_url = Some(bookmark.url.clone());
+                                }
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(bookmark.url.clone()).small().weak(),
+                                    )
+                                    .truncate(),
+                                )
                                 .on_hover_text(bookmark.url.clone());
+                            });
                             if ui
                                 .add(IconButton::icon_only(Icon::Trash, "Remove bookmark"))
                                 .clicked()
@@ -66,9 +82,37 @@ impl DailyWindows {
             let mut open = true;
             egui::Window::new("Settings")
                 .open(&mut open)
-                .default_width(520.0)
+                .collapsible(false)
+                .default_width(400.0)
+                .default_height(500.0)
+                .max_height((ctx.content_rect().height() - 80.0).max(160.0))
+                .vscroll(true)
                 .show(ctx, |ui| {
-                    ui.heading("Daily-driver settings");
+                    ui.heading("Appearance");
+                    ui.label(RichText::new("Make Olive feel at home.").weak());
+                    ui.horizontal(|ui| {
+                        ui.label("Browser theme");
+                        for (theme, icon, label) in [
+                            (Theme::Light, Icon::Sun, "Light"),
+                            (Theme::Dark, Icon::Moon, "Dark"),
+                        ] {
+                            let mut button = IconButton::new(icon, label);
+                            button.button = button
+                                .button
+                                .selected(profile.data.settings.browser_theme == theme);
+                            if ui.add(button).clicked() {
+                                profile.data.settings.browser_theme = theme;
+                            }
+                        }
+                    });
+                    ui.label(
+                        RichText::new("Applies to browser controls. Pages keep their own colors.")
+                            .small()
+                            .weak(),
+                    );
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.heading("Browsing");
                     ui.checkbox(
                         &mut profile.data.settings.restore_session,
                         "Restore tabs from the previous session",
@@ -81,8 +125,18 @@ impl DailyWindows {
                         .suffix("%")
                         .text("Default page zoom"),
                     );
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.heading("Focus reading");
+                    ui.label(
+                        RichText::new(
+                            "Defaults for new tabs; adjust each reading view in Appearance.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                     ui.horizontal(|ui| {
-                        ui.label("Focus font size");
+                        ui.label("Font size");
                         ui.add(
                             egui::Slider::new(
                                 &mut profile.data.settings.focus.font_size,
@@ -92,7 +146,7 @@ impl DailyWindows {
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Focus theme");
+                        ui.label("Reading theme");
                         ui.selectable_value(
                             &mut profile.data.settings.focus.theme,
                             crate::focus::Theme::Light,
@@ -104,8 +158,10 @@ impl DailyWindows {
                             "Dark",
                         );
                     });
+                    ui.add_space(8.0);
+                    ui.separator();
                     if let Some(error) = &profile.error {
-                        ui.colored_label(egui::Color32::from_rgb(160, 55, 35), error);
+                        ui.colored_label(ui.visuals().error_fg_color, error);
                         if ui.button("Retry saving").clicked() {
                             profile.save();
                         }
@@ -113,13 +169,20 @@ impl DailyWindows {
                             profile.reset();
                         }
                     }
-                    ui.small(format!(
-                        "Profile: {}",
-                        profile
-                            .path()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "session only".into())
-                    ));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "Profile: {}",
+                                profile
+                                    .path()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| "session only".into())
+                            ))
+                            .small()
+                            .weak(),
+                        )
+                        .wrap(),
+                    );
                 });
             self.settings = open;
         }
@@ -127,7 +190,10 @@ impl DailyWindows {
             let mut open = true;
             egui::Window::new("Downloads")
                 .open(&mut open)
+                .collapsible(false)
                 .default_width(600.0)
+                .max_height((ctx.content_rect().height() - 80.0).max(160.0))
+                .vscroll(true)
                 .show(ctx, |ui| {
                     if downloads.items.is_empty() {
                         ui.label("No downloads yet.");
@@ -135,9 +201,13 @@ impl DailyWindows {
                     let mut cancel_id = None;
                     for item in &downloads.items {
                         ui.push_id(item.id, |ui| {
-                            ui.label(RichText::new(&item.name).strong());
-                            ui.label(RichText::new(&item.url).small().weak())
-                                .on_hover_text(&item.url);
+                            ui.add(egui::Label::new(RichText::new(&item.name).strong()).truncate())
+                                .on_hover_text(&item.name);
+                            ui.add(
+                                egui::Label::new(RichText::new(&item.url).small().weak())
+                                    .truncate(),
+                            )
+                            .on_hover_text(&item.url);
                             ui.add(
                                 egui::ProgressBar::new(fraction(item.received, item.total)).text(
                                     format!(

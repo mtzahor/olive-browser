@@ -14,6 +14,7 @@ mod icon;
 mod navigation;
 mod profile;
 mod render;
+mod theme;
 mod ui_icons;
 mod worker;
 mod zoom;

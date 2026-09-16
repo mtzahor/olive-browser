@@ -2,8 +2,8 @@
 //! Drawn on a 24-unit grid with rounded 1.8-unit strokes; normally shown at 18 pt.
 
 use eframe::egui::{
-    self, Atom, Atoms, Button, Color32, Id, Painter, Rect, Response, RichText, Shape, Stroke, Ui,
-    Vec2, Widget, WidgetInfo, WidgetType,
+    self, Atom, Button, Color32, Id, Painter, Rect, Response, RichText, Shape, Stroke, Ui, Vec2,
+    Widget, WidgetInfo, WidgetType,
 };
 
 #[derive(Clone, Copy)]
@@ -31,6 +31,9 @@ pub enum Icon {
     Star,
     Download,
     Settings,
+    Menu,
+    Sun,
+    Moon,
 }
 
 impl Icon {
@@ -57,6 +60,25 @@ impl Icon {
             path(&points);
         };
         match self {
+            Self::Menu => {
+                for y in [6.0, 12.0, 18.0] {
+                    path(&[[4.0, y], [20.0, y]]);
+                }
+            }
+            Self::Sun => {
+                painter.circle_stroke(point(12.0, 12.0), 4.0 * scale, stroke);
+                for index in 0..8 {
+                    let angle = index as f32 * std::f32::consts::FRAC_PI_4;
+                    path(&[
+                        [12.0 + 7.0 * angle.cos(), 12.0 + 7.0 * angle.sin()],
+                        [12.0 + 10.0 * angle.cos(), 12.0 + 10.0 * angle.sin()],
+                    ]);
+                }
+            }
+            Self::Moon => {
+                arc(12.0, 12.0, 9.0, 0.0, 270.0);
+                arc(19.0, 5.0, 7.0, 90.0, 180.0);
+            }
             Self::Search => {
                 painter.circle_stroke(point(10.0, 10.0), 6.0 * scale, stroke);
                 path(&[[14.5, 14.5], [21.0, 21.0]]);
@@ -217,6 +239,7 @@ pub struct IconButton<'a> {
     icon_only: bool,
     color: Option<Color32>,
     warning: bool,
+    primary: bool,
 }
 
 impl<'a> IconButton<'a> {
@@ -231,6 +254,7 @@ impl<'a> IconButton<'a> {
             icon_only: false,
             color: None,
             warning: false,
+            primary: false,
         }
     }
 
@@ -249,16 +273,12 @@ impl<'a> IconButton<'a> {
     }
 
     pub fn primary(mut self) -> Self {
-        self.color = Some(Color32::WHITE);
-        let mut atoms = Atoms::new(Self::atom());
-        if !self.icon_only {
-            atoms.push_right(RichText::new(&self.label).color(Color32::WHITE));
-        }
-        self.button = Button::new(atoms)
-            .gap(7.0)
-            .fill(crate::render::OLIVE)
-            .corner_radius(7)
-            .min_size(Vec2::splat(36.0));
+        self.primary = true;
+        self
+    }
+
+    pub fn quiet(mut self) -> Self {
+        self.button = self.button.frame(false);
         self
     }
 
@@ -269,12 +289,28 @@ impl<'a> IconButton<'a> {
 
     pub fn small(mut self) -> Self {
         self.button = self.button.small();
+        if self.icon_only {
+            self.button = self.button.min_size(Vec2::splat(24.0));
+        }
         self
     }
 }
 
 impl Widget for IconButton<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
+        if self.primary {
+            let palette = crate::theme::Theme::from_visuals(ui.visuals()).palette();
+            self.color = Some(palette.on_accent);
+            // Set the text via a local style so callers keep their size and other options.
+            return ui
+                .scope(|ui| {
+                    ui.visuals_mut().override_text_color = Some(palette.on_accent);
+                    self.button = self.button.fill(palette.accent);
+                    self.primary = false;
+                    self.ui(ui)
+                })
+                .inner;
+        }
         let output = self.button.atom_ui(ui);
         if let Some(rect) = output.rect(Id::new(Self::ICON_ID)) {
             let color = self.color.unwrap_or_else(|| {
@@ -286,7 +322,8 @@ impl Widget for IconButton<'_> {
             self.icon.paint(ui.painter(), rect, color);
             if self.warning {
                 let center = rect.right_top() + egui::vec2(-1.0, 2.0);
-                ui.painter().circle_filled(center, 3.5, crate::render::INK);
+                ui.painter()
+                    .circle_filled(center, 3.5, ui.visuals().window_fill);
                 ui.painter()
                     .circle_filled(center, 2.0, Color32::from_rgb(245, 184, 73));
             }

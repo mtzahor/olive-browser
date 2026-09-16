@@ -1,6 +1,7 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.11.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **0.12.0**, the
+second release candidate, opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -25,7 +26,8 @@ cargo run --locked --features gui --bin olive-gui -- https://example.com
 Enter an address and press Enter or **Go**. Bare hostnames use HTTPS;
 `localhost`, loopback IP addresses and their optional ports use HTTP. Explicit
 `http://`, `https://`, and local `file://` URLs are supported, along with file paths.
-Open a local `.html` or `.htm` file with **Open…**, `Cmd+O`/`Ctrl+O`, or drag and drop.
+Open a local `.html` or `.htm` file from **Browser menu → Open HTML…**,
+`Cmd+O`/`Ctrl+O`, or drag and drop.
 
 Use **+** or `Cmd+T`/`Ctrl+T` to open a tab. Click a tab to switch, or use
 `Ctrl+Tab` / `Ctrl+Shift+Tab` to cycle. `Cmd+1`–`Cmd+8` / `Ctrl+1`–`Ctrl+8`
@@ -101,8 +103,17 @@ closes, including while loading or executing scripts. Blank tabs need no worker.
 
 Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
-In narrow windows, **Open…** and **History** use folder and history icons, and
-status controls wrap to keep every action reachable.
+The **Browser menu** at the right of the address bar contains Open HTML, History,
+Bookmarks, Downloads, Save page and Settings, including in narrow windows.
+Tabs, toolbars, dialogs and the new-tab page share an olive palette and consistent
+control sizes. Status controls wrap to keep every action reachable.
+
+Use the **moon/sun button** beside the browser menu to switch between **Light** and
+**Dark** mode, or choose **Browser menu → Settings → Appearance → Browser theme**.
+The choice applies immediately across all tabs and is saved in the profile for
+the next launch. Existing profiles start in Light mode. Browser appearance affects
+the browser interface; loaded pages retain their own colors and native form
+appearance. Focus reading has its own independent Light/Dark preference.
 
 Click **Focus** or press `Cmd+Shift+F`/`Ctrl+Shift+F` for a distraction-free reading
 view. Focus selects article/main content when available, falls back to plain page
@@ -131,7 +142,7 @@ Reload fetches the current page again. Use `Cmd+L`/`Ctrl+L` for the address bar,
 `Alt+Left`/`Alt+Right` for history, and `Cmd+R`/`Ctrl+R` or F5 to reload.
 History traversal reloads documents; it does not cache page state or scroll offsets.
 
-Open **History** or press `Cmd+Shift+H`/`Ctrl+Shift+H` to search saved page titles
+Open **Browser menu → History** or press `Cmd+Shift+H`/`Ctrl+Shift+H` to search saved page titles
 and addresses, reopen a page, remove an address, or clear all saved history.
 History keeps the latest 1,000 distinct URLs across launches, newest first, with
 page titles, last-visited times (shown in UTC), and visit counts. Reloads and
@@ -151,10 +162,10 @@ History is stored as a local, unencrypted `history.json` file:
 
 Set `OLIVE_HISTORY_FILE` to use another file, for example an isolated test profile.
 History saves after each change using atomic file replacement. Storage errors
-appear as an amber badge on the **History** button and in the history window;
+appear as an amber badge on the **Browser menu** and its **History** item, and in the history window;
 browsing continues with history in memory. An unreadable or unsupported file is
 preserved until you explicitly clear history. History is intended for one running Olive instance
-per file; simultaneous instances can overwrite each other's changes. History
+per file; simultaneous instances can overwrite each other's changes.
 The session profile restores open addresses, page zoom and Focus preferences at startup;
 page contents and Back/Forward stacks are reloaded rather than serialized. Olive records
 whether the previous session closed cleanly and offers to restore the last checkpoint after
@@ -163,7 +174,7 @@ sites can resume; the explicit crash-recovery restore keeps scripting disabled u
 
 Bookmarks, settings and the session profile are stored beside history in `profile.json`.
 Set `OLIVE_PROFILE_DIR` to use an isolated profile directory. The **Bookmarks**,
-**Downloads** and **Settings** buttons are available in the toolbar. Page zoom ranges
+**Downloads** and **Settings** windows are available in the browser menu. Page zoom ranges
 from 50% to 200% with `Cmd/Ctrl`+`+`, `-` and `0`; downloads are bounded to 100 MiB
 and use a temporary file before publishing the completed result.
 

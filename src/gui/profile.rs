@@ -19,6 +19,7 @@ const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub browser_theme: crate::theme::Theme,
     pub restore_session: bool,
     pub default_zoom: u16,
     pub focus: FocusSettings,
@@ -27,6 +28,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            browser_theme: crate::theme::Theme::default(),
             restore_session: true,
             default_zoom: 100,
             focus: FocusSettings::default(),
@@ -290,6 +292,7 @@ mod tests {
             .toggle_bookmark(&location, " A\n title 🫒 ")
             .unwrap();
         profile.data.settings.default_zoom = 125;
+        profile.data.settings.browser_theme = crate::theme::Theme::Dark;
         profile.data.session = Session {
             active: 1,
             tabs: vec![
@@ -313,6 +316,30 @@ mod tests {
         restored.toggle_bookmark(&location, "ignored").unwrap();
         restored.save_if_changed();
         assert!(Profile::load(path).data.bookmarks.is_empty());
+    }
+    #[test]
+    fn profiles_from_before_browser_themes_keep_their_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.json");
+        let mut data = serde_json::to_value(Data::default()).unwrap();
+        data["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("browser_theme");
+        data["settings"]["default_zoom"] = 125.into();
+        data["settings"]["focus"]["theme"] = "Dark".into();
+        fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
+        let mut profile = Profile::load(path.clone());
+        assert!(!profile.load_failed);
+        assert_eq!(
+            profile.data.settings.browser_theme,
+            crate::theme::Theme::Light
+        );
+        assert_eq!(profile.data.settings.default_zoom, 125);
+        assert_eq!(profile.data.settings.focus.theme, crate::focus::Theme::Dark);
+        profile.data.settings.browser_theme = crate::theme::Theme::Dark;
+        profile.save_if_changed();
+        assert_eq!(Profile::load(path).data, profile.data);
     }
     #[test]
     fn damaged_profiles_are_preserved_and_invalid_state_rejected() {

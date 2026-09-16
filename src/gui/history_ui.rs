@@ -104,7 +104,7 @@ impl HistoryWindow {
                     });
                 }
                 if let Some(error) = history.error() {
-                    ui.colored_label(egui::Color32::from_rgb(160, 55, 35), error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                     if history.can_retry()
                         && ui
                             .add(IconButton::new(Icon::Reload, "Retry saving"))

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0-rc2 — Browser appearance
+
+- Unify the browser interface with coordinated olive palettes, rounded controls,
+  integrated tab close buttons and a clearer active-tab indicator.
+- Add Light and Dark browser themes with a toolbar toggle and appearance settings;
+  persist the choice across launches while preserving older profiles.
+- Theme the new-tab page, address bar, tabs, status and find bars, menus, settings,
+  history, bookmarks, downloads, alerts and error messages consistently.
+- Consolidate browser actions in an always-available menu and simplify the status
+  bar, preserving access to settings and saved pages at the minimum window width.
+- Keep document colors and native forms independent of browser appearance, and
+  preserve the separate Focus reading theme without reloading pages.
+
 ## 0.11.0-rc1 — Hardening
 
 - Add crash recovery with an explicit restore/start-fresh choice after an

@@ -17,8 +17,6 @@ use olive_html::{
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
-pub const INK: Color32 = Color32::from_rgb(38, 44, 32);
-pub const OLIVE: Color32 = Color32::from_rgb(86, 105, 51);
 const MAX_TEXT: usize = 200_000;
 const MAX_BLOCKS: usize = 5_000;
 const MAX_BOXES: usize = 10_000;
