@@ -13,7 +13,7 @@ use crate::{
     render::ImageTextureCache,
     theme::{DOCUMENT_PAPER, Theme},
     ui_icons::{self, Icon, IconButton},
-    worker::{Command, Event, Worker},
+    worker::{Command, Event, ScriptPolicy, Worker},
     zoom,
 };
 use eframe::egui::{self, RichText};
@@ -218,6 +218,10 @@ impl Tab {
                 let requested = request.location.clone();
                 match Worker::spawn_form_with_cookies(
                     request,
+                    ScriptPolicy::for_load(
+                        shared.profile.data.settings.javascript_by_default,
+                        true,
+                    ),
                     shared.cookies.clone(),
                     Some(loaded.location.clone()),
                     ctx,
@@ -276,12 +280,29 @@ impl Tab {
         ctx: &egui::Context,
         shared: &mut Shared,
     ) {
-        let scripting = !location.is_remote()
-            || (matches!(navigation, Navigation::Reload)
-                && self.loaded.as_ref().is_some_and(|loaded| {
-                    loaded.scripting_enabled && loaded.location.same_document(&location)
-                }));
+        let scripting = self.scripting_for_load(&location, navigation, shared);
         self.open_with_scripts(location, navigation, ctx, scripting, shared);
+    }
+
+    fn scripting_for_load(
+        &self,
+        location: &Location,
+        navigation: Navigation,
+        shared: &Shared,
+    ) -> bool {
+        if !location.is_remote() || shared.profile.data.settings.javascript_by_default {
+            return true;
+        }
+        if matches!(navigation, Navigation::Reload) {
+            if let Some(loaded) = self
+                .loaded
+                .as_ref()
+                .filter(|page| page.location.same_document(location))
+            {
+                return loaded.scripting_enabled;
+            }
+        }
+        false
     }
 
     fn open_with_scripts(
@@ -327,7 +348,10 @@ impl Tab {
             .or_else(|| self.opener.take());
         match Worker::spawn_with_cookies(
             location,
-            scripting,
+            ScriptPolicy::for_load(
+                scripting,
+                shared.profile.data.settings.javascript_by_default,
+            ),
             shared.cookies.clone(),
             initiator,
             ctx,
@@ -453,6 +477,10 @@ impl Tab {
             zoom: self.zoom,
             focus: self.focus_settings,
         }
+    }
+
+    fn restored_scripting(&self, shared: &Shared) -> bool {
+        self.deferred_scripts && shared.profile.data.settings.javascript_by_default
     }
 
     fn title(&self) -> &str {
@@ -796,7 +824,7 @@ impl Tab {
                                 RichText::new(concat!(
                                     "Version ",
                                     env!("CARGO_PKG_VERSION"),
-                                    " · RC 2"
+                                    " · RC 3"
                                 ))
                                 .small()
                                 .weak(),
@@ -840,7 +868,7 @@ impl Tab {
                             toggle_scripts = ui.add_enabled(!busy, IconButton::new(
                                 if loaded.scripting_enabled { Icon::CodeOff } else { Icon::Code },
                                 if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
-                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run in this tab's process without an OS security sandbox. New addresses start with web JavaScript disabled.").clicked();
+                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run in this tab's process without an OS security sandbox. New addresses use the JavaScript default in Settings.").clicked();
                         }
                         if loaded.resources.attempted > 0 || loaded.resources.limited {
                             ui_icons::menu(ui, if loaded.resources.diagnostics.is_empty() { Icon::Resources } else { Icon::Warning }, if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {
@@ -903,7 +931,7 @@ impl Tab {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · RC 2"))
+                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · RC 3"))
                                 .size(12.0)
                                 .weak(),
                         );
@@ -1300,6 +1328,18 @@ impl OliveApp {
         self.shared.profile.save_if_changed();
     }
 
+    fn apply_browser_theme(&mut self, ctx: &egui::Context) {
+        self.shared.profile.data.settings.browser_theme.apply(ctx);
+        // Both active and hidden views retain galleys referencing the old font atlas.
+        // Keep document state and scroll IDs; only the text needs laying out again.
+        for tab in &mut self.tabs {
+            if let Some(loaded) = &mut tab.loaded {
+                loaded.page.invalidate_text_layout();
+                loaded.reading.invalidate_text_layout();
+            }
+        }
+    }
+
     fn recovery_bar(&mut self, ui: &mut egui::Ui) {
         if self.recovery.is_none() {
             return;
@@ -1585,7 +1625,7 @@ impl eframe::App for OliveApp {
         self.recovery_bar(ui);
         self.tab_bar(ui);
         if let Some(location) = self.tabs[self.active].deferred.take() {
-            let scripting = self.tabs[self.active].deferred_scripts;
+            let scripting = self.tabs[self.active].restored_scripting(&self.shared);
             self.tabs[self.active].open_with_scripts(
                 location,
                 Navigation::New,
@@ -1599,7 +1639,7 @@ impl eframe::App for OliveApp {
             self.new_tab(Some(location), &ctx);
         }
         if self.shared.profile.data.settings.browser_theme != previous_theme {
-            self.shared.profile.data.settings.browser_theme.apply(&ctx);
+            self.apply_browser_theme(&ctx);
         }
         self.checkpoint();
         let title: String = self.tabs[self.active].title().chars().take(200).collect();
@@ -2060,6 +2100,115 @@ mod tests {
     }
 
     #[test]
+    fn javascript_default_applies_to_navigation_and_reload() {
+        let ctx = egui::Context::default();
+        let (mut tab, mut shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/current")).unwrap(),
+        );
+        let next = Location::from_input("https://example.com/next").unwrap();
+        let current = tab.loaded.as_ref().unwrap().location.clone();
+        let local = Location::from_path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripted.html"),
+        )
+        .unwrap();
+        for by_default in [false, true] {
+            shared.profile.data.settings.javascript_by_default = by_default;
+            for navigation in [Navigation::New, Navigation::Traverse(0)] {
+                assert_eq!(
+                    tab.scripting_for_load(&next, navigation, &shared),
+                    by_default
+                );
+                assert_eq!(
+                    Tab::new(1).scripting_for_load(&next, navigation, &shared),
+                    by_default
+                );
+                assert!(tab.scripting_for_load(&local, navigation, &shared));
+            }
+            for enabled in [false, true] {
+                tab.loaded.as_mut().unwrap().scripting_enabled = enabled;
+                assert_eq!(
+                    tab.scripting_for_load(&current, Navigation::Reload, &shared),
+                    by_default || enabled
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn theme_changes_refresh_text_in_all_tabs_and_reading_views_without_reload() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        Theme::Light.apply(&ctx);
+        let source = || {
+            let mut source = remote_source("https://example.com/story");
+            source.bytes =
+                b"<article><p>Page glyphs: Zebra 123</p></article><input value=edited>".to_vec();
+            source
+        };
+        let (first, shared) = app_for_test(&ctx, prepare_page(source()).unwrap());
+        let (mut second, _) = app_for_test(&ctx, prepare_page(source()).unwrap());
+        second.id = 1;
+        let mut browser = OliveApp {
+            shared,
+            tabs: vec![first, second],
+            active: 0,
+            next_id: 2,
+            focus_address: false,
+            reveal_tab: false,
+            recovery: None,
+            window_title: String::new(),
+        };
+        // Warm every cache, including the views that will be hidden at the toggle.
+        for tab in &mut browser.tabs {
+            for focus in [false, true] {
+                tab.focus_mode = focus;
+                chrome_frame(&ctx, tab, &mut browser.shared, 800.0, vec![]);
+            }
+        }
+        let before: Vec<_> = browser
+            .tabs
+            .iter()
+            .map(|tab| (tab.saved_tab(), serde_json::to_value(&tab.loaded).unwrap()))
+            .collect();
+        for theme in [Theme::Dark, Theme::Light, Theme::Dark] {
+            browser.shared.profile.data.settings.browser_theme = theme;
+            browser.apply_browser_theme(&ctx);
+            for tab in &mut browser.tabs {
+                for focus in [false, true] {
+                    tab.focus_mode = focus;
+                    let output = chrome_frame(&ctx, tab, &mut browser.shared, 800.0, vec![]);
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if text.galley.text() == "Page glyphs: Zebra 123" =>
+                            {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .expect("page text remains painted");
+                    let fresh = ctx.fonts_mut(|fonts| fonts.layout_job((*text.galley.job).clone()));
+                    assert_eq!(
+                        text.galley.as_ref(),
+                        fresh.as_ref(),
+                        "glyphs must reference the current font atlas"
+                    );
+                }
+            }
+        }
+        for (tab, (saved, loaded)) in browser.tabs.iter().zip(before) {
+            assert_eq!(tab.saved_tab(), saved);
+            assert_eq!(serde_json::to_value(&tab.loaded).unwrap(), loaded);
+            assert_eq!(tab.generation, 1);
+            assert!(tab.pending.is_none());
+        }
+        assert_eq!(browser.shared.browsing_history.entries()[0].visits, 1);
+    }
+
+    #[test]
     fn loader_accepts_an_html_file_and_reports_read_errors() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let loaded = load_file(root.join("examples/hello.html")).unwrap();
@@ -2159,7 +2308,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_session_restore_enables_scripts_but_crash_restore_does_not() {
+    fn clean_session_restore_uses_current_setting_but_crash_restore_disables_scripts() {
         let ctx = egui::Context::default();
         let (tab, shared) = app_for_test(
             &ctx,
@@ -2184,9 +2333,14 @@ mod tests {
             active: 0,
         };
         browser.restore_session(session.clone(), true);
-        assert!(browser.tabs[0].deferred_scripts);
+        assert!(!browser.tabs[0].restored_scripting(&browser.shared));
+        browser.shared.profile.data.settings.javascript_by_default = true;
+        assert!(browser.tabs[0].restored_scripting(&browser.shared));
+        browser.shared.profile.data.settings.javascript_by_default = false;
+        assert!(!browser.tabs[0].restored_scripting(&browser.shared));
+        browser.shared.profile.data.settings.javascript_by_default = true;
         browser.restore_session(session, false);
-        assert!(!browser.tabs[0].deferred_scripts);
+        assert!(!browser.tabs[0].restored_scripting(&browser.shared));
     }
 
     #[test]

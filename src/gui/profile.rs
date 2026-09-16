@@ -21,6 +21,7 @@ const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub struct Settings {
     pub browser_theme: crate::theme::Theme,
     pub restore_session: bool,
+    pub javascript_by_default: bool,
     pub default_zoom: u16,
     pub focus: FocusSettings,
     pub download_directory: Option<PathBuf>,
@@ -30,6 +31,7 @@ impl Default for Settings {
         Self {
             browser_theme: crate::theme::Theme::default(),
             restore_session: true,
+            javascript_by_default: false,
             default_zoom: 100,
             focus: FocusSettings::default(),
             download_directory: None,
@@ -293,6 +295,7 @@ mod tests {
             .unwrap();
         profile.data.settings.default_zoom = 125;
         profile.data.settings.browser_theme = crate::theme::Theme::Dark;
+        profile.data.settings.javascript_by_default = true;
         profile.data.session = Session {
             active: 1,
             tabs: vec![
@@ -340,6 +343,26 @@ mod tests {
         profile.data.settings.browser_theme = crate::theme::Theme::Dark;
         profile.save_if_changed();
         assert_eq!(Profile::load(path).data, profile.data);
+    }
+    #[test]
+    fn older_profiles_do_not_opt_into_javascript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.json");
+        let mut data = serde_json::to_value(Data::default()).unwrap();
+        data["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("javascript_by_default");
+        data["settings"]["browser_theme"] = "Dark".into();
+        fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
+        let profile = Profile::load(path);
+        assert!(!profile.load_failed);
+        assert!(!profile.data.settings.javascript_by_default);
+        assert_eq!(
+            profile.data.settings.browser_theme,
+            crate::theme::Theme::Dark
+        );
+        assert!(!Settings::default().javascript_by_default);
     }
     #[test]
     fn damaged_profiles_are_preserved_and_invalid_state_rejected() {

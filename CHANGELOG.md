@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0-rc3 — JavaScript defaults and theme switching
+
+- Add a persistent, opt-in setting to enable web JavaScript by default for new
+  pages, reloads, redirects, form responses and normal session restores. Existing profiles
+  keep the setting off; crash-recovery restores still disable web scripts.
+- Keep per-page JavaScript controls; the saved opt-in applies again on the next
+  ordinary page load or reload.
+- Refresh cached text layouts in all tabs and Focus views when switching browser
+  themes, keeping page text visible without reloading or losing document state.
+
 ## 0.12.0-rc2 — Browser appearance
 
 - Unify the browser interface with coordinated olive palettes, rounded controls,

@@ -1,13 +1,18 @@
-# Security boundary in 0.9.0
+# Security boundary in 0.13.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
 Local documents run
 inline and external classic JavaScript automatically. Web documents start with
 JavaScript disabled: no script sources are fetched and no handlers run until the
-user chooses **Enable JavaScript** for that page. Reload and same-page navigation
-preserve this choice; other document navigation and changed redirect destinations
-reset it. **Disable JavaScript** reloads without fetching or running scripts.
+user chooses **Enable JavaScript** for that page or opts into **Enable JavaScript
+by default on page loads** in Settings. The saved setting starts off, including
+for existing profiles, and applies to new pages, reloads, redirects, form responses and
+normal session restores. Crash-recovery restores keep web scripting disabled.
+Same-page navigation preserves the current page's choice. Without the saved opt-in,
+reload also preserves it, while other document navigation and changed redirect
+destinations reset it. **Disable JavaScript** reloads without fetching or running
+scripts; the saved opt-in applies again on the next ordinary load or reload.
 Enabling the `js` feature alone never
 executes HTML. The `olive` DOM inspector remains inert; `olive-js` explicitly runs
 standalone JavaScript. The optional `net` feature explicitly loads HTTP(S)

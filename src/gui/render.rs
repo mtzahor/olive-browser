@@ -613,6 +613,13 @@ impl Page {
         Ok(())
     }
 
+    /// Cached galleys refer to the font atlas, which egui rebuilds on theme changes.
+    pub fn invalidate_text_layout(&mut self) {
+        for block in &mut self.blocks {
+            block.layout = None;
+        }
+    }
+
     /// Reflow the retained reader presentation without reloading or running scripts.
     pub fn set_reading_style(&mut self, settings: Settings) {
         let Some(previous) = self.reading_style else {

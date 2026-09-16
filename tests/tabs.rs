@@ -24,7 +24,7 @@ use std::{
     process::{Child, Command as ProcessCommand, Stdio},
     time::{Duration, Instant},
 };
-use worker::{Command, Event, Worker};
+use worker::{Command, Event, ScriptPolicy, Worker};
 
 const HTML: &str = "<!doctype html><title>Before</title><script>let count=1; document.title='Loaded '+count; function increment(){count++; document.title='Clicked '+count; alert(count)}</script><button id=increment onclick='increment(); return false'>Increment</button><p>A readable article.</p>";
 
@@ -209,7 +209,7 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_document() {
         &Command::Load {
             location: Location::from_input(&format!("http://{}/", server.local_addr().unwrap()))
                 .unwrap(),
-            scripting: false,
+            scripting: ScriptPolicy::Disabled,
         },
         32768,
     )
@@ -290,6 +290,86 @@ fn the_watchdog_terminates_a_hung_tab_without_resetting_other_tabs() {
 }
 
 #[test]
+fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
+    use olive_html::net::{CookieJar, FormRequest};
+    use std::io::{Read, Write};
+    for form in [false, true] {
+        for policy in [
+            ScriptPolicy::Disabled,
+            ScriptPolicy::Page,
+            ScriptPolicy::AllPages,
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let start =
+                Location::from_input(&format!("http://{}/start", listener.local_addr().unwrap()))
+                    .unwrap();
+            let server = std::thread::spawn(move || {
+                for redirected in [false, true] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut headers = Vec::new();
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        headers.push(byte[0]);
+                    }
+                    let headers = String::from_utf8(headers).unwrap();
+                    let method = if form && !redirected { "POST" } else { "GET" };
+                    let path = if redirected { "/destination" } else { "/start" };
+                    assert!(headers.starts_with(&format!("{method} {path} HTTP/1.1")));
+                    if redirected {
+                        let body = b"<title>Scripts off</title><script>document.title='Scripts on'</script><p>Response</p>";
+                        write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
+                        stream.write_all(body).unwrap();
+                    } else {
+                        stream.write_all(b"HTTP/1.1 303 See Other\r\nConnection: close\r\nLocation: /destination\r\nContent-Length: 0\r\n\r\n").unwrap();
+                    }
+                }
+            });
+            let command = if form {
+                Command::SubmitWithCookies {
+                    request: FormRequest {
+                        location: start,
+                        body: Some(String::new()),
+                    },
+                    scripting: policy,
+                    cookies: CookieJar::default(),
+                    initiator: None,
+                }
+            } else {
+                Command::LoadWithCookies {
+                    location: start,
+                    scripting: policy,
+                    cookies: CookieJar::default(),
+                    initiator: None,
+                }
+            };
+            let mut worker = Worker::spawn_command_at(
+                Path::new(env!("CARGO_BIN_EXE_olive-gui")),
+                command,
+                &egui::Context::default(),
+            )
+            .unwrap();
+            let page = match reply(&mut worker).unwrap() {
+                Event::Loaded(page) => page,
+                _ => panic!("expected redirected page"),
+            };
+            let enabled = policy == ScriptPolicy::AllPages;
+            assert_eq!(page.scripting_enabled, enabled);
+            assert_eq!(
+                page.page.title,
+                if enabled { "Scripts on" } else { "Scripts off" }
+            );
+            assert_eq!(page.scripts.executed, usize::from(enabled));
+            assert_eq!(page.location.url().path(), "/destination");
+            server.join().unwrap();
+        }
+    }
+}
+
+#[test]
 fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     use olive_html::net::{CookieJar, FormRequest};
     use std::io::{Read, Write};
@@ -351,6 +431,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
         executable,
         Command::SubmitWithCookies {
             request,
+            scripting: ScriptPolicy::Disabled,
             cookies: cookies.clone(),
             initiator,
         },
@@ -380,7 +461,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
         executable,
         Command::LoadWithCookies {
             location: loaded.location,
-            scripting: false,
+            scripting: ScriptPolicy::Disabled,
             cookies,
             initiator: None,
         },

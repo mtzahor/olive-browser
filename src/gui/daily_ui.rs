@@ -114,6 +114,15 @@ impl DailyWindows {
                     ui.separator();
                     ui.heading("Browsing");
                     ui.checkbox(
+                        &mut profile.data.settings.javascript_by_default,
+                        "Enable JavaScript by default on page loads",
+                    );
+                    ui.label(
+                        RichText::new("Applies to page loads, reloads, redirects, form responses and restored tabs. Enable only for sites you trust; scripts run without an OS security sandbox.")
+                            .small()
+                            .weak(),
+                    );
+                    ui.checkbox(
                         &mut profile.data.settings.restore_session,
                         "Restore tabs from the previous session",
                     );

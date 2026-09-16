@@ -18,15 +18,40 @@ const MAX_EVENT_BYTES: usize = 128 * 1024 * 1024;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScriptPolicy {
+    Disabled,
+    /// The per-page opt-in does not grant permission to a redirect destination.
+    Page,
+    /// The saved opt-in also applies to redirect destinations.
+    AllPages,
+}
+
+impl ScriptPolicy {
+    pub fn for_load(enabled: bool, by_default: bool) -> Self {
+        match (enabled, by_default) {
+            (false, _) => Self::Disabled,
+            (true, false) => Self::Page,
+            (true, true) => Self::AllPages,
+        }
+    }
+
+    fn enabled_for(self, requested: &Location, destination: &Location) -> bool {
+        !destination.is_remote()
+            || self == Self::AllPages
+            || (self == Self::Page && requested.same_document(destination))
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Command {
     Load {
         location: Location,
-        scripting: bool,
+        scripting: ScriptPolicy,
     },
     LoadWithCookies {
         location: Location,
-        scripting: bool,
+        scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
     },
@@ -38,6 +63,7 @@ pub enum Command {
     Submit(FormRequest),
     SubmitWithCookies {
         request: FormRequest,
+        scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
     },
@@ -78,7 +104,7 @@ impl Worker {
             executable,
             Command::Load {
                 location,
-                scripting,
+                scripting: ScriptPolicy::for_load(scripting, false),
             },
             ctx,
         )
@@ -86,7 +112,7 @@ impl Worker {
 
     pub fn spawn_with_cookies(
         location: Location,
-        scripting: bool,
+        scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
         ctx: &egui::Context,
@@ -112,6 +138,7 @@ impl Worker {
 
     pub fn spawn_form_with_cookies(
         request: FormRequest,
+        scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
         ctx: &egui::Context,
@@ -121,6 +148,7 @@ impl Worker {
             &executable,
             Command::SubmitWithCookies {
                 request,
+                scripting,
                 cookies,
                 initiator,
             },
@@ -336,7 +364,7 @@ pub fn run() -> io::Result<()> {
             Command::Submit(request) => (
                 Command::Load {
                     location: request.location.clone(),
-                    scripting: false,
+                    scripting: ScriptPolicy::Disabled,
                 },
                 Some(request),
                 CookieJar::default(),
@@ -344,12 +372,13 @@ pub fn run() -> io::Result<()> {
             ),
             Command::SubmitWithCookies {
                 request,
+                scripting,
                 cookies,
                 initiator,
             } => (
                 Command::Load {
                     location: request.location.clone(),
-                    scripting: false,
+                    scripting,
                 },
                 Some(request),
                 cookies,
@@ -388,8 +417,7 @@ pub fn run() -> io::Result<()> {
                     } else {
                         loader.load(location.clone())?
                     };
-                    let scripting = !source.location.is_remote()
-                        || (scripting && source.location.same_document(&location));
+                    let scripting = scripting.enabled_for(&location, &source.location);
                     prepare_page_with_loader(source, &loader, scripting)
                 })();
                 match result {
@@ -516,6 +544,33 @@ pub mod wire_image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn script_policy_preserves_page_opt_in_and_local_documents() {
+        let page = Location::from_input("https://example.com/page").unwrap();
+        let fragment = Location::from_input("https://example.com/page#part").unwrap();
+        let redirect = Location::from_input("https://other.example/destination").unwrap();
+        let local =
+            Location::from_path(std::env::current_dir().unwrap().join("example.html")).unwrap();
+        for policy in [
+            ScriptPolicy::Disabled,
+            ScriptPolicy::Page,
+            ScriptPolicy::AllPages,
+        ] {
+            assert!(policy.enabled_for(&local, &local));
+            assert_eq!(
+                policy.enabled_for(&page, &fragment),
+                policy != ScriptPolicy::Disabled
+            );
+            assert_eq!(
+                policy.enabled_for(&page, &redirect),
+                policy == ScriptPolicy::AllPages
+            );
+        }
+        assert_eq!(ScriptPolicy::for_load(false, true), ScriptPolicy::Disabled);
+        assert_eq!(ScriptPolicy::for_load(true, false), ScriptPolicy::Page);
+        assert_eq!(ScriptPolicy::for_load(true, true), ScriptPolicy::AllPages);
+    }
+
     #[test]
     fn rejects_oversized_truncated_and_invalid_frames() {
         for bytes in [

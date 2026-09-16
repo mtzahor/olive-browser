@@ -1,7 +1,7 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **0.12.0**, the
-second release candidate, opens
+Olive is a small browser and HTML parser written in Rust. Version **0.13.0**, the
+third release candidate, opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -9,9 +9,15 @@ CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
 reload the current page with scripting. Use this only for pages you trust: the
 runtime runs in a separate tab process, without an OS security sandbox. **Disable JavaScript** reloads without scripts.
-Reload and same-page anchors preserve the choice; new addresses, history traversal
-to another document, and redirects to a different address start with web scripting
-disabled. Local documents continue to run scripts automatically.
+To opt in for future pages, select **Browser menu → Settings → Browsing → Enable
+JavaScript by default on page loads**. This saved setting starts off and applies to
+new addresses, reloads, history traversal, redirects, form responses and normal
+session restores. **Disable JavaScript** reloads the current page without scripts;
+with the saved opt-in, the next ordinary load or reload enables them again.
+Same-page anchors keep the current page's choice. Without the saved opt-in, reload
+preserves the per-page choice, while navigating to another document or redirecting
+to a different address starts with web scripting disabled. Local documents continue
+to run scripts automatically.
 
 ## Run the viewer
 
@@ -64,7 +70,8 @@ checked choices, selected options and the activated submit button. Explicit
 submit or redirect to HTTP, and form actions must use HTTP(S).
 
 Submission starts a new tab worker and leaves the previous page and edits available
-if the request fails. Web scripting starts disabled on the response. POST redirects
+if the request fails. Responses use the saved JavaScript default (off unless enabled
+in Settings). POST redirects
 301/302/303 become GET; 307/308 preserve the body. **Reload, Back and Forward use
 GET and never resend a POST body.** POST bodies are not stored in browsing history;
 GET query values are part of saved URLs. Edits last until a successful full navigation
@@ -169,8 +176,9 @@ per file; simultaneous instances can overwrite each other's changes.
 The session profile restores open addresses, page zoom and Focus preferences at startup;
 page contents and Back/Forward stacks are reloaded rather than serialized. Olive records
 whether the previous session closed cleanly and offers to restore the last checkpoint after
-an interrupted launch. Normal session restores load with scripting enabled so client-rendered
-sites can resume; the explicit crash-recovery restore keeps scripting disabled until you opt in.
+an interrupted launch. Normal session restores use the saved JavaScript default;
+the explicit crash-recovery restore keeps web scripting disabled even when that
+default is enabled. Background tabs use the current setting when selected.
 
 Bookmarks, settings and the session profile are stored beside history in `profile.json`.
 Set `OLIVE_PROFILE_DIR` to use an isolated profile directory. The **Bookmarks**,
