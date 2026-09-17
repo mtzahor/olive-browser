@@ -15,7 +15,7 @@ pub use url::Url;
 
 pub mod download;
 
-pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
+pub const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_URL_BYTES: usize = 8192;
 pub const MAX_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_COOKIES: usize = 256;

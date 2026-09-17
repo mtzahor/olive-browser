@@ -9,7 +9,7 @@ use cssparser::{
     AtRuleParser, CowRcStr, DeclarationParser, Delimiter, Parser, ParserState, QualifiedRuleParser,
     RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
 };
-use selectors::Selector;
+use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
     Color, ComputedStyle, Direction, Display, Length, LineHeight, TextAlign, WhiteSpace,
@@ -17,10 +17,10 @@ pub use values::{
 use values::{Declaration, PROPERTIES, Value};
 
 pub const MAX_CSS_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_RULES: usize = 16_384;
-const MAX_DECLARATIONS: usize = 128;
-const MAX_SELECTORS: usize = 64;
-const MATCH_BUDGET: usize = 2_000_000;
+pub const MAX_RULES: usize = 32_768;
+const MAX_DECLARATIONS: usize = 512;
+const MAX_SELECTORS: usize = 128;
+const MATCH_BUDGET: usize = 8_000_000;
 
 #[derive(Clone, Debug)]
 struct Rule {
@@ -38,6 +38,8 @@ pub struct Diagnostics {
 #[derive(Default, Debug)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
+    index: HashMap<Key, Vec<(usize, usize)>>,
+    unindexed: Vec<(usize, usize)>,
     pub diagnostics: Diagnostics,
     bytes: usize,
 }
@@ -115,8 +117,11 @@ impl Stylesheet {
         }
         self.bytes += source.len();
         let mut input = Parser::new(source);
+        let mut remaining = MAX_RULES - self.rules.len();
         let mut parser = Rules {
             diagnostics: &mut self.diagnostics,
+            remaining: &mut remaining,
+            depth: 0,
         };
         let mut ignored = 0;
         let mut limited = false;
@@ -126,7 +131,20 @@ impl Stylesheet {
                 break;
             }
             match result {
-                Ok(rule) => self.rules.push(rule),
+                Ok(rules) => {
+                    for rule in rules {
+                        let index = self.rules.len();
+                        for (selector_index, selector) in rule.selectors.iter().enumerate() {
+                            let entry = (index, selector_index);
+                            if let Some(key) = selector.key() {
+                                self.index.entry(key).or_default().push(entry);
+                            } else {
+                                self.unindexed.push(entry);
+                            }
+                        }
+                        self.rules.push(rule);
+                    }
+                }
                 Err(_) => ignored += 1,
             }
         }
@@ -159,23 +177,47 @@ impl Stylesheet {
                 }
             }
         };
-        for rule in &self.rules {
+        let mut candidates = Vec::new();
+        if budget.matches > 0 {
+            candidates.extend_from_slice(&self.unindexed);
+            let mut collect = |key| {
+                if let Some(entries) = self.index.get(&key) {
+                    candidates.extend_from_slice(entries);
+                }
+            };
+            collect(Key::Tag(element.name.local.as_ref().to_ascii_lowercase()));
+            if let Some(id) = element.attribute("id") {
+                collect(Key::Id(id.to_ascii_lowercase()));
+            }
+            if let Some(classes) = element.attribute("class") {
+                let classes: std::collections::HashSet<_> = classes
+                    .split_ascii_whitespace()
+                    .map(str::to_ascii_lowercase)
+                    .collect();
+                for class in classes {
+                    collect(Key::Class(class));
+                }
+            }
+            for attribute in &element.attributes {
+                if attribute.name.ns.is_empty() {
+                    collect(Key::Attribute(attribute.name.local.to_string()));
+                }
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        for (rule_index, selector_index) in candidates {
             if budget.matches == 0 {
                 budget.limited = true;
                 break;
             }
-            let specificity = rule
-                .selectors
-                .iter()
-                .filter_map(|s| {
-                    s.matches(doc, id, &mut budget.matches)
-                        .then_some(s.specificity)
-                })
-                .max();
-            if let Some(specificity) = specificity {
-                consider(&rule.declarations, false, specificity);
+            let rule = &self.rules[rule_index];
+            let selector = &rule.selectors[selector_index];
+            if selector.matches(doc, id, &mut budget.matches) {
+                consider(&rule.declarations, false, selector.specificity);
             }
         }
+        budget.limited |= budget.matches == 0;
         if let Some(inline) = element.attribute("style") {
             if self
                 .bytes
@@ -218,6 +260,7 @@ impl Stylesheet {
         style.width = computed_length(style.width);
         style.max_width = computed_length(style.max_width);
         style.height = computed_length(style.height);
+        style.min_height = computed_length(style.min_height);
         style.border_width = computed_length(style.border_width);
         style.border_radius = computed_length(style.border_radius);
         if element.attribute("hidden").is_some() {
@@ -235,12 +278,7 @@ pub fn applicable_style(element: &Element) -> bool {
         || element
             .attribute("type")
             .is_some_and(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("text/css"))
-        || element.attribute("media").is_some_and(|s| {
-            !s.trim().is_empty()
-                && !s
-                    .split(',')
-                    .any(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "screen" | "all"))
-        })
+        || element.attribute("media").is_some_and(|s| !screen_media(s))
     {
         return false;
     }
@@ -259,15 +297,90 @@ pub fn applicable_style(element: &Element) -> bool {
 
 struct Rules<'a> {
     diagnostics: &'a mut Diagnostics,
+    remaining: &'a mut usize,
+    depth: usize,
+}
+// Viewport-dependent features remain unsupported, rather than assuming a
+// desktop width and applying the wrong rules when the user resizes the window.
+fn screen_media(source: &str) -> bool {
+    source.trim().is_empty()
+        || source.split(',').any(|query| {
+            let words = query
+                .split_ascii_whitespace()
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            matches!(
+                words
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                ["screen"] | ["all"] | ["only", "screen"] | ["only", "all"] | ["not", "print"]
+            )
+        })
 }
 impl<'i> AtRuleParser<'i> for Rules<'_> {
-    type Prelude = ();
-    type AtRule = Rule;
+    type Prelude = bool;
+    type AtRule = Vec<Rule>;
     type Error = ();
+    fn parse_prelude(
+        &mut self,
+        name: CowRcStr<'i>,
+        input: &mut Parser<'i>,
+    ) -> Result<bool, cssparser::ParseError<()>> {
+        if !name.eq_ignore_ascii_case("media") {
+            return Err(cssparser::ParseError::custom(()));
+        }
+        let start = input.position();
+        while input.next().is_ok() {}
+        let source = input.slice_from(start);
+        Ok(!source.trim().is_empty() && screen_media(source))
+    }
+    fn parse_block(
+        &mut self,
+        applies: bool,
+        _: &ParserState,
+        input: &mut Parser<'i>,
+    ) -> Result<Vec<Rule>, cssparser::ParseError<()>> {
+        if !applies {
+            while input.next().is_ok() {}
+            return Ok(vec![]);
+        }
+        if self.depth >= 8 {
+            self.diagnostics.limited = true;
+            while input.next().is_ok() {}
+            return Ok(vec![]);
+        }
+        let mut result = vec![];
+        let limit = *self.remaining;
+        let mut ignored = 0;
+        let mut limited = false;
+        let mut parser = Rules {
+            diagnostics: self.diagnostics,
+            remaining: self.remaining,
+            depth: self.depth + 1,
+        };
+        for item in StyleSheetParser::new(input, &mut parser) {
+            match item {
+                Ok(rules) => result.extend(rules),
+                Err(_) => ignored += 1,
+            }
+            if result.len() >= limit {
+                limited = true;
+                break;
+            }
+        }
+        self.diagnostics.ignored += ignored;
+        self.diagnostics.limited |= limited;
+        // A nested parser requires its input to be exhausted even when the
+        // retained-rule budget stops collection partway through the block.
+        while input.next().is_ok() {}
+        Ok(result)
+    }
 }
 impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
     type Prelude = Vec<Selector>;
-    type QualifiedRule = Rule;
+    type QualifiedRule = Vec<Rule>;
     type Error = ();
     fn parse_prelude(
         &mut self,
@@ -288,11 +401,16 @@ impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
         selectors: Self::Prelude,
         _: &ParserState,
         input: &mut Parser<'i>,
-    ) -> Result<Rule, cssparser::ParseError<()>> {
-        Ok(Rule {
+    ) -> Result<Vec<Rule>, cssparser::ParseError<()>> {
+        if *self.remaining == 0 {
+            self.diagnostics.limited = true;
+            return Ok(vec![]);
+        }
+        *self.remaining -= 1;
+        Ok(vec![Rule {
             selectors,
             declarations: declarations(input, self.diagnostics),
-        })
+        }])
     }
 }
 struct Declarations;

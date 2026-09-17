@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0 — Website compatibility and CSS rendering
+
+- Expand the ranking snapshot to the top 50 sites in Israel and worldwide
+  (77 unique domains, Semrush August 2026), and add a structured live audit
+  that records all failures, HTTP blocks, resources and CSS limits.
+- Raise the browser document ceiling from 1 to 8 MiB after eight audited sites
+  exceeded the former limit; keep the standalone parser default at 1 MiB.
+- Allow 256 resource attempts within 30 seconds, cap individual requests at
+  five seconds and prioritize stylesheets, images, then optional scripts.
+  Keep byte, image decoding, JavaScript and worker limits bounded.
+- Index CSS rules by their rightmost ID/class/attribute/tag. Support attribute and sibling
+  selectors, structural and functional pseudo-classes, and nested static screen
+  media groups. Inactive hover/focus/visited rules no longer style every element.
+- Support border-box sizing and minimum heights for block boxes and images.
+  Raise CSS ceilings to 32,768 rules, 512 declarations per block, 128 selectors
+  per rule and eight million matching steps; retain the shared 8 MiB input cap.
+- Add offline regressions for large documents, resource prioritization, CSS
+  matching/cascade/limits and rendered box geometry. See the versioned audit
+  for measured improvements and remaining website limitations.
+- Replace the packaged macOS executable atomically so rebuilding an open app
+  does not leave stale executable signing state that prevents workers starting.
+
 ## 1.0.0 — First official release
 
 - Remove the release-candidate labels from the browser status bar and menu;

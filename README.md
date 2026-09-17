@@ -1,7 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.0.0**, the
-first official release, opens
+Olive is a small browser and HTML parser written in Rust. Version **1.1.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -194,7 +193,7 @@ WebPKI roots plus the operating system's trusted certificates. Requests time out
 after 20 seconds and follow at most 10 redirects.
 Gzip/deflate, declared HTTP character encodings and the HTML `<meta charset>`
 prescan are supported. A BOM takes precedence over the HTTP charset, followed by
-the HTML declaration and then UTF-8. Responses are capped at 1 MiB after decompression
+the HTML declaration and then UTF-8. Responses are capped at 8 MiB after decompression
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
 The viewer renders text, basic boxes, PNG, JPEG and WebP images, and linked/embedded/inline styles.
@@ -215,12 +214,15 @@ fetch. Failed resources leave the document readable and appear under
 **Resource errors** in the status bar. Disabled web JavaScript does not fetch
 external scripts, but images still load.
 
-Resource loading shares a 20-second deadline and 64-attempt limit per document,
+Resource loading shares a 30-second deadline and 256-attempt limit per document,
+with a five-second cap per resource request. Stylesheets load first, then images,
+then optional scripts, preserving document order within each kind. This keeps
+early scripts or decorative images from exhausting the budget before CSS loads,
 with at most 8 MiB of retained external CSS, 32 MiB of external JavaScript, and
 32 MiB of encoded page images. Each response is capped at 8 MiB after
 decompression; text is capped again after character decoding. Resource
 size errors and exhausted page budgets are reported separately. CSS processing
-shares an 8 MiB input budget and retains at most 16,384 supported rules. HTTP errors, missing
+shares an 8 MiB input budget and retains at most 32,768 supported rules. HTTP errors, missing
 or incorrect MIME types, HTTPS-to-HTTP resource loads, and web-to-file loads are
 rejected. Stylesheets require `text/css`; scripts require a JavaScript MIME type.
 Redirects, compression, BOMs and HTTP charsets use the document loader's rules.
@@ -248,24 +250,32 @@ cargo run --locked --all-features --example resource-report -- https://www.ynet.
 
 ## Website compatibility suite
 
-The compatibility suite tracks the July 2026 [Semrush top websites in Israel](https://www.semrush.com/website/top/israel/all/)
-and [worldwide](https://www.semrush.com/website/top/global/all/). It contains
-fourteen unique domains after overlap and checks that each target can be
-addressed over HTTPS. Run the deterministic checks with:
+The compatibility suite pins the August 2026 [Semrush top 50 websites in Israel](https://www.semrush.com/trending-websites/il/all)
+and [top 50 worldwide](https://www.semrush.com/trending-websites/global/all), retrieved
+September 17, 2026. The two lists contain **77 unique domains**. The checked-in
+[ranking snapshot](tests/fixtures/compatibility/sites.tsv) includes all categories.
+Deterministic checks validate the complete ranks, regional uniqueness and HTTPS targets:
 
 ```sh
 cargo test --locked --all-features --test compatibility
 ```
 
-The live network smoke test is opt-in and keeps web JavaScript disabled:
+Run the opt-in live audit (Python 3 required) with:
 
 ```sh
-OLIVE_LIVE_COMPAT=1 cargo test --locked --all-features --test compatibility
+./scripts/run-compatibility.sh
+./scripts/run-compatibility.sh --filter ynet.co.il --jobs 1 --output target/ynet.json
 ```
 
-Live results depend on site availability, redirects and rate limits; the pinned
-ranking snapshot keeps CI deterministic.
-
+The audit uses up to four isolated processes, each with a 65-second deadline,
+and writes `target/compatibility-report.json`. It never executes downloaded scripts.
+It records every domain once, its regional ranks, HTTP status, document size,
+resource diagnostics, CSS rule counts and parsing/matching limits; failed sites
+do not prevent later targets from being checked. Network failures, HTTP block
+pages and unsupported client-side applications are not compatibility passes.
+See the [1.1.0 audit and resource review](docs/compatibility-1.1.0.md) for results
+and remaining limitations. The snapshot and offline regressions keep CI independent
+of live websites.
 Build a release binary with:
 
 ```sh
@@ -325,11 +335,26 @@ CSS comes from stylesheet links, `<style>` elements and inline `style` attribute
 with linked and embedded rules merged in document order. The supported
 subset includes:
 
-- type, class, ID, compound, descendant, child, and static `:hover` selectors;
-  - the author cascade, specificity, inheritance, inline precedence, and CSS-wide keywords;
-  - text styles, whitespace modes, colors, borders, rounded corners, spacing,
-  widths, `direction`, and `display: block`, `inline`, `inline-block`, or `none`.
+- Type, class, ID, compound, descendant, child, adjacent/general sibling and
+  attribute selectors, including value operators and `i`/`s` case flags.
+- `:root`, `:empty`, child-position selectors, `:nth-child`/`:nth-last-child`,
+  `:nth-of-type`/`:nth-last-of-type`, `:is`, `:where`, `:not`, link and initial checked states.
+  Hover, focus, active and visited selectors do not match this static presentation.
+- The author cascade, specificity, inheritance, inline precedence and CSS-wide keywords.
+  Selector indexing avoids testing unrelated rules while retaining a shared
+  eight-million-step matching ceiling.
+- Nested screen/all media groups, `only screen`, `only all` and `not print`.
+  Viewport/feature-dependent queries, other at-rules and CSS variables remain unsupported.
+- Text styles, whitespace modes, colors, borders, rounded corners, spacing, widths,
+  minimum heights, content-box/border-box sizing, `direction`, and
+  `display: block`, `inline`, `inline-block` (block fallback), or `none`.
 
+Stylesheets share an 8 MiB input budget, 32,768 rules, 512 declarations per block,
+128 selectors per rule, and eight levels of media/functional-selector nesting.
+The browser still does not implement flex/grid layout, positioned content,
+SVG, downloaded fonts, CSS variables or viewport-responsive media queries.
+The [compatibility example](examples/compatibility.html) exercises the new selectors,
+RTL text and border-box sizing.
 Unsupported CSS is skipped and reported in the status bar. See the [styled
 example](examples/styled.html) for a working sample.
 

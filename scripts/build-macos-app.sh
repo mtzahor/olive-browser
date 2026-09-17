@@ -10,7 +10,14 @@ cd "$(dirname "$0")/.."
 olive_bundle='target/Olive Browser.app'
 olive_version=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
 mkdir -p "$olive_bundle/Contents/MacOS" "$olive_bundle/Contents/Resources"
-cp target/release/olive-gui "$olive_bundle/Contents/MacOS/olive-gui"
+# Replace the executable's inode instead of overwriting a running app. macOS
+# can otherwise retain the old code-signature cache and kill new workers.
+olive_executable=$(mktemp "$olive_bundle/Contents/MacOS/.olive-gui.XXXXXX")
+trap 'rm -f "$olive_executable"' 0
+cp target/release/olive-gui "$olive_executable"
+chmod 755 "$olive_executable"
+mv -f "$olive_executable" "$olive_bundle/Contents/MacOS/olive-gui"
+trap - 0
 cp LICENSE "$olive_bundle/Contents/Resources/LICENSE"
 cp assets/fonts/OFL.txt "$olive_bundle/Contents/Resources/Inter-OFL.txt"
 cp assets/fonts/NotoSansHebrew-OFL.txt "$olive_bundle/Contents/Resources/NotoSansHebrew-OFL.txt"

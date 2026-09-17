@@ -81,14 +81,14 @@ fn unsupported_selector_invalidates_whole_group_and_at_rules_stay_inert() {
         r#"<!doctype html><style>
         @import "file:///private.css";
         @media screen { p { color: red; } }
-        p:visited, p { color: blue; } p[data-x], p { color: green; }
+        p::before, p { color: blue; } p:has(a), p { color: green; }
         p { font-style: italic; background: url("https://example.com/x;}.png"); color: purple; }
         </style><p id=a>x"#,
     );
     assert_eq!(s["a"].color, Color(128, 0, 128, 255));
     assert!(s["a"].italic);
     assert_eq!(s["a"].background.3, 0);
-    assert!(sheet.diagnostics.ignored >= 5);
+    assert!(sheet.diagnostics.ignored >= 4);
 }
 #[test]
 fn renderable_button_css_has_no_unsupported_declarations() {
@@ -104,7 +104,7 @@ fn renderable_button_css_has_no_unsupported_declarations() {
     );
     assert_eq!(sheet.diagnostics.ignored, 0);
     assert_eq!(s["button"].display, Display::Block);
-    assert_eq!(s["button"].background, Color(0, 68, 153, 255));
+    assert_eq!(s["button"].background, Color(0, 102, 204, 255));
     assert_eq!(
         s["button"].padding,
         [
@@ -277,7 +277,7 @@ fn limits_bound_css_storage_and_matching_work() {
     assert_eq!(rules.rule_count(), olive_html::css::MAX_RULES);
     let (_, sheet, _) = styles(&format!(
         "<style>p {{{}}}</style><p>x",
-        "color:red;".repeat(129)
+        "color:red;".repeat(513)
     ));
     assert!(sheet.diagnostics.limited);
     let (_, _, budget) = styles(&format!(
@@ -285,7 +285,25 @@ fn limits_bound_css_storage_and_matching_work() {
         ".missing {color:red}".repeat(2048),
         "<p>x</p>".repeat(1000)
     ));
-    assert!(budget.limited);
+    assert!(
+        !budget.limited,
+        "unrelated indexed rules must not exhaust matching"
+    );
+    let (_, _, budget) = styles(&format!(
+        "<style>{}</style>{}",
+        "[data-missing] {color:red}".repeat(4096),
+        "<p>x</p>".repeat(1000)
+    ));
+    assert!(
+        !budget.limited,
+        "attribute indexing must exclude unrelated elements"
+    );
+    let (_, _, budget) = styles(&format!(
+        "<style>{}</style>{}",
+        "* {color:red}".repeat(4096),
+        "<p>x</p>".repeat(1000)
+    ));
+    assert!(budget.limited, "universal matching remains bounded");
 }
 #[test]
 fn deterministic_malformed_css_recovers_without_panics() {
@@ -326,4 +344,126 @@ fn megabyte_stylesheets_keep_rules_after_large_literal_data() {
     let sheet = Stylesheet::parse(&source);
     assert!(!sheet.diagnostics.limited);
     assert_eq!(sheet.rule_count(), 1);
+}
+
+#[test]
+fn attributes_structural_selectors_and_siblings_match_real_elements() {
+    let (s, sheet, _) = styles(
+        r#"<!doctype html><style>
+        :root {font-size:20px}
+        [data-kind="NEWS" i] {color:red}
+        [data-kind="NEWS" s] {color:blue}
+        [data-tags~=lead][lang|=he][data-url^="https:"][data-url$=".il"][data-url*="news"] {font-style:italic}
+        [data-kind^=""] {color:green}
+        main > p:first-child + p {background:yellow}
+        main > p:first-child ~ p:last-child {color:purple}
+        p:nth-child(2n + 1) {font-weight:700}
+        p:nth-last-child(2) {text-decoration:underline}
+        p:nth-of-type(2) {padding:4px}
+        p:nth-last-of-type(1) {margin:3px}
+        p:empty {display:none}
+        section > p:only-child {font-size:30px}
+        a:any-link {color:blue}
+        a:hover, a:visited, a:focus {display:none}
+        </style><main><p id=a data-kind=news data-tags="top lead" lang=he-IL data-url="https://news.il">A</p>
+        <!--not an element--><p id=b>B</p> text <p id=c>C</p></main>
+        <p id=empty><!--empty--></p><section><p id=only>Only</p></section><a id=link href='/'>Link</a>"#,
+    );
+    assert_eq!(sheet.diagnostics.ignored, 0);
+    assert_eq!(s["a"].color, Color(255, 0, 0, 255));
+    assert!(s["a"].italic);
+    assert_eq!(s["a"].font_weight, 700.0);
+    assert_eq!(s["b"].background, Color(255, 255, 0, 255));
+    assert!(s["b"].underline);
+    assert_eq!(s["b"].padding, [Length::Px(4.0); 4]);
+    assert_eq!(s["c"].color, Color(128, 0, 128, 255));
+    assert_eq!(s["c"].margin, [Length::Px(3.0); 4]);
+    assert_eq!(s["empty"].display, Display::None);
+    assert_eq!(s["only"].font_size, 30.0);
+    assert_eq!(s["link"].display, Display::Inline);
+}
+
+#[test]
+fn functional_selectors_preserve_specificity_and_negation() {
+    let (s, sheet, _) = styles(
+        r#"<!doctype html><style>
+        :where(#a) {color:red}
+        p {color:green}
+        p:is(.note, #absent) {color:blue}
+        #a {color:purple}
+        :not(.note, .skip) {font-style:italic}
+        p:not(:is(.skip, .missing)) {background:yellow}
+        </style><p id=a class=note>A</p><p id=b>B</p><p id=c class=skip>C</p>"#,
+    );
+    assert_eq!(sheet.diagnostics.ignored, 0);
+    assert_eq!(s["a"].color, Color(0, 0, 255, 255));
+    assert_eq!(s["b"].color, Color(0, 128, 0, 255));
+    // Reset inherited italic before inspecting a negation's own effect.
+    let (s, _, _) = styles(
+        "<style>p:not(.skip) {font-style:italic}</style><p id=a>A</p><p id=b class=skip>B</p>",
+    );
+    assert!(s["a"].italic);
+    assert!(!s["b"].italic);
+}
+
+#[test]
+fn screen_media_preserves_order_and_skips_unknown_conditions() {
+    let (s, sheet, _) = styles(
+        r#"<!doctype html><style>
+        p {color:red}
+        @media print {p {color:blue}}
+        @media screen {p {color:green} @media all {p {font-size:22px}}}
+        @media only screen {p {color:purple}}
+        @media screen and (max-width:1px) {p {display:none}}
+        @media not print {p {font-style:italic}}
+        </style><style media="only screen">p {padding:2px}</style><p id=a>A</p>"#,
+    );
+    assert_eq!(sheet.diagnostics.ignored, 0);
+    assert_eq!(s["a"].color, Color(128, 0, 128, 255));
+    assert_eq!(s["a"].font_size, 22.0);
+    assert_eq!(s["a"].display, Display::Block);
+    assert_eq!(s["a"].padding, [Length::Px(2.0); 4]);
+    assert!(s["a"].italic);
+    let nested = format!(
+        "{}p {{color:red}}{}",
+        "@media screen {".repeat(100),
+        "}".repeat(100)
+    );
+    assert!(Stylesheet::parse(&nested).diagnostics.limited);
+    let grouped = format!(
+        "@media screen {{{}}}",
+        "p {color:red}".repeat(olive_html::css::MAX_RULES + 1)
+    );
+    let sheet = Stylesheet::parse(&grouped);
+    assert!(sheet.diagnostics.limited);
+    assert_eq!(sheet.rule_count(), olive_html::css::MAX_RULES);
+}
+
+#[test]
+fn indexed_groups_keep_rule_order_and_matching_specificity() {
+    let (s, _, budget) = styles(
+        r#"<!doctype html><style>
+        #absent, .note, p {color:red}
+        .note {color:blue}
+        </style><p id=a class="note note note">A</p>"#,
+    );
+    assert_eq!(s["a"].color, Color(0, 0, 255, 255));
+    assert!(!budget.limited);
+    let nested = format!("{}p{}", ":not(".repeat(100), ")".repeat(100));
+    assert_eq!(
+        Stylesheet::parse(&format!("{nested} {{color:red}}")).rule_count(),
+        0
+    );
+}
+
+#[test]
+fn border_box_and_min_height_compute_and_inherit_explicitly() {
+    let (s, _, _) = styles(
+        r#"<div style="box-sizing:border-box; min-height:2em; font-size:20px">
+        <p id=a style="box-sizing:inherit; min-height:inherit">A</p><p id=b>B</p></div>"#,
+    );
+    assert!(s["a"].border_box);
+    assert_eq!(s["a"].min_height, Length::Px(40.0));
+    assert!(!s["b"].border_box);
+    assert_eq!(s["b"].min_height, Length::Px(0.0));
 }

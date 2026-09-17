@@ -1106,12 +1106,28 @@ fn image_placement(image: &RenderedImage, parent: &BoxLayout, root: f32) -> Imag
     let width_value = if style.width == Length::Auto {
         image.html_width
     } else {
-        Some(resolve(style.width))
+        Some(
+            (resolve(style.width)
+                - if style.border_box {
+                    horizontal_sides
+                } else {
+                    0.0
+                })
+            .max(1.0),
+        )
     };
     let height_value = if style.height == Length::Auto {
         image.html_height
     } else {
-        Some(resolve(style.height))
+        Some(
+            (resolve(style.height)
+                - if style.border_box {
+                    vertical_sides
+                } else {
+                    0.0
+                })
+            .max(1.0),
+        )
     };
     let mut content_width = width_value.unwrap_or(intrinsic.x).max(1.0);
     let mut content_height = height_value.unwrap_or(intrinsic.y).max(1.0);
@@ -1123,7 +1139,15 @@ fn image_placement(image: &RenderedImage, parent: &BoxLayout, root: f32) -> Imag
     let max_width = if style.max_width == Length::Auto {
         available
     } else {
-        available.min(resolve(style.max_width).max(1.0))
+        available.min(
+            (resolve(style.max_width)
+                - if style.border_box {
+                    horizontal_sides
+                } else {
+                    0.0
+                })
+            .max(1.0),
+        )
     };
     if content_width > max_width {
         let scale = max_width / content_width;
@@ -1132,6 +1156,13 @@ fn image_placement(image: &RenderedImage, parent: &BoxLayout, root: f32) -> Imag
             content_height *= scale;
         }
     }
+    let min_height = resolve(style.min_height)
+        - if style.border_box {
+            vertical_sides
+        } else {
+            0.0
+        };
+    content_height = content_height.max(min_height);
     let outer_width = content_width + horizontal_sides;
     let auto_left = style.margin[3] == Length::Auto;
     let auto_right = style.margin[1] == Length::Auto;
@@ -1216,12 +1247,14 @@ impl BoxLayout {
         let width = if style.width == Length::Auto {
             available
         } else {
-            resolve(style.width).max(1.0)
+            (resolve(style.width) - if style.border_box { sides } else { 0.0 }).max(1.0)
         };
         let width = if style.max_width == Length::Auto {
             width
         } else {
-            width.min(resolve(style.max_width).max(1.0))
+            width.min(
+                (resolve(style.max_width) - if style.border_box { sides } else { 0.0 }).max(1.0),
+            )
         };
         let spare = (available - width).max(0.0);
         let left_auto = style.margin[3] == Length::Auto;
@@ -1252,7 +1285,21 @@ impl BoxLayout {
         }
     }
     fn finish(&self, ui: &egui::Ui, root: f32) -> egui::Rect {
-        let min_height = self.style.height.resolve(0.0, self.style.font_size, root);
+        let min_height = self
+            .style
+            .height
+            .resolve(0.0, self.style.font_size, root)
+            .max(
+                self.style
+                    .min_height
+                    .resolve(0.0, self.style.font_size, root),
+            );
+        let min_height = if self.style.border_box {
+            (min_height - (self.content_top - self.top) - self.padding_bottom - self.border)
+                .max(0.0)
+        } else {
+            min_height
+        };
         let bottom =
             self.cursor.max(self.content_top + min_height) + self.padding_bottom + self.border;
         let rect = egui::Rect::from_min_max(
@@ -2277,6 +2324,40 @@ mod tests {
         assert_eq!(normal.color, Color32::BLUE);
         assert_eq!(normal.coords, VariationCoords::new([("wght", 400.0)]));
         assert_eq!(page.blocks[1].job.sections[0].format.color, Color32::RED);
+    }
+
+    #[test]
+    fn border_box_sizes_include_padding_and_borders_at_multiple_viewports() {
+        let mut page = page(
+            r#"<!doctype html><style>
+            * {box-sizing:border-box}
+            body {margin:0}
+            section {width:100%; max-width:400px; margin:0 auto; padding:20px; border:2px solid red; min-height:120px}
+            div {width:100%; height:30px; padding:4px; border:1px solid blue}
+            </style><section><div></div></section>"#,
+        );
+        for viewport in [320.0, 800.0] {
+            let mut output = draw(&mut page, viewport);
+            output.textures_delta.clear();
+            let section = page
+                .boxes
+                .iter()
+                .position(|s| s.max_width == Length::Px(400.0))
+                .unwrap();
+            let child = page
+                .boxes
+                .iter()
+                .position(|s| s.height == Length::Px(30.0))
+                .unwrap();
+            let outer = page.box_rects[section];
+            let inner = page.box_rects[child];
+            assert!((outer.width() - page.box_rects[1].width().min(400.0)).abs() < 0.1);
+            assert_eq!(outer.height(), 120.0);
+            assert_eq!(inner.width(), outer.width() - 44.0);
+            assert_eq!(inner.height(), 30.0);
+            assert_eq!(inner.left() - outer.left(), 22.0);
+        }
+        page.validate().unwrap();
     }
 
     #[test]

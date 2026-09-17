@@ -613,12 +613,12 @@ mod page_resources {
     #[test]
     fn failed_resources_preserve_other_resources_and_inline_execution() {
         let (location, server) = server(vec![
+            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
             response(
                 "404 Not Found",
                 "Content-Type: text/javascript\r\n",
                 b"throw '404'",
             ),
-            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
         ]);
         let doc = olive_html::parse("<script src=missing.js>throw 'fallback'</script><link rel=stylesheet href=good.css><script>console.log('continued')</script>").unwrap().document;
         let resources = PageResources::load(&DocumentLoader::new().unwrap(), &location, &doc, true);
@@ -765,4 +765,68 @@ fn form_get_errors_limits_and_local_targets() {
             .unwrap()
             .contains("HTTP")
     );
+}
+
+#[test]
+fn browser_documents_over_one_megabyte_parse_with_scripts_disabled() {
+    let html = format!(
+        "<!doctype html><title>Large page</title><!--{}--><p>Readable</p>",
+        "x".repeat(2 * 1024 * 1024)
+    );
+    let (location, server) = server(vec![response(
+        "200 OK",
+        "Content-Type: text/html\r\n",
+        html.as_bytes(),
+    )]);
+    let loaded = DocumentLoader::new().unwrap().load(location).unwrap();
+    assert_eq!(loaded.bytes.len(), html.len());
+    let parsed = loaded.parse(false).unwrap();
+    assert!(parsed.document.descendants(parsed.document.root()).any(|id| {
+        matches!(&parsed.document.node(id).unwrap().kind, olive_html::NodeKind::Text(text) if text == "Readable")
+    }));
+    server.join().unwrap();
+}
+
+#[cfg(all(feature = "css", feature = "js"))]
+#[test]
+fn stylesheets_are_not_starved_by_earlier_images_or_scripts() {
+    use olive_html::resources::{MAX_RESOURCES, PageResources};
+    let (location, server) = server(vec![response(
+        "200 OK",
+        "Content-Type: text/css\r\n",
+        b"p{color:red}",
+    )]);
+    let html = format!(
+        "<script src='file:///blocked.js'></script>{}<link rel=stylesheet href='last.css'>",
+        "<img src='file:///blocked.png'>".repeat(MAX_RESOURCES + 4)
+    );
+    let document = olive_html::parse(&html).unwrap().document;
+    let resources =
+        PageResources::load(&DocumentLoader::new().unwrap(), &location, &document, true);
+    assert_eq!(resources.styles.len(), 1);
+    assert_eq!(resources.report.attempted, MAX_RESOURCES);
+    assert!(resources.report.limited);
+    assert!(resources.scripts.is_empty());
+    assert!(server.join().unwrap()[0].starts_with("GET /last.css "));
+}
+
+#[cfg(all(feature = "css", feature = "js"))]
+#[test]
+fn pages_can_load_more_than_sixty_four_resources() {
+    use olive_html::resources::PageResources;
+    let (location, server) = server(
+        (0..70)
+            .map(|_| response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"))
+            .collect(),
+    );
+    let html: String = (0..70)
+        .map(|i| format!("<link rel=stylesheet href='{i}.css'>"))
+        .collect();
+    let document = olive_html::parse(&html).unwrap().document;
+    let resources =
+        PageResources::load(&DocumentLoader::new().unwrap(), &location, &document, false);
+    assert_eq!(resources.styles.len(), 70);
+    assert_eq!(resources.report.loaded, 70);
+    assert!(!resources.report.limited);
+    assert_eq!(server.join().unwrap().len(), 70);
 }

@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-OLIVE_LIVE_COMPAT=1 cargo test --locked --all-features --test compatibility
+cargo build --locked --all-features --example site-report
+python3 scripts/compatibility-report.py "$@"

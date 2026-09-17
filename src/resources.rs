@@ -2,7 +2,7 @@
 use crate::{
     Document, ExternalSource, NodeId,
     css::applicable_style,
-    js::document::{classic_type, eligible_ancestry},
+    js::document::classic_type,
     net::{DocumentLoader, Location, MAX_RESOURCE_BYTES, ResourceKind},
 };
 use std::{
@@ -10,11 +10,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MAX_RESOURCES: usize = 64;
+pub const MAX_RESOURCES: usize = 256;
 pub const MAX_PAGE_CSS_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PAGE_SCRIPT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PAGE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-pub const RESOURCE_TIMEOUT: Duration = Duration::from_secs(20);
+pub const RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct PageResources {
@@ -66,13 +67,26 @@ impl PageResources {
         let mut css_remaining = MAX_PAGE_CSS_BYTES;
         let mut js_remaining = MAX_PAGE_SCRIPT_BYTES;
         let mut image_remaining = MAX_PAGE_IMAGE_BYTES;
+        // Fetch visual resources before optional scripts. Bound each queue while
+        // scanning so a large page cannot allocate an unbounded request list.
+        let mut queues = [Vec::new(), Vec::new(), Vec::new()];
+        let mut eligible = vec![false; document.node_count()];
+        eligible[document.root().index()] = true;
         for id in document.descendants(document.root()) {
-            let Some(element) = document.node(id).and_then(|n| n.as_element()) else {
+            let Some(node) = document.node(id) else {
                 continue;
             };
-            if !eligible_ancestry(document, id) {
+            if !node.parent().is_some_and(|parent| eligible[parent.index()]) {
                 continue;
             }
+            let Some(element) = node.as_element() else {
+                continue;
+            };
+            eligible[id.index()] = element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+                && !matches!(
+                    element.name.local.as_ref(),
+                    "template" | "noscript" | "iframe" | "object" | "embed"
+                );
             let (kind, reference) =
                 if element.name.local.as_ref() == "link" && applicable_style(element) {
                     (ResourceKind::Stylesheet, element.attribute("href"))
@@ -90,6 +104,17 @@ impl PageResources {
                     continue;
                 };
             let Some(reference) = reference else { continue };
+            let priority = match kind {
+                ResourceKind::Stylesheet => 0,
+                ResourceKind::Image => 1,
+                ResourceKind::Script => 2,
+            };
+            if queues[priority].len() <= MAX_RESOURCES {
+                queues[priority].push((id, kind, reference));
+            }
+        }
+        for (id, kind, reference) in queues.into_iter().flatten() {
+            let element = document.node(id).unwrap().as_element().unwrap();
             let remaining = match kind {
                 ResourceKind::Stylesheet => &mut css_remaining,
                 ResourceKind::Script => &mut js_remaining,
@@ -128,7 +153,7 @@ impl PageResources {
                         location,
                         target,
                         kind,
-                        timeout.saturating_sub(started.elapsed()),
+                        timeout.saturating_sub(started.elapsed()).min(REQUEST_TIMEOUT),
                         MAX_RESOURCE_BYTES,
                     ).and_then(|loaded| {
                         if loaded.bytes.len() > *remaining {

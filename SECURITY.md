@@ -1,4 +1,4 @@
-# Security boundary in 1.0.0
+# Security boundary in 1.1.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -20,7 +20,8 @@ documents, and is included in the GUI. Parsing itself never performs networking.
 The viewer explicitly fetches supported CSS/JS/image resources; Olive does not enforce CSP.
 **The parser is not an HTML sanitizer, and script execution is not sandboxed.**
 
-The GUI and HTML CLI accept at most 1 MiB. Library callers can configure this limit.
+The GUI and CLI URL loader accept at most 8 MiB per document. The parser-only
+library default and CLI file/stdin paths remain at 1 MiB. Library callers can configure this limit.
 Recovery diagnostics are capped at 64 by default and 512 bytes per message.
 Tree output escapes terminal control characters and limits indentation.
 Olive's flat arena avoids ownership cycles and recursive DOM drop, and all
@@ -43,7 +44,7 @@ certificates, with normal hostname/certificate
 verification and no certificate-bypass option. Explicit HTTP and HTTPS-to-HTTP
 redirects are allowed; the final address and transport are shown in browser chrome.
 Requests have a 10-second connection timeout, 20-second total timeout and ten-hop
-redirect limit. Document responses are bounded to 1 MiB after decompression and
+redirect limit. Document responses are bounded to 8 MiB after decompression and
 again after decoding; document types other than HTML/XHTML/plain text are rejected. Plain text
 is escaped before display. URL inputs are capped at 8 KiB and the session's
 Back/Forward stack at 256 entries.
@@ -91,7 +92,10 @@ browsing mode. Storage locations and the `OLIVE_HISTORY_FILE` override are
 documented in README.md; multiple instances sharing a file use last-writer wins.
 
 Page resources resolve against the final document URL and first base href, with
-at most 64 attempts and a shared 20-second network deadline after document loading.
+at most 256 attempts and a shared 30-second network deadline after document loading.
+Each resource request is capped at five seconds and the remaining shared time.
+Stylesheets precede images and optional scripts, with document order preserved
+within each kind. Resource discovery uses a linear ancestry pass and bounded queues.
 Each resource is capped at 8 MiB after decompression, with at most 8 MiB of
 external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG/WebP images
 retained per page. Image decoding additionally caps each dimension at 4,096,
@@ -108,7 +112,7 @@ cross-site subresources can use only cookies marked SameSite=None; Secure.
 No HTTP authentication or Referer is sent. Nonempty integrity
 attributes are rejected because integrity verification is not implemented. HTML
 encoding prescans examine only the first 1,024 bytes for `<meta charset>` declarations.
-Failures leave other resources and the document available; up to 64 resource
+Failures leave other resources and the document available; up to 256 resource
 errors plus one budget notice are retained, at most 1,024 bytes per message.
 Resource collection is a single initial snapshot; CSS imports and dynamically
 inserted or changed resource URLs never fetch. Unsupported modules, alternate,
@@ -116,10 +120,12 @@ disabled and non-screen stylesheets are skipped. A resource may be fetched befor
 an earlier script removes its element; removed scripts do not execute. Unsupported
 image formats, CSS background images, and image data URLs remain inert.
 
-CSS is data only: imports, all at-rules, URL backgrounds and page fonts are ignored.
-A combined 8 MiB linked/embedded/inline CSS input budget, 16,384-rule limit,
-128-declaration limit per block, selector size limits and a per-document
-2,000,000-step matching budget bound stored styles and matching work. Exceeded
+CSS is data only: imports, URL backgrounds and page fonts are ignored. Only
+static screen/all media groups are supported; viewport/feature queries and other
+at-rules remain inert. Media and functional-selector nesting are capped at eight.
+A combined 8 MiB linked/embedded/inline CSS input budget, 32,768-rule limit,
+512-declaration limit per block, 128 selectors per rule, selector size limits and a per-document
+8,000,000-step matching budget bound stored styles and matching work. Exceeded
 limits show a notice; unsupported syntax is skipped. DOM conversion and nested
 box layout are iterative. Font sizes, geometry and line heights are clamped as
 documented in README.md. CSS can change the document area but not browser

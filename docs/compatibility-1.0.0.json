@@ -1,0 +1,2429 @@
+{
+  "checked_at": "2026-09-17T13:18:56.600868+00:00",
+  "ranking_month": "2026-08",
+  "scripts_executed": false,
+  "note": "HTTP and static CSS audit; a parsed response is not proof of functional website support.",
+  "sites": [
+    {
+      "elapsed_ms": 20093,
+      "error": "The website took too long to respond. Try again.",
+      "url": "https://adobe.com/",
+      "version": "1.0.0",
+      "domain": "adobe.com",
+      "ranks": {
+        "global": 49
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 1355,
+      "elements": 4,
+      "final_url": "https://aliexpress.com/",
+      "html_bytes": 1871,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://aliexpress.com/",
+      "version": "1.0.0",
+      "domain": "aliexpress.com",
+      "ranks": {
+        "il": 16,
+        "global": 38
+      }
+    },
+    {
+      "css_bytes": 943268,
+      "css_ignored": 11067,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 5341,
+      "elapsed_ms": 3459,
+      "elements": 1018,
+      "final_url": "https://www.amazon.com/",
+      "html_bytes": 699384,
+      "http_status": 200,
+      "image_bytes": 536637,
+      "images": 9,
+      "resources": {
+        "attempted": 21,
+        "diagnostics": [
+          "//fls-na.amazon.com/1/batch/1/OP/ATVPDKIKX0DER:139-1428329-8330713:Q54J3ZAD72DCKTYC29VF$uedata=s:%2Frd%2Fuedata%3Fstaticb%26id%3DQ54J3ZAD72DCKTYC29VF:0: Unsupported content type: image/gif.",
+          "https://m.media-amazon.com/images/G/01/video/TNFL_26_SWM_800x78_POST_Final_en-US_PV00082599_GraphicalCountdown_Logos_Clean._CB768733184_.gif: Unsupported content type: image/gif.",
+          "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAUFBQkGCQkJCQwTDg4MDg4ZEg4SEBcOEBAXEBcXEBQXFBQaFxMTFxoUFxgjGBwZHxoYIRgjGCMiIiQnKCMXJzUBCQkFCQkJDAkJEyEXDhoiHAwYKSIoGiIkIiIZLCIoISIUIyIaHx8aGhwYHCIaJCQjDhkkIRcvGRoXIiEnHxckKv/CABEIAqwBqwMBIgACEQEDEQH/xAAzAAEAAgMBAQEAAAAAAAAAAAAABQYDBAcCAQgBAQEBAQEBAAAAAAAAAAAAAAABAgMEBf/aAAwDAQACEAMQAAAAzDw/QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAELZNKBD7x1dyTLZ1ZQrLnUwMbAAAAAGQxs+ufQAD4fWfwYwAAAAAAAAAI3Hz/fPJltczqVuYk/WNx3mTRVa70z5qcxv+Chbx1RES/HqCgAfdGY5ziz+rH/c6lN+B9pbvNUues70XrzVaEVC48a3sWl5Xf1dbHZCyk7zrtxvWnWNDS12Xle8vZ/VWsWdZxmgAAMOamXMBeY+y7yyHPoAAA1tkcv6LGQ3Xldxy6gAaNPu1CzWDWL687HtcPZ+Z3eZ9T1Vnk4d9tEQ3qbfnUslM8PIGlBZI7v5tjW+atk5k0ZCaWek7q9VkOV9FzqQY8mNgAfeS9Y5v053zdxZeewUAAAD7yXrPP8ApzvOfR3uewUDLzvs9TzeT70/qkX6lpEySGCs9",
+          "https://m.media-amazon.com/images/G/01/personalization/ybh/loading-4x-gray._CB485916920_.gif: Unsupported content type: image/gif."
+        ],
+        "limited": false,
+        "loaded": 17
+      },
+      "style_ms": 588,
+      "stylesheets": 8,
+      "url": "https://amazon.com/",
+      "version": "1.0.0",
+      "domain": "amazon.com",
+      "ranks": {
+        "il": 36,
+        "global": 13
+      }
+    },
+    {
+      "elapsed_ms": 945,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://amazon.de/",
+      "version": "1.0.0",
+      "domain": "amazon.de",
+      "ranks": {
+        "global": 50
+      }
+    },
+    {
+      "css_bytes": 677570,
+      "css_ignored": 5309,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 1280,
+      "elapsed_ms": 15284,
+      "elements": 1411,
+      "final_url": "https://www.apple.com/",
+      "html_bytes": 259175,
+      "http_status": 200,
+      "image_bytes": 3129639,
+      "images": 52,
+      "resources": {
+        "attempted": 61,
+        "diagnostics": [
+          "/wss/fonts?families=SF+Pro,v3|SF+Pro+Icons,v3: Resource returned HTTP 404."
+        ],
+        "limited": false,
+        "loaded": 60
+      },
+      "style_ms": 540,
+      "stylesheets": 8,
+      "url": "https://apple.com/",
+      "version": "1.0.0",
+      "domain": "apple.com",
+      "ranks": {
+        "global": 36
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 1287,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 457,
+      "elapsed_ms": 1086,
+      "elements": 273,
+      "final_url": "https://www.bing.com/?toWww=1&redig=83ECA364045345F783CAF76CA3F5696B",
+      "html_bytes": 226023,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=: Supported address schemes are http://, https:// and file://."
+        ],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 66,
+      "stylesheets": 0,
+      "url": "https://bing.com/",
+      "version": "1.0.0",
+      "domain": "bing.com",
+      "ranks": {
+        "global": 16
+      }
+    },
+    {
+      "css_bytes": 30146,
+      "css_ignored": 1351,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 903,
+      "elapsed_ms": 3555,
+      "elements": 2123,
+      "final_url": "https://www.bizportal.co.il/",
+      "html_bytes": 310217,
+      "http_status": 200,
+      "image_bytes": 271590,
+      "images": 19,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "https://www.bizportal.co.il/favicon.ico: Resource returned HTTP 406.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs: Supported address schemes are http://, https:// and file://.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 20
+      },
+      "style_ms": 460,
+      "stylesheets": 1,
+      "url": "https://bizportal.co.il/",
+      "version": "1.0.0",
+      "domain": "bizportal.co.il",
+      "ranks": {
+        "il": 45
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1,
+      "elapsed_ms": 540,
+      "elements": 15,
+      "final_url": "https://www.booking.com/",
+      "html_bytes": 3962,
+      "http_status": 202,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://booking.com/",
+      "version": "1.0.0",
+      "domain": "booking.com",
+      "ranks": {
+        "il": 44,
+        "global": 43
+      }
+    },
+    {
+      "css_bytes": 647837,
+      "css_ignored": 4671,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 3730,
+      "elapsed_ms": 3088,
+      "elements": 1197,
+      "final_url": "https://www.btl.gov.il/Pages/default.aspx",
+      "html_bytes": 164465,
+      "http_status": 200,
+      "image_bytes": 64885,
+      "images": 5,
+      "resources": {
+        "attempted": 24,
+        "diagnostics": [
+          "/SystemFiles/SVG/bullhorn.svg: Unsupported content type: image/svg+xml.",
+          "/SystemFiles/SVG/war.svg: Unsupported content type: image/svg+xml.",
+          "/SystemFiles/SVG/phone.svg: Unsupported content type: image/svg+xml.",
+          "/SystemFiles/SVG/bullhorn.svg: Unsupported content type: image/svg+xml.",
+          "/SystemFiles/SVG/war.svg: Unsupported content type: image/svg+xml.",
+          "/SystemFiles/SVG/phone.svg: Unsupported content type: image/svg+xml.",
+          "/_layouts/images/btl.website/loading.gif: Resource returned HTTP 419.",
+          "/_layouts/15/images/btl.website/medina_logo.gif: Resource returned HTTP 419."
+        ],
+        "limited": false,
+        "loaded": 16
+      },
+      "style_ms": 425,
+      "stylesheets": 11,
+      "url": "https://btl.gov.il/",
+      "version": "1.0.0",
+      "domain": "btl.gov.il",
+      "ranks": {
+        "il": 46
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 10,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 5,
+      "elapsed_ms": 215,
+      "elements": 17,
+      "final_url": "https://c14.co.il/",
+      "html_bytes": 5365,
+      "http_status": 403,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://c14.co.il/",
+      "version": "1.0.0",
+      "domain": "c14.co.il",
+      "ranks": {
+        "il": 18
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 530,
+      "elements": 7,
+      "final_url": "http://www.calcalist.co.il/",
+      "html_bytes": 377,
+      "http_status": 403,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://calcalist.co.il/",
+      "version": "1.0.0",
+      "domain": "calcalist.co.il",
+      "ranks": {
+        "il": 34
+      }
+    },
+    {
+      "css_bytes": 984,
+      "css_ignored": 20,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 12,
+      "elapsed_ms": 910,
+      "elements": 59,
+      "final_url": "https://www.canva.com/",
+      "html_bytes": 10384,
+      "http_status": 200,
+      "image_bytes": 76278,
+      "images": 4,
+      "resources": {
+        "attempted": 5,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 5
+      },
+      "style_ms": 1,
+      "stylesheets": 1,
+      "url": "https://canva.com/",
+      "version": "1.0.0",
+      "domain": "canva.com",
+      "ranks": {
+        "global": 34
+      }
+    },
+    {
+      "css_bytes": 1983356,
+      "css_ignored": 3089,
+      "css_match_limited": false,
+      "css_parse_limited": true,
+      "css_rules": 797,
+      "elapsed_ms": 1326,
+      "elements": 398,
+      "final_url": "https://chatgpt.com/",
+      "html_bytes": 491327,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 256,
+      "stylesheets": 2,
+      "url": "https://chatgpt.com/",
+      "version": "1.0.0",
+      "domain": "chatgpt.com",
+      "ranks": {
+        "il": 7,
+        "global": 4
+      }
+    },
+    {
+      "css_bytes": 858293,
+      "css_ignored": 5752,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 4986,
+      "elapsed_ms": 16714,
+      "elements": 2111,
+      "final_url": "https://www.clalit.co.il/he/Pages/default.aspx",
+      "html_bytes": 223476,
+      "http_status": 200,
+      "image_bytes": 135530,
+      "images": 4,
+      "resources": {
+        "attempted": 54,
+        "diagnostics": [
+          "/_layouts/15/images/clalit_favicon.ico?v=1&rev=40: Unsupported content type: image/x-icon.",
+          "/he/PublishingImages/SiteLogo/logo-clalit-newsite.svg?v=18.9.1: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/profile.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/star.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/logo.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/contact.svg: Unsupported content type: image/svg+xml.",
+          "/he/PublishingImages/Lists/ClalitCommonServices/AllItems/24_7.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/mobile.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/mainIcon_war.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/new_wiser.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/emergency_war.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/ma_magia_li.svg: Unsupported content type: image/svg+xml.",
+          "https://www.clalit.co.il/he/PublishingImages/Lists/ClalitCommonServices/AllItems/mobile.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/services/rights_world_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/services/service_basket_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/services/pharmacy_lookup_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/calculatorIcons/pregnancy_weight_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/calculatorIcons/baby_development_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/calculatorIcons/pregnancy_w.svg: Unsupported content type: image/svg+xml.",
+          "/PublishingImages/calculatorIcons/BMI.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-mor.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-mushlam.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-estetica.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-hospitals.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-mashlima.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-smile.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-hul.svg: Unsupported content type: image/svg+xml.",
+          "/he/PublishingImages/Lists/ClalitFamily/AllItems/Logo_ClalitHandasa2.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/social/circle-youtube-white.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/mobile/tik%20tok.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/social/circle-facebook-white.svg: Unsupported content type: image/svg+xml.",
+          "/AplicationIcons/mobile/instagram.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-mor.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-mushlam.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-estetica.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-hospitals.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-mashlima.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-smile.svg: Unsupported content type: image/svg+xml.",
+          "/he/article_images/New_Site/logo-clalit-hul.svg: Unsupported content type: image/svg+xml.",
+          "/he/PublishingImages/Lists/ClalitFamily/AllItems/Logo_ClalitHandasa2.svg: Unsupported content type: image/svg+xml.",
+          "../../../../../../_layouts/15/ClalitInfo/Images/ajax-loader-search.gif: Unsupported content type: image/gif."
+        ],
+        "limited": false,
+        "loaded": 13
+      },
+      "style_ms": 394,
+      "stylesheets": 9,
+      "url": "https://clalit.co.il/",
+      "version": "1.0.0",
+      "domain": "clalit.co.il",
+      "ranks": {
+        "il": 25
+      }
+    },
+    {
+      "css_bytes": 1374193,
+      "css_ignored": 1829,
+      "css_match_limited": false,
+      "css_parse_limited": true,
+      "css_rules": 208,
+      "elapsed_ms": 522,
+      "elements": 158,
+      "final_url": "https://claude.ai/login",
+      "html_bytes": 121869,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 3,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 3
+      },
+      "style_ms": 9,
+      "stylesheets": 3,
+      "url": "https://claude.ai/",
+      "version": "1.0.0",
+      "domain": "claude.ai",
+      "ranks": {
+        "il": 35,
+        "global": 28
+      }
+    },
+    {
+      "css_bytes": 382576,
+      "css_ignored": 5920,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1537,
+      "elapsed_ms": 832,
+      "elements": 65,
+      "final_url": "https://www.dailymotion.com/",
+      "html_bytes": 54559,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 28,
+      "stylesheets": 1,
+      "url": "https://dailymotion.com/",
+      "version": "1.0.0",
+      "domain": "dailymotion.com",
+      "ranks": {
+        "global": 45
+      }
+    },
+    {
+      "css_bytes": 731639,
+      "css_ignored": 2502,
+      "css_match_limited": false,
+      "css_parse_limited": true,
+      "css_rules": 339,
+      "elapsed_ms": 4806,
+      "elements": 1058,
+      "final_url": "https://discord.com/",
+      "html_bytes": 170139,
+      "http_status": 200,
+      "image_bytes": 852850,
+      "images": 22,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/css/discord-2022.shared.68928a01f.min.css: Resources requiring integrity verification are not supported.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66e90ab9506850e8a5dd48e3_Discrod_MainLogo.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67ed8194f41d7d8eade32c90_Logo.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67ece93be2524af5cf14dc1c_Logo-black-bg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67d00cf7266d2c75571aebde_Example.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66e278299a53f5bf88615e90_Symbol.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/6620ec7544fa3849c3cb27fc_party_wumpus.gif: Unsupported content type: image/gif.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b3378e1057faaf58ac5_Property%201%3Dstar_m.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349c8a486afee7b4b834b6_Property%201%3Dstar_sm.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/6630bc0fe938efc69a900a3a_Art.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/66349b219b15d5875c1e47bf_Property%201%3Dstar_lg.svg: Unsupported content type: image/svg+xml.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 23
+      },
+      "style_ms": 171,
+      "stylesheets": 1,
+      "url": "https://discord.com/",
+      "version": "1.0.0",
+      "domain": "discord.com",
+      "ranks": {
+        "global": 31
+      }
+    },
+    {
+      "elapsed_ms": 312,
+      "error": "Could not load the website: error sending request for url (https://duckduckgo.com/): client error (Connect): tls handshake eof",
+      "url": "https://duckduckgo.com/",
+      "version": "1.0.0",
+      "domain": "duckduckgo.com",
+      "ranks": {
+        "il": 39,
+        "global": 15
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 11,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 11,
+      "elapsed_ms": 1107,
+      "elements": 23,
+      "final_url": "https://www.ebay.com/",
+      "html_bytes": 1832,
+      "http_status": 403,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://ebay.com/",
+      "version": "1.0.0",
+      "domain": "ebay.com",
+      "ranks": {
+        "global": 46
+      }
+    },
+    {
+      "css_bytes": 1350143,
+      "css_ignored": 16683,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 16384,
+      "elapsed_ms": 3260,
+      "elements": 361,
+      "final_url": "https://www.facebook.com/",
+      "html_bytes": 464748,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [
+          "data:text/css; charset=utf-8;base64,Lmx3N1g1N3IubHc3WDU3cntkaXNwbGF5Om5vbmV9Cg==: Supported address schemes are http://, https:// and file://."
+        ],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 956,
+      "stylesheets": 1,
+      "url": "https://facebook.com/",
+      "version": "1.0.0",
+      "domain": "facebook.com",
+      "ranks": {
+        "il": 3,
+        "global": 3
+      }
+    },
+    {
+      "css_bytes": 5728207,
+      "css_ignored": 11080,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 4789,
+      "elapsed_ms": 6755,
+      "elements": 1768,
+      "final_url": "https://github.com/",
+      "html_bytes": 576553,
+      "http_status": 200,
+      "image_bytes": 2070882,
+      "images": 19,
+      "resources": {
+        "attempted": 50,
+        "diagnostics": [
+          "//images.ctfassets.net/8aevphvgewt8/g1XhuDG7foMyNWIEIpGJj/b40a790b854d0803704deb7905b1bd82/logo-duolingo-14477f9e54a6.svg: Unsupported content type: image/svg+xml.",
+          "//images.ctfassets.net/8aevphvgewt8/6Qr8Snm4JceoMFRJhapgFa/802ded1d2c486a9d0a4c073d9f8f38f4/logo-gartner-aa8c2e452b64.svg: Unsupported content type: image/svg+xml.",
+          "//images.ctfassets.net/8aevphvgewt8/2xNJHobFMxrvAwj534sNMo/753fcd3beb5fd223d1d2ed918b868a5f/figma.svg: Unsupported content type: image/svg+xml.",
+          "//images.ctfassets.net/8aevphvgewt8/55wg5e2VhUvAbJBG0coTRy/9ced78d7b1f86bc72f214401ad57e69e/mercedes-benz.svg: Unsupported content type: image/svg+xml.",
+          "//images.ctfassets.net/8aevphvgewt8/1kTDnd4nwOET5gPSpPk5z9/dc7d84e7c31e4ece4a9db441728c8e97/mercado-libre.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 45
+      },
+      "style_ms": 785,
+      "stylesheets": 26,
+      "url": "https://github.com/",
+      "version": "1.0.0",
+      "domain": "github.com",
+      "ranks": {
+        "il": 42,
+        "global": 26
+      }
+    },
+    {
+      "css_bytes": 103419,
+      "css_ignored": 1045,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 758,
+      "elapsed_ms": 11358,
+      "elements": 1201,
+      "final_url": "https://www.globes.co.il/",
+      "html_bytes": 187610,
+      "http_status": 200,
+      "image_bytes": 1379098,
+      "images": 55,
+      "resources": {
+        "attempted": 63,
+        "diagnostics": [
+          "https://res.cloudinary.com/globes/image/upload/v1768816334/Digital/icons/RadioChecked_ms0d5j.svg: Unsupported content type: image/svg+xml.",
+          "https://res.cloudinary.com/globes/image/upload/v1768816334/Digital/icons/RadioEmpty_ktua6z.svg: Unsupported content type: image/svg+xml.",
+          "https://res.cloudinary.com/globes/image/upload/v1771232261/Digital/icons/hamashrokit2_yuwgbv.svg: Unsupported content type: image/svg+xml.",
+          "https://res.cloudinary.com/globes/image/upload/v1768303053/Digital/icons/2026/globes-sheli-m-88_v7crnw.svg: Unsupported content type: image/svg+xml.",
+          "https://ib.adnxs.com/seg?add=7197987&t=2: Unsupported content type: image/gif."
+        ],
+        "limited": false,
+        "loaded": 58
+      },
+      "style_ms": 336,
+      "stylesheets": 3,
+      "url": "https://globes.co.il/",
+      "version": "1.0.0",
+      "domain": "globes.co.il",
+      "ranks": {
+        "il": 33
+      }
+    },
+    {
+      "elapsed_ms": 3563,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://globo.com/",
+      "version": "1.0.0",
+      "domain": "globo.com",
+      "ranks": {
+        "global": 40
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 285,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 177,
+      "elapsed_ms": 925,
+      "elements": 90,
+      "final_url": "https://www.google.com/",
+      "html_bytes": 86299,
+      "http_status": 200,
+      "image_bytes": 2736,
+      "images": 2,
+      "resources": {
+        "attempted": 3,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 3
+      },
+      "style_ms": 11,
+      "stylesheets": 1,
+      "url": "https://google.co.il/",
+      "version": "1.0.0",
+      "domain": "google.co.il",
+      "ranks": {
+        "il": 43
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 285,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 177,
+      "elapsed_ms": 890,
+      "elements": 90,
+      "final_url": "https://www.google.com/",
+      "html_bytes": 86356,
+      "http_status": 200,
+      "image_bytes": 2736,
+      "images": 2,
+      "resources": {
+        "attempted": 3,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 3
+      },
+      "style_ms": 11,
+      "stylesheets": 1,
+      "url": "https://google.com/",
+      "version": "1.0.0",
+      "domain": "google.com",
+      "ranks": {
+        "il": 1,
+        "global": 1
+      }
+    },
+    {
+      "elapsed_ms": 150,
+      "error": "Could not load the website: error sending request for url (https://gov.il/): client error (Connect): tls handshake eof",
+      "url": "https://gov.il/",
+      "version": "1.0.0",
+      "domain": "gov.il",
+      "ranks": {
+        "il": 22
+      }
+    },
+    {
+      "elapsed_ms": 1882,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://haaretz.co.il/",
+      "version": "1.0.0",
+      "domain": "haaretz.co.il",
+      "ranks": {
+        "il": 30
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1,
+      "elapsed_ms": 865,
+      "elements": 13,
+      "final_url": "https://www.imdb.com/",
+      "html_bytes": 1997,
+      "http_status": 202,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://imdb.com/",
+      "version": "1.0.0",
+      "domain": "imdb.com",
+      "ranks": {
+        "global": 35
+      }
+    },
+    {
+      "css_bytes": 54790,
+      "css_ignored": 1026,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 115,
+      "elapsed_ms": 1258,
+      "elements": 1788,
+      "final_url": "https://www.inn.co.il/",
+      "html_bytes": 293095,
+      "http_status": 200,
+      "image_bytes": 604152,
+      "images": 54,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "data:image/svg+xml,%3csvg%20xmlns='http://www.w3.org/2000/svg'%20class='ionicon'%20viewBox='0%200%20512%20512'%3e%3ctitle%3eMail%3c/title%3e%3crect%20x='48'%20y='96'%20width='416'%20height='320'%20rx='40'%20ry='40'%20fill='none'%20stroke='%230069b3'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='32'/%3e%3cpath%20fill='none'%20stroke='%230069b3'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='32'%20d='M112%20160l144%20112%20144-112'/%3e%3c/svg%3e: Supported address schemes are http://, https:// and file://.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 63
+      },
+      "style_ms": 125,
+      "stylesheets": 9,
+      "url": "https://inn.co.il/",
+      "version": "1.0.0",
+      "domain": "inn.co.il",
+      "ranks": {
+        "il": 26
+      }
+    },
+    {
+      "css_bytes": 753860,
+      "css_ignored": 12990,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 11416,
+      "elapsed_ms": 2384,
+      "elements": 515,
+      "final_url": "https://www.instagram.com/",
+      "html_bytes": 493359,
+      "http_status": 200,
+      "image_bytes": 576680,
+      "images": 1,
+      "resources": {
+        "attempted": 4,
+        "diagnostics": [
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2ctAAAtXklEQVR4AezBAQ0AAAjAoNu/tDl0QAAAAAAAAG9NRy179gDrX9NdcfyzZ8793b9r27Zt2wqqoHYb1rYdt1Hj1AhqI6jdPrafizO7uHOSnfMi+uvFTlZm73XO9TdrZnK/TB6/Ctef5jqudm4MbgTXBofGUXAYHJaLvq/GUee4GR2tGz2tndaa80a2hWhAdCPCiAA0dBmBBQ1bH4BONqFJi8ggm6FrGWRnXKwxmrHS1kWsYYyDOBucdLk27Sycnod2cixOhzw7Fs8NnljFk8PZ01fFs087fRzPegmt+HP3uNvrF7325eD1lu6t1/SW2bxWX71x8iqRDskRjoNlqk9FoyW9yUjZQvYwgmxdIqMRzRoNNuiEjmYIIqQmNQQaltJvft/gFLnNDX3OIbLJ7FKIPBIjZAbTjzUYTeairawjGOToYm2chHG6cIa1y8eSe7r492Y8EM7/7Ez7rzf1mg8j3eUVKd1N9ZVXvUY786qteUfpnYKPkN5QuhaJokgCEEUNCbM34QlDQxhCCpu/gjb9xtTQUOHr6ucMCzbfXKN4Md+pMIbQ6rtzbnLO1Ln21QspdjPDBaT53138NeN3mvO/Pji+7xW95n04eTmAu/o8Lr3qVW++nnmj1ny08B6R3ly6DJEYhLnu4bPv9zCOCVAW+NjgaxID6QghN1AnHEOvMBTgluLt4eo28KI+n37Od7MAOHQNSQGvzb4CGGWtgDLUPlg79zTrn5G/162//4z1P/Cwu6DiHv/gTtYPXXnzj8nwYdL7S6/b0qtFIIkJm6TC15JaHQqE6h+spF2Xcs6b39VkTItkex/toi/gbT52oDW0CZitl5svsGy9nE5qWMQOMKImq6SAW1O5wvjCNbbPfTqs/975S/JXbzj/VTxyhxPw79yJ+porb/lOwee15qMNryNdikQWgCaEkpizCWAgC2hKH1BTrEC1zNSLDa",
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJAAAABKCAYAAABU493xAAAS4ElEQVR4Ae3bV39Vd9739/f3vwXGNjOW7yu9eXOl12HSj2Jxn6THdp6ARXo3Tu+I9A6kHiKeQAand+Qc5SiD07s36XUsrmJjo72+WSl6BbCQZV9ze4bM/qzXe/f9Xwv0U9eOl7i//G/5Rz6QvEt3oM3hutNV3LPpe2nrL/6b/2EvY1uLcVN7jTou6fZItn1vbRpjxMvm3Jh2tNdAp9uxvjTL7NLrjz+/N7Px/diaT7xsfXHhtXcBBzKu1XFW8302fX+N+T/cy4b8CKof12b7RW6jXr7tl6dNW16SXnv8xfbjC69sQw2QeiOZlp5tBXDh8Zf/93Pm80PM+K0Lr+zEYpn0EPdO3NcXX2z/9vGnSdR6dfHxlw9w6AXN+1nC0/v67XPnLlvMkPRwXvfgpDWOj+l4XzjwkpS/5G/9B70MxWJ3cMc3tLa+ggMYxl7kOg5ifbW27tAdxxFPFevlCY85TpNbr33x2zdweMLXZZ9iOXF1YX1w4jpxWL2BW9Dk8phy84T9rZp+iHt+yRsjw8sgUw+xwgxoHWL1nBOrxX268/Rznh+eqVs/pTugeYD9xj2sIO21eVB+im0vKPLW8b6O1yAHoLbT3Jw67YxOy6xzn+6Qg2cexzJyZ3Razvwy2xqdvBQN9zCjtu7THentsuephuGEdkCn2699+XgPh55tex6M+0m36Sqmq+IAUsftTl3cTCznx/4EV5xQ0mvaw5iuiAMct6zFfSwXFtfLMpkOY3qPZx83dfHTsN3mGma/vI02XjbfpeqNJtc+v/Dq4czT/t+vd5YQ0xUc+Hr7I+sPATtr69n/tzmutqeR99ZjcTDzlFWn3gbstLZfsK/VSG+DMd6f+WU2jOGl863rKuwFJxnNB4D9WqxmXuD404xF8+7MsWcGbfJg5mvGdA8gce9F+xrro3ugtl/94vPtmV9WYz7xsvn2ZUW8UHoZOv"
+        ],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 469,
+      "stylesheets": 1,
+      "url": "https://instagram.com/",
+      "version": "1.0.0",
+      "domain": "instagram.com",
+      "ranks": {
+        "il": 8,
+        "global": 5
+      }
+    },
+    {
+      "elapsed_ms": 1059,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://israelhayom.co.il/",
+      "version": "1.0.0",
+      "domain": "israelhayom.co.il",
+      "ranks": {
+        "il": 23
+      }
+    },
+    {
+      "css_bytes": 3794,
+      "css_ignored": 27,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 5,
+      "elapsed_ms": 8319,
+      "elements": 1124,
+      "final_url": "https://israelpost.co.il/",
+      "html_bytes": 124874,
+      "http_status": 200,
+      "image_bytes": 1790769,
+      "images": 59,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "/bundle/newcss?v=VPI3_1Yq36Plh9UIG5I1oGU7MyN9acO0907q_Tp5C5c1: HTTPS pages cannot load insecure resources.",
+          "/bundle/Master?v=NMugf8AkgO-rQ9MbvNA_2OgThk1eCo-CeOpKN1gew8c1: HTTPS pages cannot load insecure resources.",
+          "/bundle/Home?v=MttZPfKXAITgm6uF1SxrmR-ldu2yh_HqXWE4bG7IgvI1: HTTPS pages cannot load insecure resources.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 61
+      },
+      "style_ms": 11,
+      "stylesheets": 2,
+      "url": "https://israelpost.co.il/",
+      "version": "1.0.0",
+      "domain": "israelpost.co.il",
+      "ranks": {
+        "il": 49
+      }
+    },
+    {
+      "css_bytes": 447091,
+      "css_ignored": 5385,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 1928,
+      "elapsed_ms": 5342,
+      "elements": 2854,
+      "final_url": "https://www.kan.org.il/",
+      "html_bytes": 506667,
+      "http_status": 200,
+      "image_bytes": 620302,
+      "images": 21,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "/images/login-icon-button-mobile.svg: Unsupported content type: image/svg+xml.",
+          "/images/login-icon-button-mobile.svg: Unsupported content type: image/svg+xml.",
+          "/media/qiqm51k0/brandlogo-news_70x28.svg?rmode=pad&v=1dc46b2c4a457e0: Unsupported content type: image/svg+xml.",
+          "/media/1trpmtbi/kan-box_logo_28_100.svg?rmode=pad&v=1dabe4d97c54ca0: Unsupported content type: image/svg+xml.",
+          "/media/mhfc2bto/kan_audio_logo_72x28.svg?rmode=pad&v=1dc46b3695f0f00: Unsupported content type: image/svg+xml.",
+          "/media/gtlg14l3/kan-archive.svg?rmode=pad&v=1db3aa0db1079b0: Unsupported content type: image/svg+xml.",
+          "/media/rpvbrx5x/710-360_logo.svg?rmode=pad&v=1dabb395968eeb0: Unsupported content type: image/svg+xml.",
+          "/media/0jplxsdw/לוגו-חינוכית-להמבורגר-דסקטופ.svg?rmode=pad&v=1d9a9e2565abaf0: Unsupported content type: image/svg+xml.",
+          "/media/g1enwjn4/חינוכית-לוגו-להמבורגר-מובייל.svg?rmode=pad&v=1d9a9e255937350: Unsupported content type: image/svg+xml.",
+          "/media/goxh233x/לוגו-מכאן-להמבורגר-דסקטופ.svg?rmode=pad&v=1d9a9e24f31b120: Unsupported content type: image/svg+xml.",
+          "/media/3sen0oww/מכאן-לוגו-להמבןרגר-מובייל.svg?rmode=pad&v=1d9a9e250635350: Unsupported content type: image/svg+xml.",
+          "/media/ghkfvlka/kan_logo_header_update.svg?rmode=pad&v=1dc8ee331f60780: Unsupported content type: image/svg+xml.",
+          "/media/qiqm51k0/brandlogo-news_70x28.svg?rmode=pad&v=1dc46b2c4a457e0: Unsupported content type: image/svg+xml.",
+          "/media/1trpmtbi/kan-box_logo_28_100.svg?rmode=pad&v=1dabe4d97c54ca0: Unsupported content type: image/svg+xml.",
+          "/media/mhfc2bto/kan_audio_logo_72x28.svg?rmode=pad&v=1dc46b3695f0f00: Unsupported content type: image/svg+xml.",
+          "/media/gtlg14l3/kan-archive.svg?rmode=pad&v=1db3aa0db1079b0: Unsupported content type: image/svg+xml.",
+          "/media/rpvbrx5x/710-360_logo.svg?rmode=pad&v=1dabb395968eeb0: Unsupported content type: image/svg+xml.",
+          "/images/login-icon-button-mobile.svg: Unsupported content type: image/svg+xml.",
+          "/images/login-icon-button-mobile.svg: Unsupported content type: image/svg+xml.",
+          "/media/srgduosf/home-selected-no.svg?rmode=pad&v=1dc46a6ef02dd10: Unsupported content type: image/svg+xml.",
+          "/media/ttvjvzx4/home-selected-yes.svg?rmode=pad&v=1dc46b46e6e9230: Unsupported content type: image/svg+xml.",
+          "/media/z0abnuyc/news-selected-no.svg?rmode=pad&v=1dc46a67bb2c0a0: Unsupported content type: image/svg+xml.",
+          "/media/ozxmtz1g/news-selected-yes.svg?rmode=pad&v=1dc46a66d73e6e0: Unsupported content type: image/svg+xml.",
+          "/media/rtwlwpwf/live-icon_default.svg?rmode=pad&v=1da8686c6630a10: Unsupported content type: image/svg+xml.",
+          "/media/f5lkgtkb/live-icon_selected.svg?rmode=pad&v=1da8687b0784570: Unsupported content type: image/svg+xml.",
+          "/media/3jkgoxzq/box-selected-no.svg?rmode=pad&v=1dc46a71f72c410: Unsupported content type: image/svg+xml.",
+          "/media/depbxqh5/box-selected-yes.svg?rmode=pad&v=1dc46a711a65b30: Unsupported content type: image/svg+xml.",
+          "/media/afoazjcb/aod-selected-no.svg?rmode=pad&v=1dc46b4047c8800: Unsupported content type: image/svg+xml.",
+          "/media/h11hca0t/aod-selected-yes.svg?rmode=pad&v=1dc46b3f6fd7bd0: Unsupported content type: image/svg+xml.",
+          "/images/new-design/icon-arrow-red.svg: Unsupported content type: image/svg+xml.",
+          "/images/new-design/flash-news-icon.svg: Unsupported content type: image/svg+xml.",
+          "/images/new-design/icon-arrow-black.svg: Unsupported content type: image/svg+xml.",
+          "/images/new-design/nd-gallery-arrow-white.svg: Unsupported content type: image/svg+xml.",
+          "/images/icon-share-white.svg: Unsupported content type: image/svg+xml.",
+          "/media/d21bsxd2/telegram-1-2.svg: Unsupported content type: image/svg+xml.",
+          "/media/sqtg1taq/מעטפה-לבנה.svg: Unsupported content type: image/svg+xml.",
+          "/media/2p1drerw/share-facebook_normal_desktop.svg: Unsupported content type: image/svg+xml.",
+          "/media/ozgjdasj/x-white.svg: Unsupported content type: image/svg+xml.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 26
+      },
+      "style_ms": 730,
+      "stylesheets": 5,
+      "url": "https://kan.org.il/",
+      "version": "1.0.0",
+      "domain": "kan.org.il",
+      "ranks": {
+        "il": 38
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 18,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 14,
+      "elapsed_ms": 179,
+      "elements": 35,
+      "final_url": "https://ksp.co.il/",
+      "html_bytes": 19264,
+      "http_status": 403,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANQAAABbCAYAAAALOKsVAAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7OHOkAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAKGlJREFUeNrs2guQXmV9x/Hv/3nOOe9t75t7IJsblwBRriFBKehQFBmxohUrOLZVwFq19VIG79bRdvBaraOiFtFaKR1lqFRrgYIaREMAQ26EJCTZbO7ZJHt9L+c9z/PvunuYdDIa3jfZ3RB9PzO/efY9s2ef55w9/32e99mXhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoYXNvGqnABB4nxbVWl1I22p6ttj51r7q9rqSuXm7qG4uXeYgq/G2cFyJSpWE6scJqpkw8C35LOxsWGlKWdLs3O+2JLND5koHOrMyACBHShYORRY0x8a6bNG+gFHQ8MEklLVMUFOHShVF/QOVxb29JXm9RyqzNk5kMzY0V+atr2v1LmrP24bLlYLvuJQr2h1JM4jNkIig1hFzG9aC2I4knoPzoPI6HmaGNRVgQQkQAIwgUEiS2tzNDSzNeyb1ZI9MKs5e2B2S9A7oynY296U292csfum5mxPcybYlYvMPmAfDQ3HSJz3jIO23sHKkg17+pes2Np30SNbDi1evaN/bjLsxcceFDAGE9jRVoLnIogICIixIApCXUQMYAAFQBUYjY597UcLNW3BJwk4BbEgfqzwwhCJIF8IK3Pbs/sWdGZ3L5xa6J7Xkdk2uyWzZVpzZntrLtxeCM12YICGht9BSnHCMVqwcXf/1Q+t233ltx7tvnTfrlKLVj0SWkwuwmRG2ihAAosIgICxkBLh8BcqIAbEUxPl8CyFAZXDxxKPegBFrAXv8IlyJBEQOzYmrbrDhYigiRsrQkgLTjBZS2dHbuC82U3dI9m0YGp+c1drdvPU5nBjSxRsBHbT8AdPVJU6mK17+9/0/Ue3vu"
+        ],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://ksp.co.il/",
+      "version": "1.0.0",
+      "domain": "ksp.co.il",
+      "ranks": {
+        "il": 28
+      }
+    },
+    {
+      "css_bytes": 341552,
+      "css_ignored": 2274,
+      "css_match_limited": false,
+      "css_parse_limited": true,
+      "css_rules": 1206,
+      "elapsed_ms": 1749,
+      "elements": 750,
+      "final_url": "https://www.linkedin.com/",
+      "html_bytes": 140059,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [
+          "https://static.licdn.com/aero-v1/sc/h/dxf91zhqd2z6b0bwg85ktm5s4: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 689,
+      "stylesheets": 1,
+      "url": "https://linkedin.com/",
+      "version": "1.0.0",
+      "domain": "linkedin.com",
+      "ranks": {
+        "il": 31,
+        "global": 18
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 103,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 17,
+      "elapsed_ms": 1301,
+      "elements": 71,
+      "final_url": "https://outlook.live.com/mail/",
+      "html_bytes": 14264,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [
+          "//res.public.onecdn.static.microsoft/assets/framework/microsoft.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 1,
+      "stylesheets": 0,
+      "url": "https://live.com/",
+      "version": "1.0.0",
+      "domain": "live.com",
+      "ranks": {
+        "global": 29
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 633,
+      "elements": 7,
+      "final_url": "https://login.gov.il/nidp/",
+      "html_bytes": 1503,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://login.gov.il/",
+      "version": "1.0.0",
+      "domain": "login.gov.il",
+      "ranks": {
+        "il": 48
+      }
+    },
+    {
+      "css_bytes": 131004,
+      "css_ignored": 2028,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 664,
+      "elapsed_ms": 17280,
+      "elements": 1715,
+      "final_url": "https://www.maariv.co.il/",
+      "html_bytes": 470702,
+      "http_status": 200,
+      "image_bytes": 1867472,
+      "images": 61,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 64
+      },
+      "style_ms": 437,
+      "stylesheets": 3,
+      "url": "https://maariv.co.il/",
+      "version": "1.0.0",
+      "domain": "maariv.co.il",
+      "ranks": {
+        "il": 13
+      }
+    },
+    {
+      "css_bytes": 736095,
+      "css_ignored": 5499,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 2430,
+      "elapsed_ms": 1885,
+      "elements": 1156,
+      "final_url": "https://www.maccabi4u.co.il/",
+      "html_bytes": 180075,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 64
+      },
+      "style_ms": 594,
+      "stylesheets": 64,
+      "url": "https://maccabi4u.co.il/",
+      "version": "1.0.0",
+      "domain": "maccabi4u.co.il",
+      "ranks": {
+        "il": 50
+      }
+    },
+    {
+      "elapsed_ms": 912,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://mako.co.il/",
+      "version": "1.0.0",
+      "domain": "mako.co.il",
+      "ranks": {
+        "il": 6
+      }
+    },
+    {
+      "css_bytes": 167730,
+      "css_ignored": 642,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 230,
+      "elapsed_ms": 4880,
+      "elements": 350,
+      "final_url": "https://www.microsoft.com/",
+      "html_bytes": 201253,
+      "http_status": 200,
+      "image_bytes": 4054,
+      "images": 1,
+      "resources": {
+        "attempted": 5,
+        "diagnostics": [
+          "https://assets.onestore.ms/cdnfiles/external/mwf/long/v1/v1.25.0/css/mwf-west-european-default.min.css: Could not load the website: error sending request for url (https://assets.onestore.ms/cdnfiles/external/mwf/long/v1/v1.25.0/css/mwf-west-european-default.min.css): client error (Connect): dns error: failed to lookup address information: nodename nor servname provided, or not known",
+          "https://statics-marketingsites-wcus-ms-com.akamaized.net/statics/override.css?c=7: Unsupported content type: text/html.",
+          ": Empty resource address."
+        ],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 134,
+      "stylesheets": 1,
+      "url": "https://microsoft.com/",
+      "version": "1.0.0",
+      "domain": "microsoft.com",
+      "ranks": {
+        "global": 25
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 697,
+      "elements": 36,
+      "final_url": "https://www.msn.com/he-il",
+      "html_bytes": 47878,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://msn.com/",
+      "version": "1.0.0",
+      "domain": "msn.com",
+      "ranks": {
+        "global": 21
+      }
+    },
+    {
+      "css_bytes": 684461,
+      "css_ignored": 9148,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 2859,
+      "elapsed_ms": 14217,
+      "elements": 2291,
+      "final_url": "https://www.n12.co.il/",
+      "html_bytes": 654706,
+      "http_status": 200,
+      "image_bytes": 4213290,
+      "images": 55,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "https://img.mako.co.il/2024/06/20/socialButton-Mail-black.svg: Unsupported content type: image/svg+xml.",
+          "https://img.mako.co.il/2024/06/20/socialButton-66Tiktok-white.svg: Unsupported content type: image/svg+xml.",
+          "https://img.mako.co.il/2024/06/20/socialButton-8Insta-white.svg: Unsupported content type: image/svg+xml.",
+          "https://img.mako.co.il/2024/06/20/socialButton-7facebook-white.svg: Unsupported content type: image/svg+xml.",
+          "https://img.mako.co.il/2024/06/20/socialButton-1X-White.svg: Unsupported content type: image/svg+xml.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 59
+      },
+      "style_ms": 608,
+      "stylesheets": 4,
+      "url": "https://n12.co.il/",
+      "version": "1.0.0",
+      "domain": "n12.co.il",
+      "ranks": {
+        "il": 14
+      }
+    },
+    {
+      "css_bytes": 761872,
+      "css_ignored": 4608,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1722,
+      "elapsed_ms": 5750,
+      "elements": 116,
+      "final_url": "https://www.naver.com/",
+      "html_bytes": 260343,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 56,
+      "stylesheets": 2,
+      "url": "https://naver.com/",
+      "version": "1.0.0",
+      "domain": "naver.com",
+      "ranks": {
+        "global": 32
+      }
+    },
+    {
+      "elapsed_ms": 1346,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://netflix.com/",
+      "version": "1.0.0",
+      "domain": "netflix.com",
+      "ranks": {
+        "il": 37,
+        "global": 22
+      }
+    },
+    {
+      "css_bytes": 3236,
+      "css_ignored": 260,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 105,
+      "elapsed_ms": 1110,
+      "elements": 131,
+      "final_url": "https://www.one.co.il/",
+      "html_bytes": 493102,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 12,
+      "stylesheets": 1,
+      "url": "https://one.co.il/",
+      "version": "1.0.0",
+      "domain": "one.co.il",
+      "ranks": {
+        "il": 21
+      }
+    },
+    {
+      "css_bytes": 1112342,
+      "css_ignored": 6184,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1611,
+      "elapsed_ms": 3426,
+      "elements": 974,
+      "final_url": "https://openai.com/",
+      "html_bytes": 452026,
+      "http_status": 200,
+      "image_bytes": 2390438,
+      "images": 19,
+      "resources": {
+        "attempted": 51,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 51
+      },
+      "style_ms": 1233,
+      "stylesheets": 32,
+      "url": "https://openai.com/",
+      "version": "1.0.0",
+      "domain": "openai.com",
+      "ranks": {
+        "global": 42
+      }
+    },
+    {
+      "css_bytes": 336946,
+      "css_ignored": 4067,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1010,
+      "elapsed_ms": 4018,
+      "elements": 394,
+      "final_url": "https://www.paypal.com/il/home",
+      "html_bytes": 208422,
+      "http_status": 200,
+      "image_bytes": 19061,
+      "images": 1,
+      "resources": {
+        "attempted": 8,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 8
+      },
+      "style_ms": 207,
+      "stylesheets": 7,
+      "url": "https://paypal.com/",
+      "version": "1.0.0",
+      "domain": "paypal.com",
+      "ranks": {
+        "global": 37
+      }
+    },
+    {
+      "elapsed_ms": 1691,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://pinterest.com/",
+      "version": "1.0.0",
+      "domain": "pinterest.com",
+      "ranks": {
+        "global": 23
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 6,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 18,
+      "elapsed_ms": 874,
+      "elements": 29,
+      "final_url": "https://pornhub.com/",
+      "html_bytes": 3566,
+      "http_status": 503,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [
+          "css/latofonts.css: Resource returned HTTP 503.",
+          "https://static.mobileye.com/website/corporate/img/homepage2022/new_logo.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://pornhub.com/",
+      "version": "1.0.0",
+      "domain": "pornhub.com",
+      "ranks": {
+        "il": 12,
+        "global": 9
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 27,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 15,
+      "elapsed_ms": 1965,
+      "elements": 69,
+      "final_url": "https://www.reddit.com/",
+      "html_bytes": 8397,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://reddit.com/",
+      "version": "1.0.0",
+      "domain": "reddit.com",
+      "ranks": {
+        "il": 20,
+        "global": 6
+      }
+    },
+    {
+      "css_bytes": 2230187,
+      "css_ignored": 12554,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 5315,
+      "elapsed_ms": 6841,
+      "elements": 240,
+      "final_url": "https://www.roblox.com/",
+      "html_bytes": 63988,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 26,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 26
+      },
+      "style_ms": 444,
+      "stylesheets": 26,
+      "url": "https://roblox.com/",
+      "version": "1.0.0",
+      "domain": "roblox.com",
+      "ranks": {
+        "global": 39
+      }
+    },
+    {
+      "css_bytes": 25398,
+      "css_ignored": 440,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 148,
+      "elapsed_ms": 1989,
+      "elements": 1454,
+      "final_url": "https://rotter.net/",
+      "html_bytes": 115658,
+      "http_status": 200,
+      "image_bytes": 61705,
+      "images": 35,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "https://rotter.co.il/ccc/logo1.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/trans.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_archive.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_shaar.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_Shaarei.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_luach2.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_mivzakim.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_mezeg.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_link_home.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/blue_links_bar_right.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/trans.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/trans.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/orange_link_scoops.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/orange_link_scoopsb.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/orange_link_gil.gif: Unsupported content type: image/gif.",
+          "https://rotter.co.il/ccc/orange_link_bar_right.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/ccc/bl_rr_bg.gif: Unsupported content type: image/gif.",
+          "https://rotter.net/spacer.gif: Unsupported content type: image/gif.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 36
+      },
+      "style_ms": 63,
+      "stylesheets": 1,
+      "url": "https://rotter.net/",
+      "version": "1.0.0",
+      "domain": "rotter.net",
+      "ranks": {
+        "il": 29
+      }
+    },
+    {
+      "css_bytes": 735253,
+      "css_ignored": 5220,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 3632,
+      "elapsed_ms": 7707,
+      "elements": 4782,
+      "final_url": "https://www.sport5.co.il/",
+      "html_bytes": 533157,
+      "http_status": 200,
+      "image_bytes": 239288,
+      "images": 32,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "/Images/Trans.gif: Unsupported content type: image/gif.",
+          "/Images/NewsRoom/conversation.HP.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/SPORT5_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5PLUS_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5LIVE_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5_STARS_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5max_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5GOLD_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5RADIO_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5MOBILE_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/channels/5_SITE_CHANNEL_white1.svg: Unsupported content type: image/svg+xml.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "/Images/trans.gif: Unsupported content type: image/gif.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 33
+      },
+      "style_ms": 353,
+      "stylesheets": 1,
+      "url": "https://sport5.co.il/",
+      "version": "1.0.0",
+      "domain": "sport5.co.il",
+      "ranks": {
+        "il": 10
+      }
+    },
+    {
+      "css_bytes": 343077,
+      "css_ignored": 6364,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1950,
+      "elapsed_ms": 17197,
+      "elements": 810,
+      "final_url": "https://open.spotify.com/",
+      "html_bytes": 307020,
+      "http_status": 200,
+      "image_bytes": 1892448,
+      "images": 63,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 64
+      },
+      "style_ms": 985,
+      "stylesheets": 1,
+      "url": "https://spotify.com/",
+      "version": "1.0.0",
+      "domain": "spotify.com",
+      "ranks": {
+        "global": 33
+      }
+    },
+    {
+      "elapsed_ms": 1553,
+      "error": "Resource exceeds the 1048576-byte limit.",
+      "url": "https://super-pharm.co.il/",
+      "version": "1.0.0",
+      "domain": "super-pharm.co.il",
+      "ranks": {
+        "il": 47
+      }
+    },
+    {
+      "css_bytes": 198680,
+      "css_ignored": 1616,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 1035,
+      "elapsed_ms": 1789,
+      "elements": 303,
+      "final_url": "https://telegram.org/",
+      "html_bytes": 19919,
+      "http_status": 200,
+      "image_bytes": 543468,
+      "images": 11,
+      "resources": {
+        "attempted": 14,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 14
+      },
+      "style_ms": 127,
+      "stylesheets": 3,
+      "url": "https://telegram.org/",
+      "version": "1.0.0",
+      "domain": "telegram.org",
+      "ranks": {
+        "global": 41
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 802,
+      "elements": 4,
+      "final_url": "https://www.temu.com/",
+      "html_bytes": 2897,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://temu.com/",
+      "version": "1.0.0",
+      "domain": "temu.com",
+      "ranks": {
+        "il": 24,
+        "global": 27
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 1064,
+      "elements": 13,
+      "final_url": "https://www.tiktok.com/",
+      "html_bytes": 1462,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://tiktok.com/",
+      "version": "1.0.0",
+      "domain": "tiktok.com",
+      "ranks": {
+        "il": 15,
+        "global": 11
+      }
+    },
+    {
+      "css_bytes": 63996,
+      "css_ignored": 953,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 569,
+      "elapsed_ms": 1528,
+      "elements": 180,
+      "final_url": "https://www.twitch.tv/",
+      "html_bytes": 200511,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 39,
+      "stylesheets": 1,
+      "url": "https://twitch.tv/",
+      "version": "1.0.0",
+      "domain": "twitch.tv",
+      "ranks": {
+        "global": 24
+      }
+    },
+    {
+      "css_bytes": 352266,
+      "css_ignored": 3226,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 2426,
+      "elapsed_ms": 2302,
+      "elements": 215,
+      "final_url": "https://x.com/",
+      "html_bytes": 32718,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 203,
+      "stylesheets": 1,
+      "url": "https://twitter.com/",
+      "version": "1.0.0",
+      "domain": "twitter.com",
+      "ranks": {
+        "global": 44
+      }
+    },
+    {
+      "css_bytes": 326885,
+      "css_ignored": 4184,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 2031,
+      "elapsed_ms": 3149,
+      "elements": 91,
+      "final_url": "https://m.vk.ru/",
+      "html_bytes": 110128,
+      "http_status": 200,
+      "image_bytes": 12041,
+      "images": 3,
+      "resources": {
+        "attempted": 4,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 4
+      },
+      "style_ms": 60,
+      "stylesheets": 1,
+      "url": "https://vk.ru/",
+      "version": "1.0.0",
+      "domain": "vk.ru",
+      "ranks": {
+        "global": 47
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 1755,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 539,
+      "elapsed_ms": 4064,
+      "elements": 2262,
+      "final_url": "https://www.walla.co.il/",
+      "html_bytes": 650411,
+      "http_status": 200,
+      "image_bytes": 41854,
+      "images": 4,
+      "resources": {
+        "attempted": 59,
+        "diagnostics": [
+          "/public/assets/icons/homepage3/icon-sports-mobile.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/homepage2/icon-mail-no-bg-new.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/icons/allay-icon-black.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/tiktok.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/insta.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/twitter.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/facebook.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/tiktok.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/insta.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/twitter.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/facebook.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/tiktok.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/insta.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/twitter.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/navigation/facebook.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml.",
+          "/public/assets/shivuki/invalid-name2.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 4
+      },
+      "style_ms": 426,
+      "stylesheets": 0,
+      "url": "https://walla.co.il/",
+      "version": "1.0.0",
+      "domain": "walla.co.il",
+      "ranks": {
+        "il": 5
+      }
+    },
+    {
+      "css_bytes": 618434,
+      "css_ignored": 6001,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 2897,
+      "elapsed_ms": 7443,
+      "elements": 621,
+      "final_url": "https://www.walmart.com/",
+      "html_bytes": 346167,
+      "http_status": 200,
+      "image_bytes": 108151,
+      "images": 11,
+      "resources": {
+        "attempted": 14,
+        "diagnostics": [
+          "//i5.walmartimages.com/dfw/63fd9f59-14e2/9d304ce6-96de-4331-b8ec-c5191226d378/v1/spark-icon.svg: Unsupported content type: image/svg+xml.",
+          "//i5.walmartimages.com/dfw/63fd9f59-30b3/629cc93a-dae2-4b74-afd7-faecce345c85/v1/wplus-indigo-rebrand-bug.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 12
+      },
+      "style_ms": 1015,
+      "stylesheets": 1,
+      "url": "https://walmart.com/",
+      "version": "1.0.0",
+      "domain": "walmart.com",
+      "ranks": {
+        "global": 48
+      }
+    },
+    {
+      "css_bytes": 305634,
+      "css_ignored": 257,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 25,
+      "elapsed_ms": 1990,
+      "elements": 642,
+      "final_url": "https://weather.com/he-IL/8809/42089/city/jerusalem/today?Goto=Redirected",
+      "html_bytes": 369052,
+      "http_status": 200,
+      "image_bytes": 111627,
+      "images": 2,
+      "resources": {
+        "attempted": 8,
+        "diagnostics": [
+          "/_next/static/media/the-weather-company.20r7k2kyaj_n4.svg?dpl=dpl_EUqrbCx8y1fDK66gHo1oPoCFse3a: Unsupported content type: image/svg+xml.",
+          "/_next/static/media/the-weather-channel.1n185ewoqi4gr.svg?dpl=dpl_EUqrbCx8y1fDK66gHo1oPoCFse3a: Unsupported content type: image/svg+xml.",
+          "/_next/static/media/weather-underground.2cq0w-hb3j04v.svg?dpl=dpl_EUqrbCx8y1fDK66gHo1oPoCFse3a: Unsupported content type: image/svg+xml.",
+          "/_next/static/media/eSSENTIAL.1vk3qkz4gzw7a.svg?dpl=dpl_EUqrbCx8y1fDK66gHo1oPoCFse3a: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 4
+      },
+      "style_ms": 13,
+      "stylesheets": 2,
+      "url": "https://weather.com/",
+      "version": "1.0.0",
+      "domain": "weather.com",
+      "ranks": {
+        "il": 41,
+        "global": 19
+      }
+    },
+    {
+      "css_bytes": 148074,
+      "css_ignored": 1753,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 1400,
+      "elapsed_ms": 3550,
+      "elements": 981,
+      "final_url": "https://www.whatsapp.com/",
+      "html_bytes": 278227,
+      "http_status": 200,
+      "image_bytes": 431330,
+      "images": 18,
+      "resources": {
+        "attempted": 23,
+        "diagnostics": [
+          "https://static.whatsapp.net/rsrc.php/yM/r/ys-5GPT4pwS.svg: Unsupported content type: image/svg+xml.",
+          "https://static.whatsapp.net/rsrc.php/yJ/r/twC7frrXavH.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 21
+      },
+      "style_ms": 657,
+      "stylesheets": 3,
+      "url": "https://whatsapp.com/",
+      "version": "1.0.0",
+      "domain": "whatsapp.com",
+      "ranks": {
+        "il": 11,
+        "global": 10
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 479,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 237,
+      "elapsed_ms": 1694,
+      "elements": 1174,
+      "final_url": "https://www.wikipedia.org/",
+      "html_bytes": 119573,
+      "http_status": 200,
+      "image_bytes": 120250,
+      "images": 6,
+      "resources": {
+        "attempted": 7,
+        "diagnostics": [
+          "https://upload.wikimedia.org/wikipedia/donate/8/81/Badge-endowment.png: Resource returned HTTP 429."
+        ],
+        "limited": false,
+        "loaded": 6
+      },
+      "style_ms": 92,
+      "stylesheets": 0,
+      "url": "https://wikipedia.org/",
+      "version": "1.0.0",
+      "domain": "wikipedia.org",
+      "ranks": {
+        "il": 9,
+        "global": 7
+      }
+    },
+    {
+      "css_bytes": 352266,
+      "css_ignored": 3226,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 2426,
+      "elapsed_ms": 1436,
+      "elements": 215,
+      "final_url": "https://x.com/",
+      "html_bytes": 32718,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 1,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 208,
+      "stylesheets": 1,
+      "url": "https://x.com/",
+      "version": "1.0.0",
+      "domain": "x.com",
+      "ranks": {
+        "il": 17,
+        "global": 8
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 6,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 18,
+      "elapsed_ms": 723,
+      "elements": 29,
+      "final_url": "https://xhamster.com/",
+      "html_bytes": 3567,
+      "http_status": 503,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [
+          "css/latofonts.css: Resource returned HTTP 503.",
+          "https://static.mobileye.com/website/corporate/img/homepage2022/new_logo.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://xhamster.com/",
+      "version": "1.0.0",
+      "domain": "xhamster.com",
+      "ranks": {
+        "il": 27,
+        "global": 20
+      }
+    },
+    {
+      "css_bytes": 1097975,
+      "css_ignored": 9999,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 5851,
+      "elapsed_ms": 6777,
+      "elements": 521,
+      "final_url": "https://www.xnxx.com/",
+      "html_bytes": 119440,
+      "http_status": 200,
+      "image_bytes": 48480,
+      "images": 1,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 561,
+      "stylesheets": 1,
+      "url": "https://xnxx.com/",
+      "version": "1.0.0",
+      "domain": "xnxx.com",
+      "ranks": {
+        "il": 40
+      }
+    },
+    {
+      "css_bytes": 1920447,
+      "css_ignored": 16548,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 8322,
+      "elapsed_ms": 4586,
+      "elements": 1442,
+      "final_url": "https://www.xvideos.com/",
+      "html_bytes": 199643,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 50,
+        "diagnostics": [
+          "https://assets-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/xvideos.black.svg: Unsupported content type: image/svg+xml.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif.",
+          "https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif: Unsupported content type: image/gif."
+        ],
+        "limited": false,
+        "loaded": 1
+      },
+      "style_ms": 551,
+      "stylesheets": 1,
+      "url": "https://xvideos.com/",
+      "version": "1.0.0",
+      "domain": "xvideos.com",
+      "ranks": {
+        "il": 32,
+        "global": 12
+      }
+    },
+    {
+      "css_bytes": 326459,
+      "css_ignored": 2933,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 804,
+      "elapsed_ms": 2463,
+      "elements": 1679,
+      "final_url": "https://www.yad2.co.il/",
+      "html_bytes": 227693,
+      "http_status": 200,
+      "image_bytes": 1696444,
+      "images": 15,
+      "resources": {
+        "attempted": 26,
+        "diagnostics": [
+          "https://visuals.yad2.co.il/header/phone-with-yad2-logo.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/homepage/business.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/homepage/magazine.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/homepage/car_financing.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/homepage/calculator.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/header/download-google-hebrew.svg: Unsupported content type: image/svg+xml.",
+          "https://visuals.yad2.co.il/header/download-apple-hebrew.svg: Unsupported content type: image/svg+xml."
+        ],
+        "limited": false,
+        "loaded": 19
+      },
+      "style_ms": 707,
+      "stylesheets": 4,
+      "url": "https://yad2.co.il/",
+      "version": "1.0.0",
+      "domain": "yad2.co.il",
+      "ranks": {
+        "il": 19
+      }
+    },
+    {
+      "css_bytes": 1835608,
+      "css_ignored": 2164,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 785,
+      "elapsed_ms": 6868,
+      "elements": 391,
+      "final_url": "https://www.yahoo.co.jp/",
+      "html_bytes": 33416,
+      "http_status": 200,
+      "image_bytes": 10775,
+      "images": 1,
+      "resources": {
+        "attempted": 2,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 2
+      },
+      "style_ms": 137,
+      "stylesheets": 1,
+      "url": "https://yahoo.co.jp/",
+      "version": "1.0.0",
+      "domain": "yahoo.co.jp",
+      "ranks": {
+        "global": 17
+      }
+    },
+    {
+      "css_bytes": 307465,
+      "css_ignored": 2134,
+      "css_match_limited": false,
+      "css_parse_limited": true,
+      "css_rules": 1293,
+      "elapsed_ms": 3229,
+      "elements": 85,
+      "final_url": "https://consent.yahoo.com/v2/collectConsent?sessionId=3_cc-session_21b612c5-7859-4e89-8176-7511e2b96a71",
+      "html_bytes": 111799,
+      "http_status": 200,
+      "image_bytes": 1570,
+      "images": 2,
+      "resources": {
+        "attempted": 6,
+        "diagnostics": [
+          "../static/images/close-white.svg: Unsupported content type: image/svg+xml.",
+          "../static/images/close-white.svg: Unsupported content type: image/svg+xml.",
+          "/beacon?tag=TCF2&step=Layer1-View&brandDomain=www.yahoo.com&brandBid=&userType=nonreg&sdk=false&tos=he-IL&country=IL&x=&sessionId=3_cc-session_21b612c5-7859-4e89-8176-7511e2b96a71: Resource returned HTTP 406."
+        ],
+        "limited": false,
+        "loaded": 3
+      },
+      "style_ms": 46,
+      "stylesheets": 1,
+      "url": "https://yahoo.com/",
+      "version": "1.0.0",
+      "domain": "yahoo.com",
+      "ranks": {
+        "global": 14
+      }
+    },
+    {
+      "css_bytes": 0,
+      "css_ignored": 0,
+      "css_match_limited": false,
+      "css_parse_limited": false,
+      "css_rules": 0,
+      "elapsed_ms": 1483,
+      "elements": 4,
+      "final_url": "https://sso.passport.yandex.ru/push?uuid=f0f2a6c2-4c44-4a69-b749-b2d40e91485a&retpath=https%3A%2F%2Fdzen.ru%2F%3Fyredirect%3Dtrue%26is_autologin_ya%3Dtrue",
+      "html_bytes": 2898,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 0,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 0
+      },
+      "style_ms": 0,
+      "stylesheets": 0,
+      "url": "https://yandex.ru/",
+      "version": "1.0.0",
+      "domain": "yandex.ru",
+      "ranks": {
+        "global": 30
+      }
+    },
+    {
+      "css_bytes": 3314606,
+      "css_ignored": 17630,
+      "css_match_limited": true,
+      "css_parse_limited": false,
+      "css_rules": 8529,
+      "elapsed_ms": 5867,
+      "elements": 3990,
+      "final_url": "https://www.ynet.co.il/home/0,7340,L-8,00.html",
+      "html_bytes": 531906,
+      "http_status": 200,
+      "image_bytes": 1742408,
+      "images": 61,
+      "resources": {
+        "attempted": 64,
+        "diagnostics": [
+          "https://ynet-pic1.yit.co.il/picserver5/wcm_upload/2024/07/09/B1LH3j5DR/new_logo_gif_ynet.gif: Unsupported content type: image/gif.",
+          "Page resource count or time limit reached."
+        ],
+        "limited": true,
+        "loaded": 63
+      },
+      "style_ms": 445,
+      "stylesheets": 2,
+      "url": "https://ynet.co.il/",
+      "version": "1.0.0",
+      "domain": "ynet.co.il",
+      "ranks": {
+        "il": 4
+      }
+    },
+    {
+      "css_bytes": 3637668,
+      "css_ignored": 53771,
+      "css_match_limited": true,
+      "css_parse_limited": true,
+      "css_rules": 11858,
+      "elapsed_ms": 2307,
+      "elements": 415,
+      "final_url": "https://www.youtube.com/",
+      "html_bytes": 883104,
+      "http_status": 200,
+      "image_bytes": 0,
+      "images": 0,
+      "resources": {
+        "attempted": 5,
+        "diagnostics": [],
+        "limited": false,
+        "loaded": 5
+      },
+      "style_ms": 463,
+      "stylesheets": 5,
+      "url": "https://youtube.com/",
+      "version": "1.0.0",
+      "domain": "youtube.com",
+      "ranks": {
+        "il": 2,
+        "global": 2
+      }
+    }
+  ]
+}

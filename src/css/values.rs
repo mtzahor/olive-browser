@@ -93,6 +93,8 @@ pub struct ComputedStyle {
     pub width: Length,
     pub max_width: Length,
     pub height: Length,
+    pub min_height: Length,
+    pub border_box: bool,
     pub border_width: Length,
     pub border_color: Color,
     pub border_solid: bool,
@@ -119,6 +121,8 @@ impl Default for ComputedStyle {
             width: Length::Auto,
             max_width: Length::Auto,
             height: Length::Auto,
+            min_height: Length::Px(0.0),
+            border_box: false,
             border_width: Length::Px(3.0),
             border_color: Color(38, 44, 32, 255),
             border_solid: false,
@@ -179,13 +183,15 @@ pub(super) enum Property {
     Width,
     MaxWidth,
     Height,
+    MinHeight,
+    BoxSizing,
     BorderWidth,
     BorderColor,
     BorderStyle,
     BorderRadius,
     BoxShadow,
 }
-pub(super) const PROPERTIES: [Property; 28] = [
+pub(super) const PROPERTIES: [Property; 30] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -209,6 +215,8 @@ pub(super) const PROPERTIES: [Property; 28] = [
     Property::Width,
     Property::MaxWidth,
     Property::Height,
+    Property::MinHeight,
+    Property::BoxSizing,
     Property::BorderWidth,
     Property::BorderColor,
     Property::BorderStyle,
@@ -394,6 +402,8 @@ pub(super) fn parse_values(
         "width" => &[P::Width],
         "max-width" => &[P::MaxWidth],
         "height" => &[P::Height],
+        "min-height" => &[P::MinHeight],
+        "box-sizing" => &[P::BoxSizing],
         "border" => &[P::BorderWidth, P::BorderStyle, P::BorderColor],
         "border-width" => &[P::BorderWidth],
         "border-style" => &[P::BorderStyle],
@@ -603,11 +613,21 @@ pub(super) fn parse_values(
             while input.next().is_ok() {}
             Value::Bool(true)
         }
-        P::Width | P::MaxWidth | P::Height => {
+        P::BoxSizing => Value::Bool(match keyword(input)?.as_str() {
+            "content-box" => false,
+            "border-box" => true,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::Width | P::MaxWidth | P::Height | P::MinHeight => {
             if p == P::MaxWidth && input.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
                 Value::Length(Length::Auto)
             } else {
-                Value::Length(length(input, true, false, p != P::Height)?)
+                Value::Length(length(
+                    input,
+                    true,
+                    false,
+                    !matches!(p, P::Height | P::MinHeight),
+                )?)
             }
         }
         P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft => {
@@ -680,6 +700,8 @@ pub(super) fn apply(
             P::Width => style.width = source.width,
             P::MaxWidth => style.max_width = source.max_width,
             P::Height => style.height = source.height,
+            P::MinHeight => style.min_height = source.min_height,
+            P::BoxSizing => style.border_box = source.border_box,
             P::BorderWidth => style.border_width = source.border_width,
             P::BorderColor => style.border_color = source.border_color,
             P::BorderStyle => style.border_solid = source.border_solid,
@@ -724,6 +746,8 @@ pub(super) fn apply(
         (P::Width, Value::Length(v)) => style.width = v,
         (P::MaxWidth, Value::Length(v)) => style.max_width = v,
         (P::Height, Value::Length(v)) => style.height = v,
+        (P::MinHeight, Value::Length(v)) => style.min_height = v,
+        (P::BoxSizing, Value::Bool(v)) => style.border_box = v,
         (P::BorderWidth, Value::Length(v)) => style.border_width = v,
         (P::BorderRadius, Value::Length(v)) => style.border_radius = v,
         (P::BorderStyle, Value::Bool(v)) => style.border_solid = v,

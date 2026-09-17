@@ -1,6 +1,6 @@
 [package]
 name = "olive-browser"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A lightweight Rust browser with HTML, CSS and JavaScript"
@@ -30,6 +30,11 @@ required-features = ["js"]
 name = "resource-report"
 path = "examples/resource-report.rs"
 required-features = ["net", "css", "js"]
+
+[[example]]
+name = "site-report"
+path = "examples/site-report.rs"
+required-features = ["gui"]
 
 [features]
 default = []

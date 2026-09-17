@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "Olive Browser — HTML parser\n\nUsage: olive [FILE|URL|-]\n\nParse an HTML document and print its DOM tree.\nOmit FILE or use - to read stdin. Input is limited to 1 MiB.\nHTTP(S) and file URLs require a build with --features net (included in gui).\nHTML recovery diagnostics go to stderr. Scripts are never executed.\n\nOptions:\n  -h, --help       Show help\n  -V, --version    Show version\n";
+const HELP: &str = "Olive Browser — HTML parser\n\nUsage: olive [FILE|URL|-]\n\nParse an HTML document and print its DOM tree.\nOmit FILE or use - to read stdin. File/stdin input is limited to 1 MiB; URL loading allows 8 MiB.\nHTTP(S) and file URLs require a build with --features net (included in gui).\nHTML recovery diagnostics go to stderr. Scripts are never executed.\n\nOptions:\n  -h, --help       Show help\n  -V, --version    Show version\n";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
