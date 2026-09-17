@@ -69,7 +69,7 @@ impl Downloads {
             let result = (|| -> Result<(PathBuf, u64), String> {
                 fs::create_dir_all(&dir)
                     .map_err(|e| format!("Could not create download folder: {e}"))?;
-                let destination = unique_path(&dir, &name);
+                let destination = dir.join(&name);
                 let temp = tempfile::NamedTempFile::new_in(&dir)
                     .map_err(|e| format!("Could not create download file: {e}"))?;
                 let mut file = temp.as_file().try_clone().map_err(|e| e.to_string())?;
@@ -82,7 +82,8 @@ impl Downloads {
                     Ok(())
                 })?;
                 file.sync_all().map_err(|e| e.to_string())?;
-                temp.persist(&destination).map_err(|e| e.to_string())?;
+                drop(file);
+                let destination = publish_download(temp, &destination)?;
                 Ok((destination, bytes))
             })();
             let message = match result {
@@ -130,24 +131,36 @@ fn default_directory() -> PathBuf {
         .map(|path| path.join("Downloads"))
         .unwrap_or_else(|| PathBuf::from("downloads"))
 }
-fn unique_path(dir: &std::path::Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let stem = std::path::Path::new(name)
+fn publish_download(
+    mut temp: tempfile::NamedTempFile,
+    destination: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let stem = destination
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("download");
-    let ext = std::path::Path::new(name)
+    let ext = destination
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| format!(".{s}"))
         .unwrap_or_default();
-    (1..10_000)
-        .map(|i| dir.join(format!("{stem} ({i}){ext}")))
-        .find(|path| !path.exists())
-        .unwrap_or(candidate)
+    // Claim the name atomically after the transfer. An existence check followed
+    // by `persist` can overwrite another download (or a dangling symlink).
+    for index in 0..10_000 {
+        let candidate = if index == 0 {
+            destination.to_path_buf()
+        } else {
+            destination.with_file_name(format!("{stem} ({index}){ext}"))
+        };
+        match temp.persist_noclobber(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                temp = error.file;
+            }
+            Err(error) => return Err(format!("Could not save download: {error}")),
+        }
+    }
+    Err("Could not save download: no unused filename is available.".into())
 }
 pub fn fraction(received: u64, total: Option<u64>) -> f32 {
     total
@@ -162,3 +175,83 @@ pub fn fraction(received: u64, total: Option<u64>) -> f32 {
 }
 #[allow(dead_code)]
 const _: u64 = MAX_DOWNLOAD_BYTES;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn completed_file(dir: &std::path::Path, bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new_in(dir).unwrap();
+        file.write_all(bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn downloads_with_the_same_destination_preserve_both_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // Both transfers selected this name before either finished downloading.
+        let destination = dir.path().join("report.pdf");
+        let first = publish_download(completed_file(dir.path(), b"first"), &destination).unwrap();
+        let second = publish_download(completed_file(dir.path(), b"second"), &destination).unwrap();
+        assert_eq!(fs::read(&first).unwrap(), b"first");
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn concurrent_downloads_claim_distinct_filenames() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("report.pdf");
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8u8)
+                .map(|index| {
+                    let barrier = &barrier;
+                    let destination = &destination;
+                    let temp = completed_file(dir.path(), &[index]);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        (publish_download(temp, destination).unwrap(), index)
+                    })
+                })
+                .collect();
+            for handle in handles {
+                let (path, index) = handle.join().unwrap();
+                assert_eq!(fs::read(path).unwrap(), [index]);
+            }
+        });
+    }
+
+    #[test]
+    fn exhausted_download_names_do_not_overwrite_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("report.pdf");
+        fs::write(&destination, b"original").unwrap();
+        for index in 1..10_000 {
+            fs::write(
+                dir.path().join(format!("report ({index}).pdf")),
+                b"existing",
+            )
+            .unwrap();
+        }
+        let error = publish_download(completed_file(dir.path(), b"new"), &destination).unwrap_err();
+        assert!(error.contains("no unused filename"));
+        assert_eq!(fs::read(destination).unwrap(), b"original");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 10_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloads_preserve_dangling_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("report.pdf");
+        let target = dir.path().join("missing.pdf");
+        std::os::unix::fs::symlink(&target, &destination).unwrap();
+        let saved =
+            publish_download(completed_file(dir.path(), b"download"), &destination).unwrap();
+        assert_eq!(fs::read_link(&destination).unwrap(), target);
+        assert!(!target.exists());
+        assert_eq!(fs::read(saved).unwrap(), b"download");
+    }
+}

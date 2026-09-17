@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0 — First official release
+
+- Fix a download data-loss bug: completed downloads now atomically claim an unused
+  filename, preserving existing files and symlinks even when downloads finish
+  concurrently. Exhausting the available filenames reports an error instead of
+  overwriting the original file.
+- Add regression coverage for colliding and concurrent downloads, dangling
+  symlinks and exhausted filenames. No new browser features are included.
+
 ## 0.13.0-rc3 — JavaScript defaults and theme switching
 
 - Add a persistent, opt-in setting to enable web JavaScript by default for new

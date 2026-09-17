@@ -1,4 +1,4 @@
-# Security boundary in 0.13.0
+# Security boundary in 1.0.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -55,8 +55,10 @@ Secure, HttpOnly, SameSite, Max-Age and Expires are enforced. Public-suffix doma
 and invalid secure prefixes are rejected; scripts cannot read or overwrite HttpOnly
 cookies, and insecure responses cannot overwrite overlapping secure cookies.
 Cookies are not persisted to disk. HTTP authentication,
-automatic Referer headers, persistent network cache, downloads or automatic document
-navigation are not enabled.
+automatic Referer headers, persistent network cache and automatic document
+navigation are not enabled. User-initiated downloads are capped at 100 MiB and
+published from a temporary file without replacing existing files or symlinks,
+including when concurrent downloads use the same filename.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
 addresses are allowed, including for subresources; this is not an SSRF-filtering API.
 
@@ -183,7 +185,7 @@ thread is stuck. The same executable enters worker mode before creating any
 window or reading browser history.
 
 IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
-files. Messages have a four-byte length prefix: commands are limited to 128 KiB,
+files. Messages have a four-byte length prefix: commands are limited to 1 MiB,
 presentation responses to 128 MiB. Pipe reads, writes, JSON decoding, image
 validation and presentation-index checks happen off the UI thread. Only inert
 text/style/image presentation data and bounded reports cross into the browser;
