@@ -246,9 +246,9 @@ To inspect downloads without executing page scripts:
 cargo run --locked --all-features --example resource-report -- https://www.ynet.co.il/
 ```
 
-## Release-candidate compatibility suite
+## Website compatibility suite
 
-The RC suite tracks the July 2026 [Semrush top websites in Israel](https://www.semrush.com/website/top/israel/all/)
+The compatibility suite tracks the July 2026 [Semrush top websites in Israel](https://www.semrush.com/website/top/israel/all/)
 and [worldwide](https://www.semrush.com/website/top/global/all/). It contains
 fourteen unique domains after overlap and checks that each target can be
 addressed over HTTPS. Run the deterministic checks with:

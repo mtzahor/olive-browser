@@ -821,13 +821,9 @@ impl Tab {
                                 ui.close();
                             }
                             ui.label(
-                                RichText::new(concat!(
-                                    "Version ",
-                                    env!("CARGO_PKG_VERSION"),
-                                    " · RC 3"
-                                ))
-                                .small()
-                                .weak(),
+                                RichText::new(concat!("Version ", env!("CARGO_PKG_VERSION")))
+                                    .small()
+                                    .weak(),
                             );
                         });
                     });
@@ -931,7 +927,7 @@ impl Tab {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · RC 3"))
+                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                                 .size(12.0)
                                 .weak(),
                         );

@@ -1,6 +1,6 @@
-//! Release-candidate website compatibility coverage.
+//! Website compatibility coverage.
 //!
-//! The ranking snapshot is deliberately checked into the repository so the RC
+//! The ranking snapshot is deliberately checked into the repository so the
 //! suite does not change when a traffic provider updates its page. The live
 //! smoke test is opt-in because third-party sites are rate-limited and may
 //! change their markup without notice.

@@ -2,6 +2,8 @@
 
 ## 1.0.0 — First official release
 
+- Remove the release-candidate labels from the browser status bar and menu;
+  both display the package version, 1.0.0.
 - Fix a download data-loss bug: completed downloads now atomically claim an unused
   filename, preserving existing files and symlinks even when downloads finish
   concurrently. Exhausting the available filenames reports an error instead of
