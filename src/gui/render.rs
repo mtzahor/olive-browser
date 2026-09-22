@@ -275,8 +275,8 @@ impl Page {
         };
         if let Some(title) = doc.descendants(doc.root()).find(|&id| {
             doc.node(id).and_then(|n| n.as_element()).is_some_and(|e| {
-                e.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                    && e.name.local.as_ref() == "title"
+                e.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
+                    && e.name.local.as_str() == "title"
             })
         }) {
             builder.page.title = doc
@@ -348,8 +348,8 @@ impl Page {
                     continue;
                 }
                 NodeKind::Element(element) => {
-                    let tag = element.name.local.as_ref();
-                    if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
+                    let tag = element.name.local.as_str();
+                    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
                         || matches!(
                             tag,
                             "head"
@@ -2026,7 +2026,7 @@ mod tests {
                 doc.node(id)
                     .unwrap()
                     .as_element()
-                    .is_some_and(|e| e.name.local.as_ref() == "img")
+                    .is_some_and(|e| e.name.local.as_str() == "img")
             })
             .unwrap();
         let images = HashMap::from([(
@@ -2206,7 +2206,7 @@ mod tests {
                 document
                     .node(id)
                     .and_then(|node| node.as_element())
-                    .is_some_and(|element| element.name.local.as_ref() == "img")
+                    .is_some_and(|element| element.name.local.as_str() == "img")
             })
             .unwrap();
         let mut images = HashMap::new();

@@ -1,6 +1,6 @@
 [package]
 name = "olive-browser"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A lightweight Rust browser with HTML, CSS and JavaScript"
@@ -44,7 +44,7 @@ net = ["dep:reqwest", "dep:url", "dep:encoding_rs", "dep:percent-encoding", "dep
 gui = ["css", "js", "net", "dep:eframe", "dep:epaint", "dep:base64", "dep:image", "dep:rfd", "dep:zune-jpeg", "dep:serde", "dep:serde_json", "dep:tempfile", "dep:time", "dep:unicode-bidi", "dep:unicode-bidi-mirroring", "dep:unicode-segmentation"]
 
 [dependencies]
-html5ever = "0.39.0"
+html5ever = "0.40.1"
 cssparser = { version = "0.38.0", optional = true }
 # Boa exposes its total VM instruction counter through the `fuzz` feature.
 boa_engine = { version = "0.22.0", optional = true, default-features = false, features = ["annex-b", "fuzz"] }

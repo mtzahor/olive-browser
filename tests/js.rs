@@ -641,7 +641,7 @@ fn document_cookie_refreshes_from_other_tabs_before_a_click() {
             document
                 .node(id)
                 .and_then(|node| node.as_element())
-                .is_some_and(|element| element.name.local.as_ref() == "button")
+                .is_some_and(|element| element.name.local.as_str() == "button")
         })
         .unwrap();
     let mut session = DocumentSession::with_sources_and_cookies(

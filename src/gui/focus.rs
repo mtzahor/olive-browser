@@ -126,7 +126,7 @@ impl Content {
             let mut content = in_content;
             let mut linked = in_link;
             if let Some(element) = node.as_element() {
-                let tag = element.name.local.as_ref();
+                let tag = element.name.local.as_str();
                 if excluded_element(element, in_content, scripting) {
                     excluded.insert(id);
                     continue;
@@ -186,7 +186,7 @@ impl Content {
             if score.text == 0 {
                 continue;
             }
-            let tag = element.name.local.as_ref();
+            let tag = element.name.local.as_str();
             let priority = match tag {
                 "article" => 2,
                 "main" => 1,
@@ -225,8 +225,8 @@ impl Content {
 }
 
 fn excluded_element(element: &Element, in_content: bool, scripting: bool) -> bool {
-    let tag = element.name.local.as_ref();
-    if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
+    let tag = element.name.local.as_str();
+    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
         || element.attribute("hidden").is_some()
         || element
             .attribute("aria-hidden")
@@ -311,7 +311,7 @@ fn excluded_element(element: &Element, in_content: bool, scripting: bool) -> boo
 
 /// Reader styles deliberately ignore author typography and box decoration.
 pub fn style(element: &Element, parent: ComputedStyle) -> ComputedStyle {
-    let tag = element.name.local.as_ref();
+    let tag = element.name.local.as_str();
     let mut style = ComputedStyle {
         color: parent.color,
         font_size: parent.font_size,

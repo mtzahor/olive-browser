@@ -26,7 +26,7 @@ fn canonical_tree(doc: &Document) -> String {
                 }
             }
             NodeKind::Element(element) => {
-                let namespace = match element.name.ns.as_ref() {
+                let namespace = match element.name.ns.as_str() {
                     "http://www.w3.org/2000/svg" => "svg ",
                     "http://www.w3.org/1998/Math/MathML" => "math ",
                     _ => "",
@@ -35,7 +35,7 @@ fn canonical_tree(doc: &Document) -> String {
                 let mut attrs: Vec<_> = element.attributes.iter().collect();
                 attrs.sort_by(|a, b| a.name.local.cmp(&b.name.local));
                 for attr in attrs {
-                    let namespace = match attr.name.ns.as_ref() {
+                    let namespace = match attr.name.ns.as_str() {
                         "http://www.w3.org/1999/xlink" => "xlink ",
                         "http://www.w3.org/XML/1998/namespace" => "xml ",
                         "http://www.w3.org/2000/xmlns/" => "xmlns ",

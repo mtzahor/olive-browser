@@ -28,7 +28,7 @@ fn styles(html: &str) -> (HashMap<String, ComputedStyle>, Stylesheet, StyleBudge
             .copied()
             .unwrap_or_default();
         let style = sheet.compute(doc, id, parent, root_font, &mut budget);
-        if element.name.local.as_ref() == "html" {
+        if element.name.local.as_str() == "html" {
             root_font = style.font_size;
         }
         computed.insert(id, style);
