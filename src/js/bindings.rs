@@ -64,7 +64,7 @@ impl Host {
                     .doc()
                     .node(id)
                     .and_then(|n| n.as_element())
-                    .is_some_and(|e| e.name.ns.as_ref() == HTML && predicate(e))
+                    .is_some_and(|e| e.name.ns.as_str() == HTML && predicate(e))
         });
         self.spend(spent, 0, 0)?;
         Ok(found)
@@ -430,8 +430,8 @@ fn elements_by_tag(root: NodeId, args: &[JsValue], context: &mut Context) -> JsR
                 .node(id)
                 .and_then(|n| n.as_element())
                 .is_some_and(|e| {
-                    e.name.ns.as_ref() == HTML
-                        && (tag == "*" || e.name.local.as_ref().eq_ignore_ascii_case(&tag))
+                    e.name.ns.as_str() == HTML
+                        && (tag == "*" || e.name.local.as_str().eq_ignore_ascii_case(&tag))
                 })
             {
                 ids.push(id);
@@ -455,7 +455,7 @@ fn elements_by_tag(root: NodeId, args: &[JsValue], context: &mut Context) -> JsR
 fn find_tag(context: &mut Context, tag: &str) -> JsResult<JsValue> {
     let id = host(context)
         .borrow_mut()
-        .find(|e| e.name.local.as_ref() == tag)?;
+        .find(|e| e.name.local.as_str() == tag)?;
     wrap(context, id)
 }
 fn body(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
@@ -466,7 +466,7 @@ fn document_element(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResu
 }
 fn title(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let mut host = host(context).borrow_mut();
-    let id = host.find(|e| e.name.local.as_ref() == "title")?;
+    let id = host.find(|e| e.name.local.as_str() == "title")?;
     let text = match id {
         Some(id) => host.text(id)?,
         None => String::new(),
@@ -476,10 +476,10 @@ fn title(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue>
 fn set_title(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let text = string_arg(args, 0, context)?;
     let mut host = host(context).borrow_mut();
-    let id = match host.find(|e| e.name.local.as_ref() == "title")? {
+    let id = match host.find(|e| e.name.local.as_str() == "title")? {
         Some(id) => id,
         None => {
-            let Some(head) = host.find(|e| e.name.local.as_ref() == "head")? else {
+            let Some(head) = host.find(|e| e.name.local.as_str() == "head")? else {
                 return Ok(JsValue::undefined());
             };
             host.spend(1, 0, 1)?;
@@ -674,7 +674,7 @@ fn write_attribute(
     let existing = element
         .attributes
         .iter()
-        .position(|a| a.name.ns.is_empty() && a.name.local.as_ref() == name);
+        .position(|a| a.name.ns.is_empty() && a.name.local.as_str() == name);
     match (existing, value) {
         (Some(index), Some(value)) => element.attributes[index].value = value.into(),
         (Some(index), None) => {
@@ -735,7 +735,7 @@ fn tag_name(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<Js
         .name
         .local
         .to_ascii_uppercase();
-    Ok(JsString::from(name.as_ref()).into())
+    Ok(JsString::from(name.as_str()).into())
 }
 
 pub(super) fn restore_document(context: &Context, document: Document) {

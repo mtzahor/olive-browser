@@ -87,7 +87,7 @@ impl Stylesheet {
             if !applicable_style(element) {
                 continue;
             }
-            if element.name.local.as_ref() == "link" {
+            if element.name.local.as_str() == "link" {
                 if let Some(source) = sources
                     .get(&id)
                     .filter(|source| element.attribute("href") == Some(source.reference.as_str()))
@@ -185,7 +185,7 @@ impl Stylesheet {
                     candidates.extend_from_slice(entries);
                 }
             };
-            collect(Key::Tag(element.name.local.as_ref().to_ascii_lowercase()));
+            collect(Key::Tag(element.name.local.as_str().to_ascii_lowercase()));
             if let Some(id) = element.attribute("id") {
                 collect(Key::Id(id.to_ascii_lowercase()));
             }
@@ -242,7 +242,7 @@ impl Stylesheet {
             if let Some((_, value)) = winners[property as usize] {
                 values::apply(&mut style, parent, root_font, property, value);
             }
-            if property == values::Property::FontSize && element.name.local.as_ref() == "html" {
+            if property == values::Property::FontSize && element.name.local.as_str() == "html" {
                 root_font = style.font_size;
             }
             if property == values::Property::Color {
@@ -272,8 +272,8 @@ impl Stylesheet {
 
 /// Whether this HTML style/link applies to Olive's screen media subset.
 pub fn applicable_style(element: &Element) -> bool {
-    if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
-        || !matches!(element.name.local.as_ref(), "style" | "link")
+    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
+        || !matches!(element.name.local.as_str(), "style" | "link")
         || element.attribute("disabled").is_some()
         || element
             .attribute("type")
@@ -282,7 +282,7 @@ pub fn applicable_style(element: &Element) -> bool {
     {
         return false;
     }
-    if element.name.local.as_ref() == "link" {
+    if element.name.local.as_str() == "link" {
         let rel: Vec<_> = element
             .attribute("rel")
             .unwrap_or("")
@@ -473,7 +473,7 @@ fn declarations(input: &mut Parser<'_>, diagnostics: &mut Diagnostics) -> Vec<De
     result
 }
 fn user_agent(element: &Element, style: &mut ComputedStyle) {
-    let tag = element.name.local.as_ref();
+    let tag = element.name.local.as_str();
     if let Some(direction) = element.attribute("dir") {
         style.direction = match direction.trim().to_ascii_lowercase().as_str() {
             "rtl" => Direction::Rtl,

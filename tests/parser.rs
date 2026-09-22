@@ -13,7 +13,7 @@ fn find(doc: &Document, name: &str) -> NodeId {
             doc.node(id)
                 .unwrap()
                 .as_element()
-                .is_some_and(|e| e.name.local.as_ref() == name)
+                .is_some_and(|e| e.name.local.as_str() == name)
         })
         .unwrap_or_else(|| panic!("missing element {name}"))
 }
@@ -168,11 +168,11 @@ fn template_contents_are_separate_and_nest() {
 fn preserves_foreign_namespaces_attributes_and_integration_points() {
     let doc = parse("<!doctype html><svg viewbox='0 0 10 10'><a xlink:href='#x'/><foreignObject><p>HTML</p></foreignObject></svg><math><annotation-xml encoding='text/html'><div>more HTML</div></annotation-xml></math>").unwrap().document;
     let svg = doc.node(find(&doc, "svg")).unwrap().as_element().unwrap();
-    assert_eq!(svg.name.ns.as_ref(), "http://www.w3.org/2000/svg");
+    assert_eq!(svg.name.ns.as_str(), "http://www.w3.org/2000/svg");
     assert_eq!(svg.attribute("viewBox"), Some("0 0 10 10"));
     let a = doc.node(find(&doc, "a")).unwrap().as_element().unwrap();
     assert_eq!(
-        a.attributes[0].name.ns.as_ref(),
+        a.attributes[0].name.ns.as_str(),
         "http://www.w3.org/1999/xlink"
     );
     for name in ["p", "div"] {
@@ -183,7 +183,7 @@ fn preserves_foreign_namespaces_attributes_and_integration_points() {
                 .unwrap()
                 .name
                 .ns
-                .as_ref(),
+                .as_str(),
             "http://www.w3.org/1999/xhtml"
         );
     }

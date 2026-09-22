@@ -641,8 +641,8 @@ impl Location {
             .descendants(document.root())
             .find_map(|id| {
                 let element = document.node(id)?.as_element()?;
-                if element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_ref() == "base"
+                if element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
+                    && element.name.local.as_str() == "base"
                 {
                     element.attribute("href")
                 } else {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 — HTML parser dependency compatibility
+
+- Upgrade html5ever to 0.40.1 and its updated atom and string-cache dependencies.
+- Use explicit string conversions for HTML names and namespaces throughout the
+  parser, CSS, JavaScript, network, GUI, tests and examples to support the new
+  string-cache API.
+
 ## 1.1.0 — Website compatibility and CSS rendering
 
 - Expand the ranking snapshot to the top 50 sites in Israel and worldwide

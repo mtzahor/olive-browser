@@ -98,7 +98,7 @@ struct Context {
 fn element(doc: &Document, id: NodeId) -> Option<&Element> {
     doc.node(id)?
         .as_element()
-        .filter(|e| e.name.ns.as_ref() == "http://www.w3.org/1999/xhtml")
+        .filter(|e| e.name.ns.as_str() == "http://www.w3.org/1999/xhtml")
 }
 fn text(doc: &Document, id: NodeId, limit: usize) -> String {
     doc.descendants(id)
@@ -120,7 +120,7 @@ impl Forms {
                 if let Some(key) = e.attribute("id") {
                     ids.entry(key).or_insert(id);
                 }
-                if e.name.local.as_ref() == "label" && labels.len() < MAX_CONTROLS {
+                if e.name.local.as_str() == "label" && labels.len() < MAX_CONTROLS {
                     if let Some(key) = e.attribute("for") {
                         labels.entry(key).or_insert(id);
                     }
@@ -146,7 +146,7 @@ impl Forms {
                     .is_some_and(|p| p.disabled);
             }
             context.legend = None;
-            let tag = e.name.local.as_ref();
+            let tag = e.name.local.as_str();
             context.inert |= matches!(tag, "template" | "datalist" | "script" | "style")
                 || (tag == "noscript" && scripting);
             if tag == "form" && !context.inert {
@@ -163,7 +163,7 @@ impl Forms {
             if tag == "fieldset" && e.attribute("disabled").is_some() {
                 context.disabled = true;
                 context.legend = doc.children(id).find(|&id| {
-                    element(doc, id).is_some_and(|e| e.name.local.as_ref() == "legend")
+                    element(doc, id).is_some_and(|e| e.name.local.as_str() == "legend")
                 });
             }
             contexts.insert(id, context);
@@ -202,7 +202,7 @@ impl Forms {
             let owner = if let Some(name) = e.attribute("form") {
                 ids.get(name)
                     .copied()
-                    .filter(|&id| element(doc, id).is_some_and(|e| e.name.local.as_ref() == "form"))
+                    .filter(|&id| element(doc, id).is_some_and(|e| e.name.local.as_str() == "form"))
             } else {
                 context.form
             };
@@ -244,7 +244,7 @@ impl Forms {
             if kind == Kind::Select {
                 for option in doc.descendants(id) {
                     let Some(oe) =
-                        element(doc, option).filter(|e| e.name.local.as_ref() == "option")
+                        element(doc, option).filter(|e| e.name.local.as_str() == "option")
                     else {
                         continue;
                     };
@@ -267,7 +267,7 @@ impl Forms {
                             .and_then(|n| n.parent())
                             .and_then(|p| element(doc, p))
                             .is_some_and(|p| {
-                                p.name.local.as_ref() == "optgroup"
+                                p.name.local.as_str() == "optgroup"
                                     && p.attribute("disabled").is_some()
                             });
                     let selected = oe.attribute("selected").is_some();

@@ -34,7 +34,7 @@ impl Element {
     pub fn attribute(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
-            .find(|attr| attr.name.ns.is_empty() && attr.name.local.as_ref() == name)
+            .find(|attr| attr.name.ns.is_empty() && attr.name.local.as_str() == name)
             .map(|attr| attr.value.as_ref())
     }
 }
@@ -160,8 +160,8 @@ impl Document {
                 }
                 NodeKind::Element(element) => {
                     write!(writer, "<{}", element.name.local.escape_debug())?;
-                    if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml" {
-                        write!(writer, " namespace={:?}", element.name.ns.as_ref())?;
+                    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml" {
+                        write!(writer, " namespace={:?}", element.name.ns.as_str())?;
                     }
                     for attr in &element.attributes {
                         write!(writer, " ")?;

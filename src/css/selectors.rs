@@ -312,7 +312,7 @@ impl Selector {
             let Some(element) = node.as_element() else {
                 continue;
             };
-            if element.name.ns.as_ref() != "http://www.w3.org/1999/xhtml" {
+            if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml" {
                 continue;
             }
             let quirks = doc.quirks_mode() == crate::QuirksMode::Quirks;
@@ -329,7 +329,7 @@ impl Selector {
                 }
                 match simple {
                     Simple::Universal => true,
-                    Simple::Tag(tag) => element.name.local.as_ref().eq_ignore_ascii_case(tag),
+                    Simple::Tag(tag) => element.name.local.as_str().eq_ignore_ascii_case(tag),
                     Simple::Id(id) => element.attribute("id").is_some_and(|v| equal(v, id)),
                     Simple::Class(class) => element
                         .attribute("class")
@@ -365,10 +365,10 @@ impl Selector {
                                 && sibling(doc, id, true, budget).is_none()
                         }
                         "link" | "any-link" => {
-                            matches!(element.name.local.as_ref(), "a" | "area")
+                            matches!(element.name.local.as_str(), "a" | "area")
                                 && element.attribute("href").is_some()
                         }
-                        "checked" => match element.name.local.as_ref() {
+                        "checked" => match element.name.local.as_str() {
                             "option" => element.attribute("selected").is_some(),
                             "input" => {
                                 element.attribute("type").is_some_and(|v| {

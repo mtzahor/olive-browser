@@ -178,8 +178,8 @@ impl DocumentSession {
                     .node(id)
                     .and_then(|n| n.as_element())
                     .is_some_and(|e| {
-                        e.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                            && e.name.local.as_ref() == "script"
+                        e.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
+                            && e.name.local.as_str() == "script"
                     })
                     && eligible_ancestry(&document, id)
             })
@@ -353,7 +353,7 @@ impl DocumentSession {
         let source = self.with_document(|doc| {
             let e = doc.node(target)?.as_element()?;
             if !eligible_ancestry(doc, target)
-                || e.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
+                || e.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
                 || e.attribute("hidden").is_some()
                 || e.attribute("disabled").is_some()
             {
@@ -436,9 +436,9 @@ pub(crate) fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
         }
         let node = doc.node(parent).unwrap();
         if let Some(e) = node.as_element() {
-            if e.name.ns.as_ref() != "http://www.w3.org/1999/xhtml"
+            if e.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
                 || matches!(
-                    e.name.local.as_ref(),
+                    e.name.local.as_str(),
                     "template" | "noscript" | "iframe" | "object" | "embed"
                 )
             {

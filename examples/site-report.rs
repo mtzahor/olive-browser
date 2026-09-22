@@ -28,7 +28,7 @@ fn inspect(address: &str) -> Result<Value, String> {
             .copied()
             .unwrap_or_else(ComputedStyle::default);
         let style = sheet.compute(&document, id, parent, root_font, &mut budget);
-        if element.name.local.as_ref() == "html" {
+        if element.name.local.as_str() == "html" {
             root_font = style.font_size;
         }
         styles.insert(id, style);

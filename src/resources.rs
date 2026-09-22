@@ -82,22 +82,22 @@ impl PageResources {
             let Some(element) = node.as_element() else {
                 continue;
             };
-            eligible[id.index()] = element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+            eligible[id.index()] = element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
                 && !matches!(
-                    element.name.local.as_ref(),
+                    element.name.local.as_str(),
                     "template" | "noscript" | "iframe" | "object" | "embed"
                 );
             let (kind, reference) =
-                if element.name.local.as_ref() == "link" && applicable_style(element) {
+                if element.name.local.as_str() == "link" && applicable_style(element) {
                     (ResourceKind::Stylesheet, element.attribute("href"))
                 } else if scripting
-                    && element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_ref() == "script"
+                    && element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
+                    && element.name.local.as_str() == "script"
                     && classic_type(element.attribute("type"), element.attribute("language"))
                 {
                     (ResourceKind::Script, element.attribute("src"))
-                } else if element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_ref() == "img"
+                } else if element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
+                    && element.name.local.as_str() == "img"
                 {
                     (ResourceKind::Image, element.attribute("src"))
                 } else {
