@@ -6,6 +6,7 @@ mod document;
 mod downloads;
 mod find;
 mod focus;
+mod focus_export;
 mod fonts;
 mod forms;
 mod history;

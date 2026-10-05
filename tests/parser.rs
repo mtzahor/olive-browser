@@ -360,3 +360,30 @@ fn deterministic_malformed_corpus_preserves_tree_invariants() {
         assert_tree_integrity(&doc);
     }
 }
+
+#[test]
+fn truncated_charset_metadata_keeps_the_document_readable() {
+    for content in [
+        "text/html; charset",
+        "text/html; charset \t",
+        "text/html; charset=",
+        "text/html; charset='",
+        "text/html; charset=\"",
+    ] {
+        // Both bytes and stream APIs must recover without losing following text.
+        let html = format!(
+            "<!doctype html><meta http-equiv='Content-Type' content=\"{}\"><p>Still readable: שלום ©</p>",
+            content.replace('"', "&quot;")
+        );
+        for parsed in [
+            parse(&html).unwrap(),
+            parse_reader(html.as_bytes(), ParseOptions::default()).unwrap(),
+        ] {
+            assert_eq!(
+                text(&parsed.document, find(&parsed.document, "p")),
+                "Still readable: שלום ©"
+            );
+            assert_tree_integrity(&parsed.document);
+        }
+    }
+}

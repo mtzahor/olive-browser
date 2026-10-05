@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.1.1** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.2.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -137,6 +137,18 @@ leaves Focus and selects the address bar. Following an anchor keeps Focus on;
 successfully opening or reloading a document returns to the normal view. A failed
 load keeps the current reading view. Reader links navigate without invoking page
 click handlers. Entering and leaving Focus does not add history visits.
+
+Use **Export Focus view as HTML** in the Focus toolbar to save the extracted
+article as a standalone HTML file for offline reading. The export preserves headings, lists, emphasis,
+code, text direction, anchors and resolved links. Already-loaded images are embedded
+as PNG data URLs; missing images keep their alternative text. Standard browsers
+can display the embedded images; Olive currently falls back to their alternative
+text because it does not load data URLs. Exports use a fixed reading style and omit
+scripts, event handlers, forms, page styles and remote resource loads. They reflect
+the current document, including completed script changes, without running scripts
+again. Exports are capped at 8 MiB, 100,000 nodes, 256 levels and 8,388,608
+image pixels. If a limit is reached, export is disabled with an explanation.
+A native save dialog selects the destination; files are replaced atomically.
 
 Content selection uses local heuristics, so unusual page layouts may omit useful
 content or keep some surrounding text. Exit Focus to see the complete original page.

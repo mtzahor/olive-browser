@@ -152,6 +152,10 @@ enum Command {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Page {
     pub title: String,
+    #[serde(default)]
+    pub export_html: Option<String>,
+    #[serde(default)]
+    pub export_error: Option<String>,
     pub truncated: bool,
     pub css_limited: bool,
     pub css_ignored: usize,
@@ -232,17 +236,35 @@ impl Page {
         Self::build(doc, scripting_enabled, &sheet, images, None)
     }
 
+    #[cfg(test)]
     pub fn reading(
         doc: &Document,
         scripting_enabled: bool,
         sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
     ) -> Self {
+        Self::reading_with_base(doc, scripting_enabled, sheet, images, None)
+    }
+
+    pub fn reading_with_base(
+        doc: &Document,
+        scripting_enabled: bool,
+        sheet: &Stylesheet,
+        images: &HashMap<NodeId, ImageAsset>,
+        base: Option<&olive_html::net::Location>,
+    ) -> Self {
         let content = Content::extract(doc, sheet, scripting_enabled);
         if !content.has_text {
             return Self::default();
         }
-        Self::build(doc, scripting_enabled, sheet, images, Some(&content))
+        let mut page = Self::build(doc, scripting_enabled, sheet, images, Some(&content));
+        if let Some(base) = base {
+            match crate::focus_export::export(doc, &content, &page.title, base, images) {
+                Ok(html) => page.export_html = Some(html),
+                Err(error) => page.export_error = Some(error),
+            }
+        }
+        page
     }
 
     fn build(
@@ -523,6 +545,17 @@ impl Page {
     /// Reject malformed indices and excessive presentation work before the UI sees IPC data.
     pub fn validate(&self) -> Result<(), String> {
         self.forms.validate()?;
+        if self
+            .export_html
+            .as_ref()
+            .is_some_and(|html| html.len() > crate::focus_export::MAX_EXPORT_BYTES)
+            || self
+                .export_error
+                .as_ref()
+                .is_some_and(|error| error.len() > 1024)
+        {
+            return Err("Invalid Focus export".into());
+        }
         let invalid = || "Invalid tab presentation".to_owned();
         if self.blocks.len() > MAX_BLOCKS
             || self.boxes.len() > MAX_BOXES

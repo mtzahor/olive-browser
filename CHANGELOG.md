@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 — Focus HTML export and compatibility regressions
+
+- Add bounded, standalone HTML export from the Focus toolbar, preserving article
+  structure, Unicode, resolved links and embedded loaded images while omitting
+  active content and remote resources; atomically save the selected file.
+- Update the public suffix list to psl 2.1.238 and verify cookie/SameSite isolation
+  between shared-hosting tenants.
+- Protect malformed charset metadata recovery with parser integration regressions.
+
 ## 1.1.1 — HTML parser dependency compatibility
 
 - Upgrade html5ever to 0.40.1 and its updated atom and string-cache dependencies.

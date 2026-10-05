@@ -81,7 +81,13 @@ pub fn prepare_page_with_loader(
         );
         let (page, reading, base) = session.with_document(|document| {
             let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
-            let reading = Page::reading(document, true, &sheet, &images);
+            let reading = Page::reading_with_base(
+                document,
+                true,
+                &sheet,
+                &images,
+                Some(&source.location.document_base(document)),
+            );
             (
                 Page::with_stylesheet_and_images(document, true, sheet, &images),
                 reading,
@@ -92,7 +98,13 @@ pub fn prepare_page_with_loader(
     } else {
         let document = parsed.document;
         let sheet = Stylesheet::from_document_with_sources(&document, &resources.styles);
-        let reading = Page::reading(&document, false, &sheet, &images);
+        let reading = Page::reading_with_base(
+            &document,
+            false,
+            &sheet,
+            &images,
+            Some(&source.location.document_base(&document)),
+        );
         let page = Page::with_stylesheet_and_images(&document, false, sheet, &images);
         (
             page,
@@ -247,7 +259,13 @@ impl PreparedPage {
         let allowed = session.click(click.target);
         let (page, reading, base) = session.with_document(|document| {
             let sheet = Stylesheet::from_document_with_sources(document, &self.styles);
-            let reading = Page::reading(document, true, &sheet, &self.images);
+            let reading = Page::reading_with_base(
+                document,
+                true,
+                &sheet,
+                &self.images,
+                Some(&self.loaded.location.document_base(document)),
+            );
             (
                 Page::with_stylesheet_and_images(document, true, sheet, &self.images),
                 reading,

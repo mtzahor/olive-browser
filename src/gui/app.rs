@@ -106,6 +106,42 @@ impl Tab {
                         ui.label(RichText::new("Focus mode").strong());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let html = self
+                            .loaded
+                            .as_ref()
+                            .and_then(|loaded| loaded.reading.export_html.as_deref());
+                        let reason = self
+                            .loaded
+                            .as_ref()
+                            .and_then(|loaded| loaded.reading.export_error.as_deref())
+                            .unwrap_or("Export the article for offline reading");
+                        if ui
+                            .add_enabled(
+                                !busy && html.is_some(),
+                                IconButton::icon_only(Icon::Download, "Export Focus view as HTML"),
+                            )
+                            .on_hover_text(reason)
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("HTML documents", &["html"])
+                                .set_file_name("olive-reading.html")
+                                .save_file()
+                            {
+                                match crate::focus_export::save(&path, html.unwrap()) {
+                                    Ok(()) => {
+                                        self.alert = Some(format!(
+                                            "Focus view exported to {}",
+                                            path.display()
+                                        ))
+                                    }
+                                    Err(error) => {
+                                        self.error =
+                                            Some(format!("Could not export Focus view: {error}"))
+                                    }
+                                }
+                            }
+                        }
                         let mut appearance = IconButton::new(Icon::Appearance, "Appearance");
                         appearance.button = appearance.button.selected(self.focus_panel);
                         if ui

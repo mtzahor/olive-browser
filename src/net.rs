@@ -1506,6 +1506,43 @@ mod tests {
     }
 
     #[test]
+    fn shared_hosting_tenants_have_separate_cookie_sites() {
+        for suffix in [
+            "surge.sh",
+            "aws.databricksapps.com",
+            "gcp.databricksapps.com",
+            "tenant.azure.databricksapps.com",
+            "region.compute.herokuapp.com",
+        ] {
+            let first = Location::from_input(&format!("https://alice.{suffix}/")).unwrap();
+            let second = Location::from_input(&format!("https://bob.{suffix}/")).unwrap();
+            let child = Location::from_input(&format!("https://cdn.alice.{suffix}/")).unwrap();
+            assert!(!same_cookie_site(&first, &second), "{suffix}");
+            assert!(same_cookie_site(&first, &child), "{suffix}");
+            let mut jar = CookieJar::default();
+            assert!(
+                !jar.absorb(&first, &format!("shared=1; Domain={suffix}")),
+                "{suffix}"
+            );
+            assert!(
+                !jar.set_document_cookie(&first, &format!("shared=1; Domain={suffix}")),
+                "{suffix}"
+            );
+            assert!(jar.absorb(&first, "host=1; Secure; SameSite=Strict"));
+            assert!(jar.absorb(
+                &first,
+                &format!("tenant=1; Domain=alice.{suffix}; Secure; SameSite=Strict")
+            ));
+            assert_eq!(jar.cookie_header(&second), None);
+            assert_eq!(jar.cookie_header(&child).as_deref(), Some("tenant=1"));
+            assert_eq!(
+                jar.cookie_header_for(&first, same_cookie_site(&first, &second), false, true),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn same_site_cookie_filtering_distinguishes_navigation_method_and_subresources() {
         let site = Location::from_input("https://www.example.com/").unwrap();
         let sibling = Location::from_input("https://cdn.example.com/").unwrap();

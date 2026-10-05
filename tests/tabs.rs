@@ -8,6 +8,8 @@ mod document;
 mod find;
 #[path = "../src/gui/focus.rs"]
 mod focus;
+#[path = "../src/gui/focus_export.rs"]
+mod focus_export;
 #[path = "../src/gui/fonts.rs"]
 mod fonts;
 #[path = "../src/gui/forms.rs"]
@@ -65,6 +67,10 @@ fn loaded(worker: &mut Worker) {
     match reply(worker).unwrap() {
         Event::Loaded(page) => {
             assert_eq!(page.page.title, "Loaded 1");
+            let html = page.reading.export_html.as_ref().unwrap();
+            assert!(html.contains("Loaded 1"));
+            assert!(html.contains("A readable article."));
+            assert!(!html.contains("<script"));
             assert_eq!(page.scripts.executed, 1);
             assert!(page.scripting_enabled);
         }
@@ -81,6 +87,11 @@ fn click(worker: &mut Worker, count: usize) {
     match reply(worker).unwrap() {
         Event::Updated(update) => {
             assert_eq!(update.page.title, format!("Clicked {count}"));
+            let html = update.reading.export_html.as_ref().unwrap();
+            assert!(html.contains(&format!("Clicked {count}")));
+            assert!(html.contains("A readable article."));
+            assert!(!html.contains("<script"));
+            assert!(!html.contains("onclick"));
             assert_eq!(update.scripts.executed, 1);
             assert!(update.scripts.diagnostics.is_empty());
             assert_eq!(update.alert, Some(count.to_string()));
