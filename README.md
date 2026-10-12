@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.2.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.3.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -50,6 +50,10 @@ stopping a load. Find works in Focus mode and keeps a separate query per tab.
 It searches displayed page text, including inline formatting, excluding hidden
 content and native control labels/values. Searches do not span separate text blocks; Unicode
 lowercase matching is supported without accent folding or full linguistic case folding.
+
+Open **Developer tools** from the Browser menu or press `F12` to view page and
+worker details, captured JavaScript console output and errors, and resource
+loading diagnostics.
 
 Native forms work with JavaScript disabled. Supported controls include text,
 search, email, URL, telephone and password inputs, checkboxes, radio groups,
@@ -110,7 +114,7 @@ closes, including while loading or executing scripts. Blank tabs need no worker.
 Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
 The **Browser menu** at the right of the address bar contains Open HTML, History,
-Bookmarks, Downloads, Save page and Settings, including in narrow windows.
+Bookmarks, Downloads, Save page, Developer tools and Settings, including in narrow windows.
 Tabs, toolbars, dialogs and the new-tab page share an olive palette and consistent
 control sizes. Status controls wrap to keep every action reachable.
 

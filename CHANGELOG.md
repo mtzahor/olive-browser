@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 — Developer tools
+
+- Add a Developer tools window with page overview, captured JavaScript console
+  output and errors, and resource loading diagnostics. Open it with F12 or from
+  the Browser menu.
+
 ## 1.2.0 — Focus HTML export and compatibility regressions
 
 - Add bounded, standalone HTML export from the Focus toolbar, preserving article
