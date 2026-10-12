@@ -2348,6 +2348,8 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
+            devtools_open: false,
+            devtools_tab: DevToolsTab::default(),
         };
         // Warm every cache, including the views that will be hidden at the toggle.
         for tab in &mut browser.tabs {
@@ -2445,6 +2447,8 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
+            devtools_open: false,
+            devtools_tab: DevToolsTab::default(),
         };
         browser.new_tab(None, &ctx);
         let second_id = browser.tabs[1].id;
@@ -2513,6 +2517,8 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
+            devtools_open: false,
+            devtools_tab: DevToolsTab::default(),
         };
         let session = Session {
             tabs: vec![SavedTab {
@@ -2588,6 +2594,8 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
+            devtools_open: false,
+            devtools_tab: DevToolsTab::default(),
         };
         for _ in 0..8 {
             browser.new_tab(None, &ctx);
