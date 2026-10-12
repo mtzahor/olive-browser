@@ -12,7 +12,8 @@ use cssparser::{
 use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
-    Color, ComputedStyle, Direction, Display, Length, LineHeight, TextAlign, WhiteSpace,
+    Color, ComputedStyle, Direction, Display, FlexDirection, Length, LineHeight, TextAlign,
+    WhiteSpace,
 };
 use values::{Declaration, PROPERTIES, Value};
 
@@ -263,6 +264,7 @@ impl Stylesheet {
         style.min_height = computed_length(style.min_height);
         style.border_width = computed_length(style.border_width);
         style.border_radius = computed_length(style.border_radius);
+        style.flex_gap = computed_length(style.flex_gap);
         if element.attribute("hidden").is_some() {
             style.display = Display::None;
         }

@@ -30,6 +30,7 @@ struct Style {
     css: ComputedStyle,
     indent: usize,
     inline_background: Color32,
+    flex_parent: bool,
     target: Option<NodeId>,
     link: Option<NodeId>,
 }
@@ -415,7 +416,8 @@ impl Page {
                     {
                         builder.page.background = Some(color(style.css.background));
                     }
-                    let block = style.css.display == Display::Block;
+                    let block = style.flex_parent
+                        || matches!(style.css.display, Display::Block | Display::Flex);
                     if block {
                         builder.open(style.css);
                         style.inline_background = Color32::TRANSPARENT;
@@ -467,7 +469,9 @@ impl Page {
                         )),
                         "li" => {
                             style.indent += usize::from(lists.len() > 1);
-                            let marker = if let Some(Some(next)) = lists.last_mut() {
+                            let marker = if !style.css.list_marker {
+                                String::new()
+                            } else if let Some(Some(next)) = lists.last_mut() {
                                 *next = element
                                     .attribute("value")
                                     .and_then(|v| v.parse().ok())
@@ -522,11 +526,14 @@ impl Page {
                 _ => continue,
             }
             let children: Vec<_> = doc.children(id).collect();
+            let mut child_style = style;
+            child_style.flex_parent = style.css.display == Display::Flex
+                && style.css.flex_direction == olive_html::css::FlexDirection::Row;
             pending.extend(
                 children
                     .into_iter()
                     .rev()
-                    .map(|child| Visit::Enter(child, style)),
+                    .map(|child| Visit::Enter(child, child_style)),
             );
         }
         builder.flush();
@@ -761,7 +768,7 @@ impl Page {
         // This UI shares the page's painter and clip, but text placement must not
         // advance the caller's layout until the complete page size is known.
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
-        for command in &self.commands {
+        for (command_index, command) in self.commands.iter().enumerate() {
             match *command {
                 Command::Anchor(index) => {
                     if scroll_to.as_deref() == Some(self.anchors[index].as_str()) {
@@ -774,12 +781,25 @@ impl Page {
                     }
                 }
                 Command::Open(index) => {
+                    let parent = stack.last().unwrap();
+                    let flex_width = if parent.flex_row {
+                        Some(intrinsic_width(
+                            &self.commands,
+                            command_index,
+                            &mut self.blocks,
+                            &self.images,
+                            ui,
+                        ))
+                    } else {
+                        None
+                    };
                     let layout = BoxLayout::open(
                         index,
                         self.boxes[index],
-                        stack.last().unwrap(),
+                        parent,
                         self.root_font,
                         ui,
+                        flex_width,
                     );
                     right = right.max(layout.left + layout.outer_width);
                     stack.push(layout);
@@ -788,7 +808,17 @@ impl Page {
                     let layout = stack.pop().unwrap();
                     let rect = layout.finish(ui, self.root_font);
                     self.box_rects[layout.index] = rect;
-                    stack.last_mut().unwrap().cursor = rect.bottom() + layout.margin_bottom;
+                    let parent = stack.last_mut().unwrap();
+                    if parent.flex_row {
+                        parent.flex_cursor = rect.right() - parent.content_left
+                            + layout.margin_right
+                            + parent.flex_gap;
+                        parent.flex_height = parent
+                            .flex_height
+                            .max(rect.bottom() + layout.margin_bottom - parent.cursor);
+                    } else {
+                        parent.cursor = rect.bottom() + layout.margin_bottom;
+                    }
                 }
                 Command::Text(index) => {
                     let parent = stack.last_mut().unwrap();
@@ -1246,8 +1276,46 @@ struct BoxLayout {
     padding_bottom: f32,
     border: f32,
     margin_bottom: f32,
+    margin_right: f32,
+    flex_row: bool,
+    flex_cursor: f32,
+    flex_height: f32,
+    flex_gap: f32,
     paint: Option<egui::layers::ShapeIdx>,
 }
+
+/// Measure a block flex item's contents without wrapping so auto-sized list
+/// items keep their intrinsic width instead of stretching across the row.
+fn intrinsic_width(
+    commands: &[Command],
+    open_index: usize,
+    blocks: &mut [Block],
+    images: &[RenderedImage],
+    ui: &egui::Ui,
+) -> f32 {
+    let mut depth = 0usize;
+    let mut width: f32 = 0.0;
+    for command in commands.iter().skip(open_index + 1) {
+        match *command {
+            Command::Open(_) => depth += 1,
+            Command::Close if depth == 0 => break,
+            Command::Close => depth -= 1,
+            Command::Text(index) => {
+                let galley = layout_bidi(&mut blocks[index], ui, 10_000.0);
+                width = width.max(galley.size().x);
+            }
+            Command::Image(index) => {
+                let image = &images[index];
+                let natural = image.html_width.unwrap_or(image.image.size[0] as f32);
+                width = width.max(natural);
+            }
+            Command::Control(_, _) => width = width.max(120.0),
+            Command::Anchor(_) => {}
+        }
+    }
+    width.max(1.0)
+}
+
 impl BoxLayout {
     fn root(start: egui::Pos2, width: f32) -> Self {
         Self {
@@ -1263,10 +1331,22 @@ impl BoxLayout {
             padding_bottom: 0.0,
             border: 0.0,
             margin_bottom: 0.0,
+            margin_right: 0.0,
+            flex_row: false,
+            flex_cursor: 0.0,
+            flex_height: 0.0,
+            flex_gap: 0.0,
             paint: None,
         }
     }
-    fn open(index: usize, style: ComputedStyle, parent: &Self, root: f32, ui: &egui::Ui) -> Self {
+    fn open(
+        index: usize,
+        style: ComputedStyle,
+        parent: &Self,
+        root: f32,
+        ui: &egui::Ui,
+        flex_item_width: Option<f32>,
+    ) -> Self {
         let resolve = |v: Length| v.resolve(parent.width, style.font_size, root);
         let margin = style.margin.map(resolve);
         let padding = style.padding.map(resolve);
@@ -1278,7 +1358,11 @@ impl BoxLayout {
         let sides = padding[1] + padding[3] + border * 2.0;
         let available = (parent.width - margin[1] - margin[3] - sides).max(1.0);
         let width = if style.width == Length::Auto {
-            available
+            if parent.flex_row {
+                flex_item_width.unwrap_or(available).min(available)
+            } else {
+                available
+            }
         } else {
             (resolve(style.width) - if style.border_box { sides } else { 0.0 }).max(1.0)
         };
@@ -1298,7 +1382,12 @@ impl BoxLayout {
             } else {
                 0.0
             };
-        let left = parent.content_left + left_margin;
+        let left = parent.content_left
+            + if parent.flex_row {
+                parent.flex_cursor + margin[3]
+            } else {
+                left_margin
+            };
         let top = parent.cursor + margin[0];
         let content_top = top + border + padding[0];
         Self {
@@ -1314,6 +1403,12 @@ impl BoxLayout {
             padding_bottom: padding[2],
             border,
             margin_bottom: margin[2],
+            margin_right: margin[1],
+            flex_row: style.display == Display::Flex
+                && style.flex_direction == olive_html::css::FlexDirection::Row,
+            flex_cursor: 0.0,
+            flex_height: 0.0,
+            flex_gap: style.flex_gap.resolve(0.0, style.font_size, root).max(0.0),
             paint: Some(ui.painter().add(egui::Shape::Noop)),
         }
     }
@@ -1333,8 +1428,12 @@ impl BoxLayout {
         } else {
             min_height
         };
-        let bottom =
-            self.cursor.max(self.content_top + min_height) + self.padding_bottom + self.border;
+        let bottom = self
+            .cursor
+            .max(self.content_top + min_height)
+            .max(self.content_top + self.flex_height)
+            + self.padding_bottom
+            + self.border;
         let rect = egui::Rect::from_min_max(
             egui::pos2(self.left, self.top),
             egui::pos2(self.left + self.outer_width, bottom),
@@ -1433,6 +1532,10 @@ impl Builder {
         self.characters += accepted.chars().count();
         if accepted.len() < text.len() {
             self.page.truncated = true;
+        }
+        if accepted.is_empty() {
+            self.pending_space = false;
+            return;
         }
         if self.current.job.text.is_empty() {
             self.current.style = style.css;

@@ -34,7 +34,15 @@ impl Length {
 pub enum Display {
     Inline,
     Block,
+    Flex,
     None,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum FlexDirection {
+    #[default]
+    Row,
+    Column,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
@@ -86,6 +94,9 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub direction: Direction,
     pub display: Display,
+    pub flex_direction: FlexDirection,
+    pub flex_gap: Length,
+    pub list_marker: bool,
     /// Top, right, bottom, left.
     pub margin: [Length; 4],
     /// Top, right, bottom, left.
@@ -116,6 +127,9 @@ impl Default for ComputedStyle {
             text_align: TextAlign::Start,
             direction: Direction::Ltr,
             display: Display::Inline,
+            flex_direction: FlexDirection::Row,
+            flex_gap: Length::Px(0.0),
+            list_marker: true,
             margin: [Length::Px(0.0); 4],
             padding: [Length::Px(0.0); 4],
             width: Length::Auto,
@@ -144,6 +158,7 @@ impl ComputedStyle {
             white_space: parent.white_space,
             text_align: parent.text_align,
             direction: parent.direction,
+            list_marker: parent.list_marker,
             border_color: parent.color,
             ..Self::default()
         }
@@ -190,8 +205,11 @@ pub(super) enum Property {
     BorderStyle,
     BorderRadius,
     BoxShadow,
+    FlexDirection,
+    FlexGap,
+    ListMarker,
 }
-pub(super) const PROPERTIES: [Property; 30] = [
+pub(super) const PROPERTIES: [Property; 33] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -222,6 +240,9 @@ pub(super) const PROPERTIES: [Property; 30] = [
     Property::BorderStyle,
     Property::BorderRadius,
     Property::BoxShadow,
+    Property::FlexDirection,
+    Property::FlexGap,
+    Property::ListMarker,
 ];
 impl Property {
     pub(super) fn inherited(self) -> bool {
@@ -236,6 +257,7 @@ impl Property {
                 | Self::WhiteSpace
                 | Self::Align
                 | Self::Direction
+                | Self::ListMarker
         )
     }
 }
@@ -251,6 +273,8 @@ pub(super) enum Value {
     Align(TextAlign),
     Direction(Direction),
     Display(Display),
+    FlexDirection(FlexDirection),
+    ListMarker(bool),
     Inherit,
     Initial,
     Unset,
@@ -312,6 +336,76 @@ fn component(input: &mut Parser<'_>, alpha: bool) -> Result<f32, Error> {
         Err(cssparser::ParseError::custom(()))
     }
 }
+fn hue(input: &mut Parser<'_>) -> Result<f32, Error> {
+    let degrees = match input.next()? {
+        Token::Number { value, .. } => *value,
+        Token::Dimension { value, unit, .. } => match unit.to_ascii_lowercase().as_str() {
+            "deg" => *value,
+            "grad" => *value * 0.9,
+            "rad" => value.to_degrees(),
+            "turn" => *value * 360.0,
+            _ => return Err(cssparser::ParseError::custom(())),
+        },
+        _ => return Err(cssparser::ParseError::custom(())),
+    };
+    if degrees.is_finite() {
+        Ok(degrees.rem_euclid(360.0))
+    } else {
+        Err(cssparser::ParseError::custom(()))
+    }
+}
+fn percentage(input: &mut Parser<'_>) -> Result<f32, Error> {
+    match input.next()? {
+        Token::Percentage { unit_value, .. } if unit_value.is_finite() => {
+            Ok(unit_value.clamp(0.0, 1.0))
+        }
+        _ => Err(cssparser::ParseError::custom(())),
+    }
+}
+fn hsl_color(input: &mut Parser<'_>) -> Result<Color, Error> {
+    input.parse_nested_block(|input| {
+        let h = hue(input)?;
+        let commas = input.try_parse(|p| p.expect_comma()).is_ok();
+        let s = percentage(input)?;
+        if commas {
+            input.expect_comma()?;
+        }
+        let l = percentage(input)?;
+        let alpha = if input
+            .try_parse(|p| {
+                if commas {
+                    p.expect_comma()
+                } else {
+                    p.expect_delim('/')
+                }
+            })
+            .is_ok()
+        {
+            component(input, true)?
+        } else {
+            1.0
+        };
+        input.expect_exhausted()?;
+
+        let chroma = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let x = chroma * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+        let (r, g, b) = match h as u32 / 60 {
+            0 => (chroma, x, 0.0),
+            1 => (x, chroma, 0.0),
+            2 => (0.0, chroma, x),
+            3 => (0.0, x, chroma),
+            4 => (x, 0.0, chroma),
+            _ => (chroma, 0.0, x),
+        };
+        let m = l - chroma / 2.0;
+        Ok(Color(
+            ((r + m) * 255.0).round() as u8,
+            ((g + m) * 255.0).round() as u8,
+            ((b + m) * 255.0).round() as u8,
+            (alpha * 255.0).round() as u8,
+        ))
+    })
+}
 fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
     let token = input.next()?.clone();
     let rgba = match token {
@@ -361,6 +455,9 @@ fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
                 ))
             })?
         }
+        Token::Function(v) if v.eq_ignore_ascii_case("hsl") || v.eq_ignore_ascii_case("hsla") => {
+            hsl_color(input)?
+        }
         _ => return Err(cssparser::ParseError::custom(())),
     };
     Ok(Value::Color(rgba))
@@ -384,6 +481,9 @@ pub(super) fn parse_values(
         "text-align" => &[P::Align],
         "direction" => &[P::Direction],
         "display" => &[P::Display],
+        "flex-direction" => &[P::FlexDirection],
+        "gap" | "column-gap" | "row-gap" => &[P::FlexGap],
+        "list-style" | "list-style-type" => &[P::ListMarker],
         "margin" => &[P::MarginTop, P::MarginRight, P::MarginBottom, P::MarginLeft],
         "margin-top" => &[P::MarginTop],
         "margin-right" => &[P::MarginRight],
@@ -603,7 +703,19 @@ pub(super) fn parse_values(
         P::Display => Value::Display(match keyword(input)?.as_str() {
             "inline" => Display::Inline,
             "block" | "list-item" | "inline-block" => Display::Block,
+            "flex" | "inline-flex" => Display::Flex,
             "none" => Display::None,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::FlexDirection => Value::FlexDirection(match keyword(input)?.as_str() {
+            "row" | "row-reverse" => FlexDirection::Row,
+            "column" | "column-reverse" => FlexDirection::Column,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::FlexGap => Value::Length(length(input, false, false, true)?),
+        P::ListMarker => Value::ListMarker(match keyword(input)?.as_str() {
+            "none" => false,
+            "disc" | "circle" | "square" | "decimal" => true,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::BorderWidth => Value::Length(border_width(input)?),
@@ -707,6 +819,9 @@ pub(super) fn apply(
             P::BorderStyle => style.border_solid = source.border_solid,
             P::BorderRadius => style.border_radius = source.border_radius,
             P::BoxShadow => {}
+            P::FlexDirection => style.flex_direction = source.flex_direction,
+            P::FlexGap => style.flex_gap = source.flex_gap,
+            P::ListMarker => style.list_marker = source.list_marker,
         }
         return;
     }
@@ -737,6 +852,9 @@ pub(super) fn apply(
         (P::Align, Value::Align(v)) => style.text_align = v,
         (P::Direction, Value::Direction(v)) => style.direction = v,
         (P::Display, Value::Display(v)) => style.display = v,
+        (P::FlexDirection, Value::FlexDirection(v)) => style.flex_direction = v,
+        (P::FlexGap, Value::Length(v)) => style.flex_gap = v,
+        (P::ListMarker, Value::ListMarker(v)) => style.list_marker = v,
         (P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft, Value::Length(v)) => {
             style.margin[prop as usize - P::MarginTop as usize] = v
         }

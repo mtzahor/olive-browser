@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 — CSS compatibility and menu layout
+
+- Parse modern and legacy `hsl()` and `hsla()` color syntax, including hue units.
+- Lay out basic flex rows and columns with gaps, and respect `list-style: none`.
+- Skip empty generated text sections so list markers cannot invalidate a page.
+
 ## 1.3.0 — Developer tools
 
 - Add a Developer tools window with page overview, captured JavaScript console
