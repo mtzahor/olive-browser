@@ -3,6 +3,7 @@
 use flate2::{Compression, write::GzEncoder};
 use olive_html::net::{CookieJar, DocumentLoader, Location, MAX_DOCUMENT_BYTES};
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::TcpListener,
     thread,
@@ -10,12 +11,40 @@ use std::{
 };
 
 fn server(responses: Vec<Vec<u8>>) -> (Location, thread::JoinHandle<Vec<String>>) {
+    let response_count = responses.len();
+    let mut responses = responses.into_iter();
+    server_with_responses(response_count, move |_, _| {
+        responses.next().expect("one response per request")
+    })
+}
+
+fn server_by_path(
+    responses: HashMap<String, Vec<u8>>,
+) -> (Location, thread::JoinHandle<Vec<String>>) {
+    let response_count = responses.len();
+    let mut responses = responses;
+    server_with_responses(response_count, move |request, _| {
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("request line has a target");
+        responses
+            .remove(path)
+            .unwrap_or_else(|| panic!("no test response configured for {path}"))
+    })
+}
+
+fn server_with_responses(
+    response_count: usize,
+    mut response_for: impl FnMut(&str, usize) -> Vec<u8> + Send + 'static,
+) -> (Location, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let location =
         Location::from_input(&format!("http://{}/start", listener.local_addr().unwrap())).unwrap();
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
-        for response in responses {
+        for index in 0..response_count {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
@@ -43,7 +72,9 @@ fn server(responses: Vec<Vec<u8>>) -> (Location, thread::JoinHandle<Vec<String>>
             let mut body = vec![0; length];
             stream.read_exact(&mut body).unwrap();
             request.extend(body);
-            requests.push(String::from_utf8(request).unwrap());
+            let request = String::from_utf8(request).unwrap();
+            let response = response_for(&request, index);
+            requests.push(request);
             // A bounded client can intentionally close while we send a large body.
             let _ = stream.write_all(&response);
         }
@@ -655,29 +686,44 @@ mod page_resources {
 #[test]
 fn megabyte_resources_use_separate_per_resource_and_page_budgets() {
     use olive_html::resources::PageResources;
-    let (location, server) = server(vec![
-        response(
-            "200 OK",
-            "Content-Type: text/css\r\n",
-            &vec![b' '; 7 * 1024 * 1024],
+    let (location, server) = server_by_path(HashMap::from([
+        (
+            "/large.css".to_owned(),
+            response(
+                "200 OK",
+                "Content-Type: text/css\r\n",
+                &vec![b' '; 7 * 1024 * 1024],
+            ),
         ),
-        response(
-            "200 OK",
-            "Content-Type: text/css\r\n",
-            &vec![b' '; 2 * 1024 * 1024],
+        (
+            "/overflow.css".to_owned(),
+            response(
+                "200 OK",
+                "Content-Type: text/css\r\n",
+                &vec![b' '; 2 * 1024 * 1024],
+            ),
         ),
-        response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
-        response(
-            "200 OK",
-            "Content-Type: text/javascript\r\n",
-            &vec![b' '; 7 * 1024 * 1024],
+        (
+            "/small.css".to_owned(),
+            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
         ),
-        response(
-            "200 OK",
-            "Content-Type: text/javascript\r\n",
-            &vec![b' '; 3 * 1024 * 1024],
+        (
+            "/large.js".to_owned(),
+            response(
+                "200 OK",
+                "Content-Type: text/javascript\r\n",
+                &vec![b' '; 7 * 1024 * 1024],
+            ),
         ),
-    ]);
+        (
+            "/second.js".to_owned(),
+            response(
+                "200 OK",
+                "Content-Type: text/javascript\r\n",
+                &vec![b' '; 3 * 1024 * 1024],
+            ),
+        ),
+    ]));
     let doc = olive_html::parse("<link rel=stylesheet href=large.css><link rel=stylesheet href=overflow.css><link rel=stylesheet href=small.css><script src=large.js></script><script src=second.js></script>").unwrap().document;
     let resources = PageResources::load(&DocumentLoader::new().unwrap(), &location, &doc, true);
     assert_eq!(resources.report.loaded, 4);
