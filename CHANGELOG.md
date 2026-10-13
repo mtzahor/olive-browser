@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2 — Page loading and rendering stability
+
+- Load independent page resources concurrently while preserving stylesheet priority.
+- Compress tab image messages to reduce the data exchanged with page workers.
+- Fix crashes rendering right-to-left text at paragraph boundaries and isolate
+  image interactions between tabs.
+- Release page workers after loading pages that do not use JavaScript.
+
 ## 1.3.1 — CSS compatibility and menu layout
 
 - Parse modern and legacy `hsl()` and `hsla()` color syntax, including hue units.

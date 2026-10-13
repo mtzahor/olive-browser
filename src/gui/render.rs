@@ -984,7 +984,7 @@ impl Page {
                     }
                     let response = ui.interact(
                         outer,
-                        egui::Id::new(("olive-image", image.node, &image.reference)),
+                        ui.make_persistent_id(("olive-image", image.node, &image.reference)),
                         if image.action != Action::default() {
                             egui::Sense::click()
                         } else {
@@ -1651,10 +1651,27 @@ fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<egui::Galley
     };
     let mut lines = Vec::with_capacity(logical.rows.len());
     let mut first = 0;
-    for row in &logical.rows {
-        let end = first + row.glyphs.len();
+    for (row_index, row) in logical.rows.iter().enumerate() {
+        let row_start = first.min(chars.len());
+        let paragraph_end = chars
+            .iter()
+            .enumerate()
+            .skip(row_start)
+            .find_map(|(index, &(_, character))| (character == '\n').then_some(index))
+            .unwrap_or(chars.len());
+        let is_last_row = row_index + 1 == logical.rows.len();
+        // Hard paragraph breaks and the final row have exact source bounds.
+        // This matters for RTL shaping, which can add continuation glyphs at
+        // the end of a paragraph. Only soft-wrapped rows use glyph counts.
+        let end = if row.ends_with_newline || is_last_row {
+            paragraph_end
+        } else {
+            row_start
+                .saturating_add(row.glyphs.len())
+                .min(paragraph_end)
+        };
         let start_byte = chars
-            .get(first)
+            .get(row_start)
             .map_or(block.job.text.len(), |&(byte, _)| byte);
         let end_byte = chars
             .get(end)
@@ -1667,7 +1684,7 @@ fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<egui::Galley
             .get(paragraph_index)
             .or_else(|| bidi.paragraphs.last());
         let para_level = paragraph.map_or(Level::ltr(), |p| p.level);
-        let order = bidi_line_order(&bidi, start_byte..end_byte, first, para_level);
+        let order = bidi_line_order(&bidi, start_byte..end_byte, row_start, para_level);
         let mut line = LayoutJob {
             halign: logical.job.halign,
             ..Default::default()
@@ -1696,13 +1713,21 @@ fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<egui::Galley
         }
         // A hard break remains a logical character; soft wraps do not insert
         // synthetic characters into selection or find offsets.
-        if row.ends_with_newline {
-            append_character(&mut visual_job, '\n', formats[end]);
-            block.visual_to_logical.push(end);
+        let has_source_newline = row.ends_with_newline
+            && chars
+                .get(end)
+                .is_some_and(|&(_, character)| character == '\n');
+        if has_source_newline {
+            if let Some(format) = formats.get(end) {
+                append_character(&mut visual_job, '\n', format);
+                block.visual_to_logical.push(end);
+            }
         }
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(line));
         lines.push(galley);
-        first = end + usize::from(row.ends_with_newline);
+        first = end
+            .saturating_add(usize::from(has_source_newline))
+            .min(chars.len());
     }
     block.visual_job = visual_job;
     let mut galley = egui::Galley::concat(

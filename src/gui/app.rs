@@ -412,6 +412,7 @@ impl Tab {
             let pending = self.pending.take().unwrap();
             match event {
                 Ok(Event::Loaded(mut loaded)) => {
+                    let keep_worker = loaded.scripting_enabled;
                     shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history
                         .commit(loaded.location.clone(), pending.navigation);
@@ -424,7 +425,11 @@ impl Tab {
                         .reading
                         .scroll_to_fragment(loaded.location.fragment());
                     self.loaded = Some(*loaded);
-                    self.worker = Some(pending.worker);
+                    self.worker = if keep_worker {
+                        Some(pending.worker)
+                    } else {
+                        None
+                    };
                     self.crashed = false;
                     self.error = None;
                     self.focus_mode = false;

@@ -500,8 +500,12 @@ pub fn write_frame(
 pub mod wire_image {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use eframe::egui::{Color32, ColorImage};
+    use image::ImageEncoder;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
+
+    const MAX_ENCODED_IMAGE_BYTES: usize = 48 * 1024 * 1024;
+
     pub fn serialize<S: serde::Serializer>(
         image: &Arc<ColorImage>,
         serializer: S,
@@ -511,7 +515,16 @@ pub mod wire_image {
             .iter()
             .flat_map(|pixel| pixel.to_array())
             .collect();
-        (image.size, STANDARD.encode(bytes)).serialize(serializer)
+        let mut compressed = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut compressed)
+            .write_image(
+                &bytes,
+                image.size[0] as u32,
+                image.size[1] as u32,
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(serde::ser::Error::custom)?;
+        (image.size, STANDARD.encode(compressed)).serialize(serializer)
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
@@ -523,14 +536,18 @@ pub mod wire_image {
         if size.contains(&0)
             || size.iter().any(|&v| v > 4096)
             || pixels > 8 * 1024 * 1024
-            || encoded.len() > (pixels * 4).div_ceil(3) * 4
+            || encoded.len() > MAX_ENCODED_IMAGE_BYTES
         {
             return Err(serde::de::Error::custom("Tab image exceeds pixel budget"));
         }
-        let bytes = STANDARD.decode(encoded).map_err(serde::de::Error::custom)?;
-        if bytes.len() != pixels * 4 {
-            return Err(serde::de::Error::custom("Invalid image byte length"));
+        let encoded = STANDARD.decode(encoded).map_err(serde::de::Error::custom)?;
+        let decoded = image::load_from_memory_with_format(&encoded, image::ImageFormat::Png)
+            .map_err(serde::de::Error::custom)?
+            .to_rgba8();
+        if decoded.width() as usize != size[0] || decoded.height() as usize != size[1] {
+            return Err(serde::de::Error::custom("Invalid image dimensions"));
         }
+        let bytes = decoded.into_raw();
         Ok(Arc::new(ColorImage::new(
             size,
             bytes
