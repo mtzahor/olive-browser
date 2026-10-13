@@ -2575,7 +2575,13 @@ mod tests {
         first.receive(&ctx, &mut shared);
         assert!(first.crashed);
         assert!(first.worker.is_none());
-        assert!(second.worker.is_some());
+        assert!(
+            second
+                .loaded
+                .as_ref()
+                .is_some_and(|page| !page.scripting_enabled)
+        );
+        assert!(second.worker.is_none());
         assert!(!second.crashed);
         assert!(second.error.is_none());
         second.receive(&ctx, &mut shared);
