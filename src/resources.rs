@@ -162,6 +162,11 @@ impl PageResources {
             }
             if started.elapsed() >= timeout {
                 resources.report.limited = true;
+                resources
+                    .report
+                    .diagnostics
+                    .push("Page resource count or time limit reached.".into());
+                break;
             }
             resources.report.attempted += 1;
             let result = if *remaining == 0 {
@@ -302,6 +307,9 @@ fn load_batch(
             let next = &next;
             scope.spawn(move || {
                 loop {
+                    if started.elapsed() >= timeout {
+                        break;
+                    }
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some((_, kind, _)) = candidates.get(index) else {
                         break;

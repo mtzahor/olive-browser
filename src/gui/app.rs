@@ -1140,9 +1140,14 @@ impl Tab {
                                         link = click.href;
                                         link_new_tab = click.new_tab;
                                         form_activation = click.form;
-                                        if !click.new_tab && !busy && !self.crashed {
-                                            if scripting_enabled {
-                                                if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
+                                        if !click.new_tab
+                                            && !busy
+                                            && !self.crashed
+                                            && scripting_enabled
+                                        {
+                                            if let (Some(target), Some(worker)) =
+                                                (click.target, self.worker.as_mut())
+                                            {
                                                 if !worker.busy() {
                                                     self.pending_form = form_activation.take();
                                                     if let Err(error) = worker.send(Command::ClickWithCookies { click: ClickRequest { target, href: link.take() }, cookies: shared.cookies.clone() }) {
@@ -1151,7 +1156,6 @@ impl Tab {
                                                     }
                                                 }
                                                 link = None;
-                                                }
                                             }
                                         }
 

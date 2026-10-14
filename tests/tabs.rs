@@ -18,7 +18,7 @@ mod forms;
 mod render;
 #[path = "../src/gui/worker.rs"]
 mod worker;
-use document::ClickRequest;
+use document::{ClickRequest, LoadedPage};
 use eframe::egui;
 use olive_html::{NodeId, net::Location};
 use std::{
@@ -43,7 +43,29 @@ fn reply(worker: &mut Worker) -> Result<Event, String> {
     let until = Instant::now() + Duration::from_secs(20);
     loop {
         if let Some(event) = worker.poll() {
-            return event;
+            match event? {
+                Event::Loaded(mut page) if page.resources.pending => {
+                    worker.await_resource_update();
+                    loop {
+                        if let Some(event) = worker.poll() {
+                            match event? {
+                                Event::ResourcesUpdated(update) => {
+                                    merge_resources(&mut page, *update);
+                                    return Ok(Event::Loaded(page));
+                                }
+                                _ => return Err("expected resource update".into()),
+                            }
+                        }
+                        assert!(
+                            Instant::now() < until,
+                            "worker {} did not finish loading resources",
+                            worker.pid().unwrap_or(0)
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                event => return Ok(event),
+            }
         }
         assert!(
             Instant::now() < until,
@@ -52,6 +74,15 @@ fn reply(worker: &mut Worker) -> Result<Event, String> {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn merge_resources(page: &mut LoadedPage, update: document::PageUpdate) {
+    page.page = update.page;
+    page.reading = update.reading;
+    page.base = update.base;
+    page.scripts = update.scripts;
+    page.resources = update.resources;
+    page.cookie_updates = update.cookie_updates;
 }
 fn target() -> NodeId {
     let doc = olive_html::parse(HTML).unwrap().document;
