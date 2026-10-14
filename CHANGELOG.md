@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.4 — Resource loading stability
+
+- Respect the shared page resource deadline before scheduling additional requests.
+- Keep resource reporting accurate when the page deadline expires.
+
 ## 1.3.3 — Faster page display
 
 - Show parsed page content before external stylesheets and images finish loading,
