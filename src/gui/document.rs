@@ -4,7 +4,7 @@ use eframe::egui;
 use image::{ImageReader, Limits};
 use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
 use olive_html::{
-    ExternalSource, NodeId,
+    ExternalSource, NodeId, ParseOutput,
     css::Stylesheet,
     net::CookieUpdate,
     net::{DocumentLoader, LoadedDocument, Location},
@@ -41,6 +41,10 @@ pub struct PageUpdate {
     pub reading: Page,
     pub base: Location,
     pub scripts: ScriptReport,
+    #[serde(default)]
+    pub resources: ResourceReport,
+    #[serde(default)]
+    pub session_available: bool,
     pub alert: Option<String>,
     pub link: Option<String>,
     #[serde(default)]
@@ -53,12 +57,64 @@ pub struct PreparedPage {
     pub images: HashMap<NodeId, ImageAsset>,
 }
 
+/// Build the first visible page from the parsed document before waiting on linked resources.
+pub fn prepare_page_preview(
+    source: &LoadedDocument,
+    scripting_enabled: bool,
+) -> Result<(LoadedPage, ParseOutput), String> {
+    let parsed = source.parse(scripting_enabled)?;
+    let corrections = parsed
+        .diagnostics
+        .len()
+        .saturating_add(parsed.omitted_diagnostics);
+    let document = &parsed.document;
+    let sheet = Stylesheet::from_document(document);
+    let base = source.location.document_base(document);
+    let reading = Page::reading_with_base(
+        document,
+        scripting_enabled,
+        &sheet,
+        &HashMap::new(),
+        Some(&base),
+    );
+    let page =
+        Page::with_stylesheet_and_images(document, scripting_enabled, sheet, &HashMap::new());
+    Ok((
+        LoadedPage {
+            location: source.location.clone(),
+            base,
+            status: source.status,
+            page,
+            reading,
+            corrections,
+            scripts: ScriptReport::default(),
+            scripting_enabled,
+            resources: ResourceReport {
+                pending: true,
+                ..ResourceReport::default()
+            },
+            cookie_updates: Vec::new(),
+        },
+        parsed,
+    ))
+}
+
+#[cfg(test)]
 pub fn prepare_page_with_loader(
     source: LoadedDocument,
     loader: &DocumentLoader,
     scripting_enabled: bool,
 ) -> Result<PreparedPage, String> {
     let parsed = source.parse(scripting_enabled)?;
+    prepare_page_with_parsed(source, loader, scripting_enabled, parsed)
+}
+
+pub fn prepare_page_with_parsed(
+    source: LoadedDocument,
+    loader: &DocumentLoader,
+    scripting_enabled: bool,
+    parsed: ParseOutput,
+) -> Result<PreparedPage, String> {
     let corrections = parsed
         .diagnostics
         .len()
@@ -279,6 +335,8 @@ impl PreparedPage {
             reading,
             base,
             scripts: session.report().clone(),
+            resources: self.loaded.resources.clone(),
+            session_available: true,
             alert: session.take_alerts().into_iter().next(),
             link: if allowed { click.href } else { None },
             cookie_updates,

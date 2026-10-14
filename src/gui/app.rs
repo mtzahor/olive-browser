@@ -412,7 +412,8 @@ impl Tab {
             let pending = self.pending.take().unwrap();
             match event {
                 Ok(Event::Loaded(mut loaded)) => {
-                    let keep_worker = loaded.scripting_enabled;
+                    let keep_worker = loaded.scripting_enabled || loaded.resources.pending;
+                    let resources_pending = loaded.resources.pending;
                     shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history
                         .commit(loaded.location.clone(), pending.navigation);
@@ -426,7 +427,11 @@ impl Tab {
                         .scroll_to_fragment(loaded.location.fragment());
                     self.loaded = Some(*loaded);
                     self.worker = if keep_worker {
-                        Some(pending.worker)
+                        let mut worker = pending.worker;
+                        if resources_pending {
+                            worker.await_resource_update();
+                        }
+                        Some(worker)
                     } else {
                         None
                     };
@@ -453,6 +458,27 @@ impl Tab {
         }
         let event = self.worker.as_mut().and_then(Worker::poll);
         match event {
+            Some(Ok(Event::ResourcesUpdated(mut update))) => {
+                shared.cookies.apply_updates(&update.cookie_updates);
+                let keep_worker = update.session_available;
+                if let Some(loaded) = &mut self.loaded {
+                    update.page.forms.preserve_edits(&loaded.page.forms);
+                    loaded.page = update.page;
+                    loaded.reading = update.reading;
+                    loaded.base = update.base;
+                    loaded.scripts = update.scripts;
+                    loaded.resources = update.resources;
+                    shared
+                        .browsing_history
+                        .update_title(&loaded.location, &loaded.page.title);
+                }
+                self.find.scroll = self.find.open;
+                self.image_textures.clear();
+                self.pending_form = None;
+                if !keep_worker {
+                    self.worker = None;
+                }
+            }
             Some(Ok(Event::Updated(mut update))) => {
                 shared.cookies.apply_updates(&update.cookie_updates);
                 let activation = self.pending_form.take().filter(|_| update.default_allowed);
@@ -497,6 +523,19 @@ impl Tab {
         if self.pending.take().is_some() {
             if let Some(loaded) = &self.loaded {
                 self.address = loaded.location.as_str().into();
+            }
+        } else if self
+            .loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.resources.pending)
+        {
+            self.worker = None;
+            if let Some(loaded) = &mut self.loaded {
+                loaded.resources.pending = false;
+                loaded
+                    .resources
+                    .diagnostics
+                    .push("Resource loading stopped.".into());
             }
         } else if self.worker.as_ref().is_some_and(Worker::busy) {
             self.worker = None;
@@ -1036,6 +1075,8 @@ impl Tab {
                 }
                 if let Some(loaded) = &mut self.loaded {
                     let focus = self.focus_mode;
+                    let resource_pending = loaded.resources.pending;
+                    let scripting_enabled = loaded.scripting_enabled;
                     let page = if focus { &mut loaded.reading } else { &mut loaded.page };
                     if focus { page.set_reading_style(self.focus_settings); }
                     let count = page.find_query(if self.find.open { &self.find.query } else { "" });
@@ -1068,14 +1109,19 @@ impl Tab {
                                     })
                                     .show(ui, |ui| {
                                     if page.is_empty() {
-                                        ui.label("This document has no visible content.");
+                                        ui.label(if resource_pending {
+                                            "Loading page resources…"
+                                        } else {
+                                            "This document has no visible content."
+                                        });
                                     }
                                     let rendered = ui
                                         .push_id((self.id, self.generation), |ui| {
                                             ui.add_enabled_ui(
                                                 !busy
                                                     && !self.crashed
-                                                    && !self.worker.as_ref().is_some_and(Worker::busy),
+                                                && (!self.worker.as_ref().is_some_and(Worker::busy)
+                                                    || (resource_pending && !scripting_enabled)),
                                                 |ui| {
                                                     let page_zoom = self.zoom;
                                                     zoom::show(ui, self.id, page_zoom, |ui| {
@@ -1095,7 +1141,8 @@ impl Tab {
                                         link_new_tab = click.new_tab;
                                         form_activation = click.form;
                                         if !click.new_tab && !busy && !self.crashed {
-                                            if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
+                                            if scripting_enabled {
+                                                if let (Some(target), Some(worker)) = (click.target, self.worker.as_mut()) {
                                                 if !worker.busy() {
                                                     self.pending_form = form_activation.take();
                                                     if let Err(error) = worker.send(Command::ClickWithCookies { click: ClickRequest { target, href: link.take() }, cookies: shared.cookies.clone() }) {
@@ -1104,6 +1151,7 @@ impl Tab {
                                                     }
                                                 }
                                                 link = None;
+                                                }
                                             }
                                         }
 

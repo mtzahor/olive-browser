@@ -1650,15 +1650,21 @@ fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<egui::Galley
         ..Default::default()
     };
     let mut lines = Vec::with_capacity(logical.rows.len());
+    // Record each character's paragraph end once. Searching from every wrapped
+    // line to the next newline rescans the same suffix and becomes quadratic
+    // for long RTL paragraphs.
+    let mut paragraph_ends = vec![chars.len(); chars.len() + 1];
+    let mut paragraph_end = chars.len();
+    for index in (0..chars.len()).rev() {
+        if chars[index].1 == '\n' {
+            paragraph_end = index;
+        }
+        paragraph_ends[index] = paragraph_end;
+    }
     let mut first = 0;
     for (row_index, row) in logical.rows.iter().enumerate() {
         let row_start = first.min(chars.len());
-        let paragraph_end = chars
-            .iter()
-            .enumerate()
-            .skip(row_start)
-            .find_map(|(index, &(_, character))| (character == '\n').then_some(index))
-            .unwrap_or(chars.len());
+        let paragraph_end = paragraph_ends[row_start];
         let is_last_row = row_index + 1 == logical.rows.len();
         // Hard paragraph breaks and the final row have exact source bounds.
         // This matters for RTL shaping, which can add continuation glyphs at

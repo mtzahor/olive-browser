@@ -20,8 +20,10 @@ pub const MAX_PAGE_CSS_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PAGE_SCRIPT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PAGE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const RESOURCE_WORKERS: usize = 4;
+// Page resources are opportunistic: a stalled image or stylesheet must not
+// hold the whole document for several seconds before it can be displayed.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const RESOURCE_WORKERS: usize = 8;
 
 #[derive(Default)]
 pub struct PageResources {
@@ -45,6 +47,8 @@ pub struct ResourceReport {
     pub loaded: usize,
     pub diagnostics: Vec<String>,
     pub limited: bool,
+    #[cfg_attr(feature = "gui", serde(default))]
+    pub pending: bool,
 }
 
 impl PageResources {
@@ -119,10 +123,11 @@ impl PageResources {
                 queues[priority].push((id, kind, reference));
             }
         }
+        let mut candidates = Vec::new();
         for queue in queues {
-            let remaining_slots = MAX_RESOURCES.saturating_sub(resources.report.attempted);
+            let remaining_slots = MAX_RESOURCES.saturating_sub(candidates.len());
             let queue_len = queue.len();
-            let candidates: Vec<_> = queue.into_iter().take(remaining_slots).collect();
+            candidates.extend(queue.into_iter().take(remaining_slots));
             if queue_len > remaining_slots {
                 resources.report.limited = true;
                 resources
@@ -130,98 +135,110 @@ impl PageResources {
                     .diagnostics
                     .push("Page resource count or time limit reached.".into());
             }
-            if candidates.is_empty() {
-                continue;
+        }
+        let outcomes = load_batch(
+            loader,
+            location,
+            document,
+            &base,
+            &candidates,
+            started,
+            timeout,
+        );
+        for ((id, kind, reference), result) in candidates.iter().copied().zip(outcomes) {
+            let element = document.node(id).unwrap().as_element().unwrap();
+            let remaining = match kind {
+                ResourceKind::Stylesheet => &mut css_remaining,
+                ResourceKind::Script => &mut js_remaining,
+                ResourceKind::Image => &mut image_remaining,
+            };
+            if resources.report.attempted == MAX_RESOURCES {
+                resources.report.limited = true;
+                resources
+                    .report
+                    .diagnostics
+                    .push("Page resource count or time limit reached.".into());
+                break;
             }
-            for batch in candidates.chunks(RESOURCE_WORKERS) {
-                let outcomes =
-                    load_batch(loader, location, document, &base, batch, started, timeout);
-                for ((id, kind, reference), result) in batch.iter().copied().zip(outcomes) {
-                    let element = document.node(id).unwrap().as_element().unwrap();
-                    let remaining = match kind {
-                        ResourceKind::Stylesheet => &mut css_remaining,
-                        ResourceKind::Script => &mut js_remaining,
-                        ResourceKind::Image => &mut image_remaining,
-                    };
-                    if resources.report.attempted == MAX_RESOURCES || started.elapsed() >= timeout {
-                        resources.report.limited = true;
-                        resources
-                            .report
-                            .diagnostics
-                            .push("Page resource count or time limit reached.".into());
-                        break;
+            if started.elapsed() >= timeout {
+                resources.report.limited = true;
+            }
+            resources.report.attempted += 1;
+            let result = if *remaining == 0 {
+                resources.report.limited = true;
+                Err(format!(
+                    "Page {:?} budget exhausted ({} bytes total).",
+                    kind,
+                    match kind {
+                        ResourceKind::Stylesheet => MAX_PAGE_CSS_BYTES,
+                        ResourceKind::Script => MAX_PAGE_SCRIPT_BYTES,
+                        ResourceKind::Image => MAX_PAGE_IMAGE_BYTES,
                     }
-                    resources.report.attempted += 1;
-                    let result = if *remaining == 0 {
-                        resources.report.limited = true;
-                        Err(format!(
-                            "Page {:?} budget exhausted ({} bytes total).",
-                            kind,
-                            match kind {
-                                ResourceKind::Stylesheet => MAX_PAGE_CSS_BYTES,
-                                ResourceKind::Script => MAX_PAGE_SCRIPT_BYTES,
-                                ResourceKind::Image => MAX_PAGE_IMAGE_BYTES,
-                            }
-                        ))
-                    } else if reference.trim().is_empty() {
-                        Err("Empty resource address.".into())
-                    } else if element
-                        .attribute("integrity")
-                        .is_some_and(|value| !value.trim().is_empty())
-                    {
-                        Err("Resources requiring integrity verification are not supported.".into())
-                    } else {
-                        result.and_then(|loaded| {
+                ))
+            } else if reference.trim().is_empty() {
+                Err("Empty resource address.".into())
+            } else if element
+                .attribute("integrity")
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                Err("Resources requiring integrity verification are not supported.".into())
+            } else {
+                result.and_then(|loaded| {
                     if loaded.bytes.len() > *remaining {
                         resources.report.limited = true;
-                        Err(format!("Page {:?} budget exhausted: resource needs {} bytes; {} bytes remain.", kind, loaded.bytes.len(), *remaining))
-                    } else { Ok(loaded) }
-                })
-                    };
-                    match result {
-                        Ok(loaded) => {
-                            *remaining -= loaded.bytes.len();
-                            match kind {
-                                ResourceKind::Stylesheet => {
-                                    resources.styles.insert(
-                                        id,
-                                        ExternalSource {
-                                            reference: reference.to_owned(),
-                                            source: loaded.source,
-                                        },
-                                    );
-                                }
-                                ResourceKind::Script => {
-                                    resources.scripts.insert(
-                                        id,
-                                        ExternalSource {
-                                            reference: reference.to_owned(),
-                                            source: loaded.source,
-                                        },
-                                    );
-                                }
-                                ResourceKind::Image => {
-                                    resources.images.insert(
-                                        id,
-                                        ExternalImage {
-                                            reference: reference.to_owned(),
-                                            bytes: loaded.bytes,
-                                        },
-                                    );
-                                }
-                            };
-                            resources.report.loaded += 1;
-                        }
-                        Err(error) => {
-                            // Bound both retained URLs and transport error chains.
-                            let message = format!("{reference}: {error}");
-                            let mut end = message.len().min(1024);
-                            while !message.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            resources.report.diagnostics.push(message[..end].to_owned());
-                        }
+                        Err(format!(
+                            "Page {:?} budget exhausted: resource needs {} bytes; {} bytes remain.",
+                            kind,
+                            loaded.bytes.len(),
+                            *remaining
+                        ))
+                    } else {
+                        Ok(loaded)
                     }
+                })
+            };
+            match result {
+                Ok(loaded) => {
+                    *remaining -= loaded.bytes.len();
+                    match kind {
+                        ResourceKind::Stylesheet => {
+                            resources.styles.insert(
+                                id,
+                                ExternalSource {
+                                    reference: reference.to_owned(),
+                                    source: loaded.source,
+                                },
+                            );
+                        }
+                        ResourceKind::Script => {
+                            resources.scripts.insert(
+                                id,
+                                ExternalSource {
+                                    reference: reference.to_owned(),
+                                    source: loaded.source,
+                                },
+                            );
+                        }
+                        ResourceKind::Image => {
+                            resources.images.insert(
+                                id,
+                                ExternalImage {
+                                    reference: reference.to_owned(),
+                                    bytes: loaded.bytes,
+                                },
+                            );
+                        }
+                    };
+                    resources.report.loaded += 1;
+                }
+                Err(error) => {
+                    // Bound both retained URLs and transport error chains.
+                    let message = format!("{reference}: {error}");
+                    let mut end = message.len().min(1024);
+                    while !message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    resources.report.diagnostics.push(message[..end].to_owned());
                 }
             }
         }
@@ -229,9 +246,9 @@ impl PageResources {
     }
 }
 
-/// Fetch one resource class at a time with a small bounded pool. Keeping class
-/// order means stylesheets still complete before images and scripts, while
-/// independent resources of the same class no longer add their latencies.
+/// Fetch page resources with one bounded pool. Fetching resource classes
+/// sequentially creates avoidable delays; CSS and scripts are still applied in
+/// document order after their sources have been collected.
 fn load_batch(
     loader: &DocumentLoader,
     location: &Location,

@@ -1,6 +1,8 @@
 //! Private, framed pipe protocol and independently supervised document processes.
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
-use crate::document::{ClickRequest, LoadedPage, PageUpdate, prepare_page_with_loader};
+use crate::document::{
+    ClickRequest, LoadedPage, PageUpdate, prepare_page_preview, prepare_page_with_parsed,
+};
 use eframe::egui;
 use olive_html::net::{CookieJar, DocumentLoader, FormRequest, Location};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -72,6 +74,7 @@ pub enum Command {
 pub enum Event {
     Loaded(Box<LoadedPage>),
     Updated(Box<PageUpdate>),
+    ResourcesUpdated(Box<PageUpdate>),
     Error(String),
 }
 #[derive(Serialize)]
@@ -212,6 +215,9 @@ impl Worker {
                             let pages = match &event {
                                 Event::Loaded(page) => Some((&page.page, &page.reading)),
                                 Event::Updated(update) => Some((&update.page, &update.reading)),
+                                Event::ResourcesUpdated(update) => {
+                                    Some((&update.page, &update.reading))
+                                }
                                 Event::Error(_) => None,
                             };
                             if let Some((page, reading)) = pages {
@@ -242,6 +248,10 @@ impl Worker {
     }
     pub fn busy(&self) -> bool {
         self.deadline.is_some()
+    }
+
+    pub fn await_resource_update(&mut self) {
+        self.deadline = Some(Instant::now() + LOAD_TIMEOUT);
     }
 
     pub fn send(&mut self, command: Command) -> Result<(), String> {
@@ -409,6 +419,7 @@ pub fn run() -> io::Result<()> {
                 if prepared.is_some() {
                     return Err(io::Error::other("Unexpected second load"));
                 }
+                let mut preview = None;
                 let result = (|| {
                     let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
                         .with_cookie_initiator(initiator);
@@ -418,25 +429,58 @@ pub fn run() -> io::Result<()> {
                         loader.load(location.clone())?
                     };
                     let scripting = scripting.enabled_for(&location, &source.location);
-                    prepare_page_with_loader(source, &loader, scripting)
+                    let (preview_page, parsed) = prepare_page_preview(&source, scripting)?;
+                    write_frame(
+                        &mut output,
+                        &InitialEvent::Loaded(&preview_page),
+                        MAX_EVENT_BYTES,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    preview = Some(preview_page);
+                    prepare_page_with_parsed(source, &loader, scripting, parsed)
                 })();
                 match result {
                     Ok(mut page) => {
                         if let Some(session) = &mut page.session {
                             session.take_alerts();
                         }
-                        write_frame(
-                            &mut output,
-                            &InitialEvent::Loaded(&page.loaded),
-                            MAX_EVENT_BYTES,
-                        )?;
-                        // Only the DOM, realm, image assets and source styles need to survive.
-                        page.loaded.page = Default::default();
-                        page.loaded.reading = Default::default();
-                        prepared = Some(page);
-                        continue;
+                        let update = PageUpdate {
+                            default_allowed: false,
+                            page: std::mem::take(&mut page.loaded.page),
+                            reading: std::mem::take(&mut page.loaded.reading),
+                            base: page.loaded.base.clone(),
+                            scripts: page.loaded.scripts.clone(),
+                            resources: page.loaded.resources.clone(),
+                            session_available: page.session.is_some(),
+                            alert: None,
+                            link: None,
+                            cookie_updates: std::mem::take(&mut page.loaded.cookie_updates),
+                        };
+                        if page.session.is_some() {
+                            prepared = Some(page);
+                        }
+                        Event::ResourcesUpdated(Box::new(update))
                     }
-                    Err(error) => Event::Error(error),
+                    Err(error) => {
+                        if let Some(mut loaded) = preview {
+                            loaded.resources.pending = false;
+                            loaded.resources.diagnostics.push(error);
+                            Event::ResourcesUpdated(Box::new(PageUpdate {
+                                default_allowed: false,
+                                page: loaded.page,
+                                reading: loaded.reading,
+                                base: loaded.base,
+                                scripts: loaded.scripts,
+                                resources: loaded.resources,
+                                session_available: false,
+                                alert: None,
+                                link: None,
+                                cookie_updates: loaded.cookie_updates,
+                            }))
+                        } else {
+                            Event::Error(error)
+                        }
+                    }
                 }
             }
             Command::LoadWithCookies { .. } | Command::ClickWithCookies { .. } => unreachable!(),

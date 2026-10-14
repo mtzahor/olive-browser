@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.3 — Faster page display
+
+- Show parsed page content before external stylesheets and images finish loading,
+  then apply those resources in a follow-up update.
+- Keep pages responsive during resource loading and stop the resource worker cleanly.
+- Load independent resources in one bounded worker pool and cap individual
+  resource requests at two seconds.
+
 ## 1.3.2 — Page loading and rendering stability
 
 - Load independent page resources concurrently while preserving stylesheet priority.
