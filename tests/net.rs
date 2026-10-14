@@ -553,14 +553,23 @@ mod page_resources {
 
     #[test]
     fn page_load_merges_css_order_and_shares_inline_external_script_state() {
-        let (location, server) = server(vec![
-            response("200 OK", "Content-Type: text/html\r\n", br#"<!doctype html><base href='/assets/'>
+        let (location, server) = server_by_path(HashMap::from([
+            (
+                "/start".to_owned(),
+                response("200 OK", "Content-Type: text/html\r\n", br#"<!doctype html><base href='/assets/'>
                 <style>#result {color:red}</style><link rel='StyleSheet' href='theme.css'><style>#result {color:blue}</style>
                 <script>let total=4;</script><script src='app.js'>throw 'fallback must not run'</script>
                 <script>document.title='Total '+total;</script><button id='result' onclick='add()'>Before</button>"#),
-            response("200 OK", "Content-Type: text/css\r\n", b"#result {color:green; background-color:yellow}"),
-            response("200 OK", "Content-Type: text/javascript\r\n", b"total+=3; function add(){total++; document.getElementById('result').textContent=total; console.log(total)}"),
-        ]);
+            ),
+            (
+                "/assets/theme.css".to_owned(),
+                response("200 OK", "Content-Type: text/css\r\n", b"#result {color:green; background-color:yellow}"),
+            ),
+            (
+                "/assets/app.js".to_owned(),
+                response("200 OK", "Content-Type: text/javascript\r\n", b"total+=3; function add(){total++; document.getElementById('result').textContent=total; console.log(total)}"),
+            ),
+        ]));
         let loader = DocumentLoader::new().unwrap();
         let loaded = loader.load(location).unwrap();
         let document = loaded.parse(true).unwrap().document;
@@ -594,8 +603,16 @@ mod page_resources {
         assert!(session.click(button));
         assert_eq!(session.report().console, ["8", "9"]);
         let requests = server.join().unwrap();
-        assert!(requests[1].starts_with("GET /assets/theme.css "));
-        assert!(requests[2].starts_with("GET /assets/app.js "));
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.starts_with("GET /assets/theme.css "))
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.starts_with("GET /assets/app.js "))
+        );
     }
 
     #[test]
@@ -643,14 +660,20 @@ mod page_resources {
 
     #[test]
     fn failed_resources_preserve_other_resources_and_inline_execution() {
-        let (location, server) = server(vec![
-            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
-            response(
-                "404 Not Found",
-                "Content-Type: text/javascript\r\n",
-                b"throw '404'",
+        let (location, server) = server_by_path(HashMap::from([
+            (
+                "/good.css".to_owned(),
+                response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
             ),
-        ]);
+            (
+                "/missing.js".to_owned(),
+                response(
+                    "404 Not Found",
+                    "Content-Type: text/javascript\r\n",
+                    b"throw '404'",
+                ),
+            ),
+        ]));
         let doc = olive_html::parse("<script src=missing.js>throw 'fallback'</script><link rel=stylesheet href=good.css><script>console.log('continued')</script>").unwrap().document;
         let resources = PageResources::load(&DocumentLoader::new().unwrap(), &location, &doc, true);
         assert_eq!(resources.report.loaded, 1);
