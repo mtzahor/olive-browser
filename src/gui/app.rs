@@ -59,6 +59,7 @@ pub struct Tab {
     focus_panel: bool,
     focus_settings: FocusSettings,
     zoom: u16,
+    css_viewport: (u32, u32),
 }
 
 impl Tab {
@@ -214,6 +215,7 @@ impl Tab {
             focus_panel: true,
             focus_settings: FocusSettings::default(),
             zoom: 100,
+            css_viewport: (0, 0),
         }
     }
 
@@ -412,7 +414,7 @@ impl Tab {
             let pending = self.pending.take().unwrap();
             match event {
                 Ok(Event::Loaded(mut loaded)) => {
-                    let keep_worker = loaded.scripting_enabled || loaded.resources.pending;
+                    let keep_worker = true;
                     let resources_pending = loaded.resources.pending;
                     shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history
@@ -443,6 +445,7 @@ impl Tab {
                     self.find.scroll = self.find.open;
                     self.image_textures.clear();
                     self.generation = self.generation.wrapping_add(1);
+                    self.css_viewport = (0, 0);
                 }
                 other => {
                     let error = match other {
@@ -460,7 +463,7 @@ impl Tab {
         match event {
             Some(Ok(Event::ResourcesUpdated(mut update))) => {
                 shared.cookies.apply_updates(&update.cookie_updates);
-                let keep_worker = update.session_available;
+                let keep_worker = update.presentation_available;
                 if let Some(loaded) = &mut self.loaded {
                     update.page.forms.preserve_edits(&loaded.page.forms);
                     loaded.page = update.page;
@@ -1005,11 +1008,26 @@ impl Tab {
                             });
                         }
                         if loaded.page.css_ignored > 0 {
+                            let details = loaded
+                                .page
+                                .css_unsupported
+                                .iter()
+                                .take(16)
+                                .map(|(name, count)| format!("{name}: {count}"))
+                                .collect::<Vec<_>>()
+                                .join("\n");
                             ui.label(RichText::new("Some CSS is unsupported").size(11.0).weak())
-                                .on_hover_text(format!(
-                                    "{} CSS rules or declarations were ignored.",
-                                    loaded.page.css_ignored
-                                ));
+                                .on_hover_text(if details.is_empty() {
+                                    format!(
+                                        "{} CSS rules or declarations were ignored.",
+                                        loaded.page.css_ignored
+                                    )
+                                } else {
+                                    format!(
+                                        "{} CSS rules or declarations were ignored.\n\nUnsupported properties:\n{}",
+                                        loaded.page.css_ignored, details
+                                    )
+                                });
                         }
                         if loaded.corrections > 0 {
                             ui.label(
@@ -1115,6 +1133,15 @@ impl Tab {
                                             "This document has no visible content."
                                         });
                                     }
+                                    let page_scale = (self.zoom as f32 / 100.0).max(0.25);
+                                    let css_viewport = (
+                                        (ui.clip_rect().width() / page_scale)
+                                            .round()
+                                            .clamp(1.0, 10_000.0) as u32,
+                                        (ui.clip_rect().height() / page_scale)
+                                            .round()
+                                            .clamp(1.0, 10_000.0) as u32,
+                                    );
                                     let rendered = ui
                                         .push_id((self.id, self.generation), |ui| {
                                             ui.add_enabled_ui(
@@ -1159,6 +1186,20 @@ impl Tab {
                                             }
                                         }
 
+                                    }
+                                    if !focus && css_viewport != self.css_viewport {
+                                        if let Some(worker) = self.worker.as_mut() {
+                                            if !worker.busy()
+                                                && worker
+                                                    .send(Command::Resize {
+                                                        width: css_viewport.0 as f32,
+                                                        height: css_viewport.1 as f32,
+                                                    })
+                                                    .is_ok()
+                                            {
+                                                self.css_viewport = css_viewport;
+                                            }
+                                        }
                                     }
                                     if focus && page.truncated {
                                         ui.label("This reading view was shortened to keep the page responsive.");
@@ -1828,6 +1869,17 @@ impl eframe::App for OliveApp {
                                     ui.strong("Unsupported CSS");
                                     ui.label(loaded.page.css_ignored.to_string());
                                     ui.end_row();
+                                    if !loaded.page.css_unsupported.is_empty() {
+                                        ui.strong("Unsupported properties");
+                                        ui.vertical(|ui| {
+                                            for (name, count) in
+                                                loaded.page.css_unsupported.iter().take(32)
+                                            {
+                                                ui.monospace(format!("{name}: {count}"));
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
                                 });
                         }
                         DevToolsTab::Console => {

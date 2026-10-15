@@ -69,6 +69,10 @@ pub enum Command {
         cookies: CookieJar,
         initiator: Option<Location>,
     },
+    Resize {
+        width: f32,
+        height: f32,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum Event {
@@ -263,7 +267,9 @@ impl Worker {
             | Command::LoadWithCookies { .. }
             | Command::Submit(_)
             | Command::SubmitWithCookies { .. } => LOAD_TIMEOUT,
-            Command::Click(_) | Command::ClickWithCookies { .. } => CLICK_TIMEOUT,
+            Command::Click(_) | Command::ClickWithCookies { .. } | Command::Resize { .. } => {
+                CLICK_TIMEOUT
+            }
         };
         self.sender
             .as_ref()
@@ -444,6 +450,7 @@ pub fn run() -> io::Result<()> {
                         if let Some(session) = &mut page.session {
                             session.take_alerts();
                         }
+                        let presentation_available = page.presentation_available();
                         let update = PageUpdate {
                             default_allowed: false,
                             page: std::mem::take(&mut page.loaded.page),
@@ -452,13 +459,12 @@ pub fn run() -> io::Result<()> {
                             scripts: page.loaded.scripts.clone(),
                             resources: page.loaded.resources.clone(),
                             session_available: page.session.is_some(),
+                            presentation_available,
                             alert: None,
                             link: None,
                             cookie_updates: std::mem::take(&mut page.loaded.cookie_updates),
                         };
-                        if page.session.is_some() {
-                            prepared = Some(page);
-                        }
+                        prepared = Some(page);
                         Event::ResourcesUpdated(Box::new(update))
                     }
                     Err(error) => {
@@ -473,6 +479,7 @@ pub fn run() -> io::Result<()> {
                                 scripts: loaded.scripts,
                                 resources: loaded.resources,
                                 session_available: false,
+                                presentation_available: false,
                                 alert: None,
                                 link: None,
                                 cookie_updates: loaded.cookie_updates,
@@ -491,6 +498,17 @@ pub fn run() -> io::Result<()> {
                 Some(update) => Event::Updated(Box::new(update)),
                 None => Event::Error("No live scripting session. Reload this tab.".into()),
             },
+            Command::Resize { width, height } => {
+                match prepared
+                    .as_mut()
+                    .and_then(|page| page.resize((width, height)))
+                {
+                    Some(update) => Event::Updated(Box::new(update)),
+                    None => {
+                        Event::Error("The page is no longer available. Reload this tab.".into())
+                    }
+                }
+            }
         };
         write_frame(&mut output, &event, MAX_EVENT_BYTES)?;
     }

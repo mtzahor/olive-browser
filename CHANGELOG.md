@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.5 — Bounded CSS layout compatibility
+
+- Add inherited custom properties with bounded `var()` expansion, linear `calc()`
+  lengths, viewport units and width/height/orientation media queries that react to
+  the page viewport and browser zoom.
+- Improve common page layout with row/column flex sizing, wrapping and gaps, equal
+  fractional grid columns, basic relative/absolute positioning, opacity and box
+  shadows.
+- Report unsupported CSS property names in the status bar and Developer tools, and
+  document the supported subset, visual approximations and processing limits in
+  `docs/css-compatibility.md`.
+
 ## 1.3.4 — Resource loading stability
 
 - Respect the shared page resource deadline before scheduling additional requests.

@@ -5,6 +5,17 @@ use cssparser::{Parser, Token};
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub struct BoxShadow {
+    pub offset_x: Length,
+    pub offset_y: Length,
+    pub blur: Length,
+    pub spread: Length,
+    pub color: Color,
+    pub current_color: bool,
+}
+
 /// A length retained until its containing block is known.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
@@ -13,19 +24,77 @@ pub enum Length {
     Em(f32),
     Rem(f32),
     Percent(f32),
+    Vw(f32),
+    Vh(f32),
+    Calc {
+        px: f32,
+        em: f32,
+        rem: f32,
+        percent: f32,
+        vw: f32,
+        vh: f32,
+    },
     Auto,
 }
 impl Length {
     /// Resolve against the containing width, element font, and root font.
     pub fn resolve(self, basis: f32, font: f32, root: f32) -> f32 {
+        self.resolve_with_viewport(basis, font, root, 1024.0, 768.0)
+    }
+    pub fn resolve_with_viewport(
+        self,
+        basis: f32,
+        font: f32,
+        root: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> f32 {
         match self {
             Self::Px(v) => v,
             Self::Em(v) => v * font,
             Self::Rem(v) => v * root,
             Self::Percent(v) => v * basis,
+            Self::Vw(v) => v * viewport_width / 100.0,
+            Self::Vh(v) => v * viewport_height / 100.0,
+            Self::Calc {
+                px,
+                em,
+                rem,
+                percent,
+                vw,
+                vh,
+            } => {
+                px + em * font
+                    + rem * root
+                    + percent * basis
+                    + vw * viewport_width / 100.0
+                    + vh * viewport_height / 100.0
+            }
             Self::Auto => 0.0,
         }
         .clamp(-10_000.0, 10_000.0)
+    }
+    fn with_viewport(self, viewport_width: f32, viewport_height: f32) -> Self {
+        match self {
+            Self::Vw(value) => Self::Px(value * viewport_width / 100.0),
+            Self::Vh(value) => Self::Px(value * viewport_height / 100.0),
+            Self::Calc {
+                px,
+                em,
+                rem,
+                percent,
+                vw,
+                vh,
+            } => Self::Calc {
+                px: px + vw * viewport_width / 100.0 + vh * viewport_height / 100.0,
+                em,
+                rem,
+                percent,
+                vw: 0.0,
+                vh: 0.0,
+            },
+            value => value,
+        }
     }
 }
 
@@ -35,6 +104,7 @@ pub enum Display {
     Inline,
     Block,
     Flex,
+    Grid,
     None,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +113,32 @@ pub enum FlexDirection {
     #[default]
     Row,
     Column,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum FlexWrap {
+    #[default]
+    NoWrap,
+    Wrap,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum JustifyContent {
+    #[default]
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum Position {
+    #[default]
+    Static,
+    Relative,
+    Absolute,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
@@ -95,7 +191,19 @@ pub struct ComputedStyle {
     pub direction: Direction,
     pub display: Display,
     pub flex_direction: FlexDirection,
-    pub flex_gap: Length,
+    pub flex_wrap: FlexWrap,
+    pub justify_content: JustifyContent,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: Length,
+    pub row_gap: Length,
+    pub column_gap: Length,
+    pub position: Position,
+    /// Top, right, bottom, left offsets. `auto` means no offset.
+    pub inset: [Length; 4],
+    /// Equal fractional grid tracks; clamped to twelve columns.
+    pub grid_columns: u8,
+    pub opacity: f32,
     pub list_marker: bool,
     /// Top, right, bottom, left.
     pub margin: [Length; 4],
@@ -110,6 +218,7 @@ pub struct ComputedStyle {
     pub border_color: Color,
     pub border_solid: bool,
     pub border_radius: Length,
+    pub box_shadow: Option<BoxShadow>,
 }
 impl Default for ComputedStyle {
     fn default() -> Self {
@@ -128,7 +237,17 @@ impl Default for ComputedStyle {
             direction: Direction::Ltr,
             display: Display::Inline,
             flex_direction: FlexDirection::Row,
-            flex_gap: Length::Px(0.0),
+            flex_wrap: FlexWrap::NoWrap,
+            justify_content: JustifyContent::Start,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: Length::Auto,
+            row_gap: Length::Px(0.0),
+            column_gap: Length::Px(0.0),
+            position: Position::Static,
+            inset: [Length::Auto; 4],
+            grid_columns: 1,
+            opacity: 1.0,
             list_marker: true,
             margin: [Length::Px(0.0); 4],
             padding: [Length::Px(0.0); 4],
@@ -141,6 +260,7 @@ impl Default for ComputedStyle {
             border_color: Color(38, 44, 32, 255),
             border_solid: false,
             border_radius: Length::Px(0.0),
+            box_shadow: None,
         }
     }
 }
@@ -148,6 +268,7 @@ impl ComputedStyle {
     pub(super) fn inherited(parent: Self) -> Self {
         Self {
             color: parent.color,
+            opacity: parent.opacity,
             font_size: parent.font_size,
             font_weight: parent.font_weight,
             italic: parent.italic,
@@ -206,10 +327,23 @@ pub(super) enum Property {
     BorderRadius,
     BoxShadow,
     FlexDirection,
-    FlexGap,
+    FlexWrap,
+    JustifyContent,
+    FlexGrow,
+    FlexShrink,
+    FlexBasis,
+    RowGap,
+    ColumnGap,
+    Position,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    GridColumns,
+    Opacity,
     ListMarker,
 }
-pub(super) const PROPERTIES: [Property; 33] = [
+pub(super) const PROPERTIES: [Property; 46] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -241,7 +375,20 @@ pub(super) const PROPERTIES: [Property; 33] = [
     Property::BorderRadius,
     Property::BoxShadow,
     Property::FlexDirection,
-    Property::FlexGap,
+    Property::FlexWrap,
+    Property::JustifyContent,
+    Property::FlexGrow,
+    Property::FlexShrink,
+    Property::FlexBasis,
+    Property::RowGap,
+    Property::ColumnGap,
+    Property::Position,
+    Property::Top,
+    Property::Right,
+    Property::Bottom,
+    Property::Left,
+    Property::GridColumns,
+    Property::Opacity,
     Property::ListMarker,
 ];
 impl Property {
@@ -274,6 +421,11 @@ pub(super) enum Value {
     Direction(Direction),
     Display(Display),
     FlexDirection(FlexDirection),
+    FlexWrap(FlexWrap),
+    JustifyContent(JustifyContent),
+    Position(Position),
+    GridColumns(u8),
+    BoxShadow(Option<BoxShadow>),
     ListMarker(bool),
     Inherit,
     Initial,
@@ -281,8 +433,9 @@ pub(super) enum Value {
 }
 #[derive(Clone, Debug)]
 pub(super) struct Declaration {
-    pub property: Property,
-    pub value: Value,
+    pub name: String,
+    pub raw: String,
+    pub values: Vec<(Property, Value)>,
     pub important: bool,
 }
 type Error = cssparser::ParseError<()>;
@@ -305,8 +458,13 @@ fn length(
                 "px" => Length::Px(*value),
                 "em" => Length::Em(*value),
                 "rem" => Length::Rem(*value),
+                "vw" => Length::Vw(*value),
+                "vh" => Length::Vh(*value),
                 _ => return Err(cssparser::ParseError::custom(())),
             }
+        }
+        Token::Function(function) if function.eq_ignore_ascii_case("calc") => {
+            return input.parse_nested_block(|input| calc_length(input, percent));
         }
         Token::Percentage { unit_value, .. }
             if percent && unit_value.is_finite() && (negative || *unit_value >= 0.0) =>
@@ -317,6 +475,97 @@ fn length(
         _ => return Err(cssparser::ParseError::custom(())),
     };
     Ok(value)
+}
+
+fn calc_length(input: &mut Parser<'_>, percent: bool) -> Result<Length, Error> {
+    let mut px = 0.0;
+    let mut em = 0.0;
+    let mut rem = 0.0;
+    let mut percent_value = 0.0;
+    let mut vw = 0.0;
+    let mut vh = 0.0;
+    let mut sign = 1.0;
+    let mut terms = 0;
+    while let Ok(token) = input.next() {
+        match token {
+            Token::Delim('+') => sign = 1.0,
+            Token::Delim('-') => sign = -1.0,
+            Token::Number { value: 0.0, .. } => {
+                px += 0.0;
+                terms += 1;
+                sign = 1.0;
+            }
+            Token::Dimension { value, unit, .. } if value.is_finite() => {
+                match unit.to_ascii_lowercase().as_str() {
+                    "px" => px += sign * value,
+                    "em" => em += sign * value,
+                    "rem" => rem += sign * value,
+                    "vw" => vw += sign * value,
+                    "vh" => vh += sign * value,
+                    _ => return Err(cssparser::ParseError::custom(())),
+                }
+                terms += 1;
+                sign = 1.0;
+            }
+            Token::Percentage { unit_value, .. } if percent && unit_value.is_finite() => {
+                percent_value += sign * unit_value;
+                terms += 1;
+                sign = 1.0;
+            }
+            _ => return Err(cssparser::ParseError::custom(())),
+        }
+    }
+    if terms == 0 {
+        return Err(cssparser::ParseError::custom(()));
+    }
+    Ok(Length::Calc {
+        px,
+        em,
+        rem,
+        percent: percent_value,
+        vw,
+        vh,
+    })
+}
+
+fn grid_column_count(input: &mut Parser<'_>) -> Result<u8, Error> {
+    if let Ok(count) = input.try_parse(|input| {
+        input.expect_function_matching("repeat")?;
+        input.parse_nested_block(|input| -> Result<u8, Error> {
+            let count = input.expect_number()?;
+            if !count.is_finite() || count < 1.0 || count > 12.0 || count.fract() != 0.0 {
+                return Err(cssparser::ParseError::custom(()));
+            }
+            input.expect_comma()?;
+            match input.next()? {
+                Token::Dimension { value, unit, .. }
+                    if *value == 1.0 && unit.eq_ignore_ascii_case("fr") => {}
+                _ => return Err(cssparser::ParseError::custom(())),
+            }
+            input.expect_exhausted()?;
+            Ok(count as u8)
+        })
+    }) {
+        return Ok(count);
+    }
+
+    let mut count = 0u8;
+    while let Ok(token) = input.next() {
+        match token {
+            Token::Dimension { value, unit, .. }
+                if *value == 1.0 && unit.eq_ignore_ascii_case("fr") => {}
+            _ => return Err(cssparser::ParseError::custom(())),
+        }
+        count = count.saturating_add(1);
+        if count > 12 {
+            return Err(cssparser::ParseError::custom(()));
+        }
+    }
+    if count == 0 {
+        Err(cssparser::ParseError::custom(()))
+    } else {
+        Ok(count)
+    }
 }
 fn component(input: &mut Parser<'_>, alpha: bool) -> Result<f32, Error> {
     let n = match input.next()? {
@@ -481,8 +730,23 @@ pub(super) fn parse_values(
         "text-align" => &[P::Align],
         "direction" => &[P::Direction],
         "display" => &[P::Display],
+        "position" => &[P::Position],
+        "top" => &[P::Top],
+        "right" => &[P::Right],
+        "bottom" => &[P::Bottom],
+        "left" => &[P::Left],
+        "grid-template-columns" => &[P::GridColumns],
+        "opacity" => &[P::Opacity],
         "flex-direction" => &[P::FlexDirection],
-        "gap" | "column-gap" | "row-gap" => &[P::FlexGap],
+        "flex-wrap" => &[P::FlexWrap],
+        "justify-content" => &[P::JustifyContent],
+        "flex-grow" => &[P::FlexGrow],
+        "flex-shrink" => &[P::FlexShrink],
+        "flex-basis" => &[P::FlexBasis],
+        "flex" => &[P::FlexGrow, P::FlexShrink, P::FlexBasis],
+        "gap" => &[P::RowGap, P::ColumnGap],
+        "row-gap" => &[P::RowGap],
+        "column-gap" => &[P::ColumnGap],
         "list-style" | "list-style-type" => &[P::ListMarker],
         "margin" => &[P::MarginTop, P::MarginRight, P::MarginBottom, P::MarginLeft],
         "margin-top" => &[P::MarginTop],
@@ -545,6 +809,47 @@ pub(super) fn parse_values(
             .map(|(p, v)| (*p, Value::Length(v)))
             .collect());
     }
+    if name == "gap" {
+        let row = length(input, false, false, true)?;
+        let column = input
+            .try_parse(|input| length(input, false, false, true))
+            .unwrap_or(row);
+        return Ok(vec![
+            (P::RowGap, Value::Length(row)),
+            (P::ColumnGap, Value::Length(column)),
+        ]);
+    }
+    if name == "flex" {
+        let flex_keyword = input.try_parse(keyword).ok();
+        let (grow, shrink, basis) = match flex_keyword.as_deref() {
+            Some("none") => (0.0, 0.0, Length::Auto),
+            Some("auto") => (1.0, 1.0, Length::Auto),
+            Some(_) => return Err(cssparser::ParseError::custom(())),
+            _ => {
+                let first = input.try_parse(|input| input.expect_number());
+                if let Ok(grow) = first {
+                    if !grow.is_finite() || grow < 0.0 {
+                        return Err(cssparser::ParseError::custom(()));
+                    }
+                    let second = input.try_parse(|input| input.expect_number()).ok();
+                    if second.is_some_and(|value| !value.is_finite() || value < 0.0) {
+                        return Err(cssparser::ParseError::custom(()));
+                    }
+                    let basis = input
+                        .try_parse(|input| length(input, true, false, true))
+                        .unwrap_or(Length::Percent(0.0));
+                    (grow, second.unwrap_or(1.0), basis)
+                } else {
+                    (1.0, 1.0, length(input, true, false, true)?)
+                }
+            }
+        };
+        return Ok(vec![
+            (P::FlexGrow, Value::Number(grow.min(1_000_000.0))),
+            (P::FlexShrink, Value::Number(shrink.min(1_000_000.0))),
+            (P::FlexBasis, Value::Length(basis)),
+        ]);
+    }
     if name == "border" {
         let mut width = None;
         let mut solid = None;
@@ -581,6 +886,50 @@ pub(super) fn parse_values(
             (P::BorderStyle, Value::Bool(solid.unwrap_or(false))),
             (P::BorderColor, ink.unwrap_or(Value::CurrentColor)),
         ]);
+    }
+    if name == "box-shadow" {
+        if input
+            .try_parse(|input| input.expect_ident_matching("none"))
+            .is_ok()
+        {
+            return Ok(vec![(P::BoxShadow, Value::BoxShadow(None))]);
+        }
+        let mut lengths = Vec::new();
+        let mut shadow_color = None;
+        let mut current_color = true;
+        let mut color_seen = false;
+        while !input.is_exhausted() {
+            if let Ok(value) = input.try_parse(|input| length(input, false, true, false)) {
+                if lengths.len() == 4 {
+                    return Err(cssparser::ParseError::custom(()));
+                }
+                lengths.push(value);
+            } else if !color_seen {
+                match input.try_parse(color) {
+                    Ok(Value::Color(value)) => {
+                        shadow_color = Some(value);
+                        current_color = false;
+                        color_seen = true;
+                    }
+                    Ok(Value::CurrentColor) => color_seen = true,
+                    _ => return Err(cssparser::ParseError::custom(())),
+                }
+            } else {
+                return Err(cssparser::ParseError::custom(()));
+            }
+        }
+        if !(2..=4).contains(&lengths.len()) {
+            return Err(cssparser::ParseError::custom(()));
+        }
+        let shadow = BoxShadow {
+            offset_x: lengths[0],
+            offset_y: lengths[1],
+            blur: lengths.get(2).copied().unwrap_or(Length::Px(0.0)),
+            spread: lengths.get(3).copied().unwrap_or(Length::Px(0.0)),
+            color: shadow_color.unwrap_or(Color(0, 0, 0, 96)),
+            current_color,
+        };
+        return Ok(vec![(P::BoxShadow, Value::BoxShadow(Some(shadow)))]);
     }
     let p = props[0];
     let value = match p {
@@ -704,15 +1053,53 @@ pub(super) fn parse_values(
             "inline" => Display::Inline,
             "block" | "list-item" | "inline-block" => Display::Block,
             "flex" | "inline-flex" => Display::Flex,
+            "grid" | "inline-grid" => Display::Grid,
             "none" => Display::None,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
-        P::FlexDirection => Value::FlexDirection(match keyword(input)?.as_str() {
-            "row" | "row-reverse" => FlexDirection::Row,
-            "column" | "column-reverse" => FlexDirection::Column,
+        P::Position => Value::Position(match keyword(input)?.as_str() {
+            "static" => Position::Static,
+            "relative" => Position::Relative,
+            "absolute" => Position::Absolute,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
-        P::FlexGap => Value::Length(length(input, false, false, true)?),
+        P::Top | P::Right | P::Bottom | P::Left => Value::Length(length(input, true, true, true)?),
+        P::GridColumns => Value::GridColumns(grid_column_count(input)?),
+        P::Opacity => {
+            let opacity = input.expect_number()?;
+            if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+                return Err(cssparser::ParseError::custom(()));
+            }
+            Value::Number(opacity)
+        }
+        P::FlexDirection => Value::FlexDirection(match keyword(input)?.as_str() {
+            "row" => FlexDirection::Row,
+            "column" => FlexDirection::Column,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::FlexWrap => Value::FlexWrap(match keyword(input)?.as_str() {
+            "nowrap" => FlexWrap::NoWrap,
+            "wrap" => FlexWrap::Wrap,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::JustifyContent => Value::JustifyContent(match keyword(input)?.as_str() {
+            "flex-start" | "start" => JustifyContent::Start,
+            "flex-end" | "end" => JustifyContent::End,
+            "center" => JustifyContent::Center,
+            "space-between" => JustifyContent::SpaceBetween,
+            "space-around" => JustifyContent::SpaceAround,
+            "space-evenly" => JustifyContent::SpaceEvenly,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::FlexGrow | P::FlexShrink => {
+            let number = input.expect_number()?;
+            if !number.is_finite() || number < 0.0 {
+                return Err(cssparser::ParseError::custom(()));
+            }
+            Value::Number(number.min(1_000_000.0))
+        }
+        P::FlexBasis => Value::Length(length(input, true, false, true)?),
+        P::RowGap | P::ColumnGap => Value::Length(length(input, false, false, true)?),
         P::ListMarker => Value::ListMarker(match keyword(input)?.as_str() {
             "none" => false,
             "disc" | "circle" | "square" | "decimal" => true,
@@ -721,10 +1108,7 @@ pub(super) fn parse_values(
         P::BorderWidth => Value::Length(border_width(input)?),
         P::BorderStyle => Value::Bool(border_style(input)?),
         P::BorderRadius => Value::Length(length(input, false, false, false)?),
-        P::BoxShadow => {
-            while input.next().is_ok() {}
-            Value::Bool(true)
-        }
+        P::BoxShadow => unreachable!("box-shadow is parsed before scalar property values"),
         P::BoxSizing => Value::Bool(match keyword(input)?.as_str() {
             "content-box" => false,
             "border-box" => true,
@@ -751,6 +1135,66 @@ pub(super) fn parse_values(
     };
     Ok(vec![(p, value)])
 }
+
+pub(super) fn supports_property(name: &str) -> bool {
+    matches!(
+        name,
+        "color"
+            | "background"
+            | "background-color"
+            | "font-size"
+            | "font-weight"
+            | "font-style"
+            | "font-family"
+            | "text-decoration"
+            | "text-decoration-line"
+            | "line-height"
+            | "white-space"
+            | "text-align"
+            | "direction"
+            | "display"
+            | "position"
+            | "top"
+            | "right"
+            | "bottom"
+            | "left"
+            | "grid-template-columns"
+            | "opacity"
+            | "flex-direction"
+            | "flex-wrap"
+            | "justify-content"
+            | "flex-grow"
+            | "flex-shrink"
+            | "flex-basis"
+            | "flex"
+            | "gap"
+            | "column-gap"
+            | "row-gap"
+            | "list-style"
+            | "list-style-type"
+            | "margin"
+            | "margin-top"
+            | "margin-right"
+            | "margin-bottom"
+            | "margin-left"
+            | "padding"
+            | "padding-top"
+            | "padding-right"
+            | "padding-bottom"
+            | "padding-left"
+            | "width"
+            | "max-width"
+            | "height"
+            | "min-height"
+            | "box-sizing"
+            | "border"
+            | "border-width"
+            | "border-style"
+            | "border-color"
+            | "border-radius"
+            | "box-shadow"
+    )
+}
 fn border_width(input: &mut Parser<'_>) -> Result<Length, Error> {
     input
         .try_parse(|p| length(p, false, false, false))
@@ -775,6 +1219,7 @@ pub(super) fn apply(
     style: &mut ComputedStyle,
     parent: ComputedStyle,
     root: f32,
+    viewport: (f32, f32),
     prop: Property,
     value: Value,
 ) {
@@ -818,17 +1263,47 @@ pub(super) fn apply(
             P::BorderColor => style.border_color = source.border_color,
             P::BorderStyle => style.border_solid = source.border_solid,
             P::BorderRadius => style.border_radius = source.border_radius,
-            P::BoxShadow => {}
+            P::BoxShadow => style.box_shadow = source.box_shadow,
             P::FlexDirection => style.flex_direction = source.flex_direction,
-            P::FlexGap => style.flex_gap = source.flex_gap,
+            P::FlexWrap => style.flex_wrap = source.flex_wrap,
+            P::JustifyContent => style.justify_content = source.justify_content,
+            P::FlexGrow => style.flex_grow = source.flex_grow,
+            P::FlexShrink => style.flex_shrink = source.flex_shrink,
+            P::FlexBasis => style.flex_basis = source.flex_basis,
+            P::RowGap => style.row_gap = source.row_gap,
+            P::ColumnGap => style.column_gap = source.column_gap,
+            P::Position => style.position = source.position,
+            P::Top | P::Right | P::Bottom | P::Left => {
+                let i = prop as usize - P::Top as usize;
+                style.inset[i] = source.inset[i];
+            }
+            P::GridColumns => style.grid_columns = source.grid_columns,
+            P::Opacity => style.opacity = source.opacity,
             P::ListMarker => style.list_marker = source.list_marker,
         }
         return;
     }
+    let value = match value {
+        Value::Length(value) => Value::Length(value.with_viewport(viewport.0, viewport.1)),
+        Value::BoxShadow(shadow) => Value::BoxShadow(shadow.map(|mut shadow| {
+            shadow.offset_x = shadow.offset_x.with_viewport(viewport.0, viewport.1);
+            shadow.offset_y = shadow.offset_y.with_viewport(viewport.0, viewport.1);
+            shadow.blur = shadow.blur.with_viewport(viewport.0, viewport.1);
+            shadow.spread = shadow.spread.with_viewport(viewport.0, viewport.1);
+            shadow
+        })),
+        value => value,
+    };
     match (prop, value) {
         (P::FontSize, Value::Length(v)) => {
             style.font_size = v
-                .resolve(parent.font_size, parent.font_size, root)
+                .resolve_with_viewport(
+                    parent.font_size,
+                    parent.font_size,
+                    root,
+                    viewport.0,
+                    viewport.1,
+                )
                 .clamp(1.0, 256.0)
         }
         (P::Color, Value::Color(v)) => style.color = v,
@@ -846,14 +1321,32 @@ pub(super) fn apply(
         }
         (P::LineHeight, Value::Number(v)) => style.line_height = LineHeight::Number(v),
         (P::LineHeight, Value::Length(v)) => {
-            style.line_height = LineHeight::Px(v.resolve(style.font_size, style.font_size, root))
+            style.line_height = LineHeight::Px(v.resolve_with_viewport(
+                style.font_size,
+                style.font_size,
+                root,
+                viewport.0,
+                viewport.1,
+            ))
         }
         (P::WhiteSpace, Value::WhiteSpace(v)) => style.white_space = v,
         (P::Align, Value::Align(v)) => style.text_align = v,
         (P::Direction, Value::Direction(v)) => style.direction = v,
         (P::Display, Value::Display(v)) => style.display = v,
         (P::FlexDirection, Value::FlexDirection(v)) => style.flex_direction = v,
-        (P::FlexGap, Value::Length(v)) => style.flex_gap = v,
+        (P::FlexWrap, Value::FlexWrap(v)) => style.flex_wrap = v,
+        (P::JustifyContent, Value::JustifyContent(v)) => style.justify_content = v,
+        (P::FlexGrow, Value::Number(v)) => style.flex_grow = v,
+        (P::FlexShrink, Value::Number(v)) => style.flex_shrink = v,
+        (P::FlexBasis, Value::Length(v)) => style.flex_basis = v,
+        (P::RowGap, Value::Length(v)) => style.row_gap = v,
+        (P::ColumnGap, Value::Length(v)) => style.column_gap = v,
+        (P::Position, Value::Position(v)) => style.position = v,
+        (P::Top | P::Right | P::Bottom | P::Left, Value::Length(v)) => {
+            style.inset[prop as usize - P::Top as usize] = v
+        }
+        (P::GridColumns, Value::GridColumns(v)) => style.grid_columns = v,
+        (P::Opacity, Value::Number(v)) => style.opacity = (parent.opacity * v).clamp(0.0, 1.0),
         (P::ListMarker, Value::ListMarker(v)) => style.list_marker = v,
         (P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft, Value::Length(v)) => {
             style.margin[prop as usize - P::MarginTop as usize] = v
@@ -868,8 +1361,15 @@ pub(super) fn apply(
         (P::BoxSizing, Value::Bool(v)) => style.border_box = v,
         (P::BorderWidth, Value::Length(v)) => style.border_width = v,
         (P::BorderRadius, Value::Length(v)) => style.border_radius = v,
+        (P::BoxShadow, Value::BoxShadow(shadow)) => {
+            style.box_shadow = shadow.map(|mut shadow| {
+                if shadow.current_color {
+                    shadow.color = style.color;
+                }
+                shadow
+            });
+        }
         (P::BorderStyle, Value::Bool(v)) => style.border_solid = v,
-        (P::BoxShadow, Value::Bool(_)) => {}
         _ => {}
     }
 }

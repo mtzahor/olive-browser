@@ -13,7 +13,10 @@ use eframe::egui::{
 use olive_html::{
     Document, NodeId, NodeKind,
     css::Direction,
-    css::{Color, ComputedStyle, Display, Length, StyleBudget, Stylesheet, TextAlign, WhiteSpace},
+    css::{
+        Color, ComputedStyle, Display, FlexWrap, JustifyContent, Length, Position, StyleBudget,
+        Stylesheet, TextAlign, WhiteSpace,
+    },
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
@@ -21,9 +24,13 @@ const MAX_TEXT: usize = 200_000;
 const MAX_BLOCKS: usize = 5_000;
 const MAX_BOXES: usize = 10_000;
 const MAX_IMAGES: usize = 2_048;
+const MAX_LAYOUT_MEASURE_STEPS: usize = 250_000;
 
 fn color(c: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(c.0, c.1, c.2, c.3)
+}
+fn paint_color(c: Color, opacity: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.0, c.1, c.2, (c.3 as f32 * opacity).round() as u8)
 }
 #[derive(Clone, Copy, Default)]
 struct Style {
@@ -47,7 +54,7 @@ impl Style {
                 },
             ),
             coords: VariationCoords::new([("wght", css.font_weight)]),
-            color: color(css.color),
+            color: paint_color(css.color, css.opacity),
             italics: css.italic,
             underline: if css.underline {
                 Stroke::new(1.0, color(css.color))
@@ -60,7 +67,7 @@ impl Style {
                 Stroke::NONE
             },
             line_height: Some(css.line_height_px()),
-            background: self.inline_background,
+            background: self.inline_background.gamma_multiply(css.opacity),
             ..Default::default()
         }
     }
@@ -160,6 +167,8 @@ pub struct Page {
     pub truncated: bool,
     pub css_limited: bool,
     pub css_ignored: usize,
+    #[serde(default)]
+    pub css_unsupported: Vec<(String, usize)>,
     pub background: Option<Color32>,
     pub forms: Forms,
     #[serde(skip)]
@@ -234,7 +243,23 @@ impl Page {
         sheet: Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
     ) -> Self {
-        Self::build(doc, scripting_enabled, &sheet, images, None)
+        Self::with_stylesheet_and_images_at_viewport(
+            doc,
+            scripting_enabled,
+            sheet,
+            images,
+            (1024.0, 768.0),
+        )
+    }
+
+    pub fn with_stylesheet_and_images_at_viewport(
+        doc: &Document,
+        scripting_enabled: bool,
+        sheet: Stylesheet,
+        images: &HashMap<NodeId, ImageAsset>,
+        viewport: (f32, f32),
+    ) -> Self {
+        Self::build(doc, scripting_enabled, &sheet, images, None, viewport)
     }
 
     #[cfg(test)]
@@ -254,11 +279,36 @@ impl Page {
         images: &HashMap<NodeId, ImageAsset>,
         base: Option<&olive_html::net::Location>,
     ) -> Self {
+        Self::reading_with_base_at_viewport(
+            doc,
+            scripting_enabled,
+            sheet,
+            images,
+            base,
+            (1024.0, 768.0),
+        )
+    }
+
+    pub fn reading_with_base_at_viewport(
+        doc: &Document,
+        scripting_enabled: bool,
+        sheet: &Stylesheet,
+        images: &HashMap<NodeId, ImageAsset>,
+        base: Option<&olive_html::net::Location>,
+        viewport: (f32, f32),
+    ) -> Self {
         let content = Content::extract(doc, sheet, scripting_enabled);
         if !content.has_text {
             return Self::default();
         }
-        let mut page = Self::build(doc, scripting_enabled, sheet, images, Some(&content));
+        let mut page = Self::build(
+            doc,
+            scripting_enabled,
+            sheet,
+            images,
+            Some(&content),
+            viewport,
+        );
         if let Some(base) = base {
             match crate::focus_export::export(doc, &content, &page.title, base, images) {
                 Ok(html) => page.export_html = Some(html),
@@ -274,8 +324,10 @@ impl Page {
         sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
         reading: Option<&Content>,
+        viewport: (f32, f32),
     ) -> Self {
         let mut budget = StyleBudget::default();
+        budget.set_viewport(viewport.0, viewport.1);
         let mut builder = Builder {
             page: Self {
                 forms: if reading.is_none() {
@@ -414,10 +466,15 @@ impl Page {
                     if (tag == "html" || (tag == "body" && builder.page.background.is_none()))
                         && style.css.background.3 > 0
                     {
-                        builder.page.background = Some(color(style.css.background));
+                        builder.page.background =
+                            Some(paint_color(style.css.background, style.css.opacity));
                     }
                     let block = style.flex_parent
-                        || matches!(style.css.display, Display::Block | Display::Flex);
+                        || style.css.position != Position::Static
+                        || matches!(
+                            style.css.display,
+                            Display::Block | Display::Flex | Display::Grid
+                        );
                     if block {
                         builder.open(style.css);
                         style.inline_background = Color32::TRANSPARENT;
@@ -527,8 +584,9 @@ impl Page {
             }
             let children: Vec<_> = doc.children(id).collect();
             let mut child_style = style;
-            child_style.flex_parent = style.css.display == Display::Flex
-                && style.css.flex_direction == olive_html::css::FlexDirection::Row;
+            child_style.flex_parent = style.css.display == Display::Grid
+                || (style.css.display == Display::Flex
+                    && style.css.flex_direction == olive_html::css::FlexDirection::Row);
             pending.extend(
                 children
                     .into_iter()
@@ -545,6 +603,16 @@ impl Page {
         if reading.is_none() {
             builder.page.css_limited = sheet.diagnostics.limited || budget.limited;
             builder.page.css_ignored = sheet.diagnostics.ignored + budget.ignored;
+            let mut unsupported = sheet.diagnostics.unsupported_properties.clone();
+            for (property, count) in budget.unsupported_properties {
+                *unsupported.entry(property).or_default() += count;
+            }
+            builder.page.css_unsupported = unsupported.into_iter().collect();
+            builder
+                .page
+                .css_unsupported
+                .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            builder.page.css_unsupported.truncate(512);
         }
         builder.page
     }
@@ -569,6 +637,11 @@ impl Page {
             || self.images.len() > MAX_IMAGES
             || self.commands.len() > 100_000
             || self.anchors.len() > 100_000
+            || self.css_unsupported.len() > 512
+            || self
+                .css_unsupported
+                .iter()
+                .any(|(name, count)| name.len() > 128 || *count == 0)
         {
             return Err(invalid());
         }
@@ -765,6 +838,7 @@ impl Page {
         let mut stack = vec![BoxLayout::root(start, width)];
         self.box_rects.resize(self.boxes.len(), egui::Rect::NOTHING);
         let mut right = start.x + width;
+        let mut layout_measure_steps = MAX_LAYOUT_MEASURE_STEPS;
         // This UI shares the page's painter and clip, but text placement must not
         // advance the caller's layout until the complete page size is known.
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
@@ -781,25 +855,21 @@ impl Page {
                     }
                 }
                 Command::Open(index) => {
-                    let parent = stack.last().unwrap();
-                    let flex_width = if parent.flex_row {
-                        Some(intrinsic_width(
-                            &self.commands,
-                            command_index,
-                            &mut self.blocks,
-                            &self.images,
-                            ui,
-                        ))
-                    } else {
-                        None
-                    };
+                    let parent = stack.last_mut().unwrap();
+                    let placement = parent.child_placement(self.boxes[index]);
                     let layout = BoxLayout::open(
                         index,
                         self.boxes[index],
                         parent,
                         self.root_font,
                         ui,
-                        flex_width,
+                        placement,
+                        &self.commands,
+                        &self.boxes,
+                        &mut self.blocks,
+                        &self.images,
+                        command_index,
+                        &mut layout_measure_steps,
                     );
                     right = right.max(layout.left + layout.outer_width);
                     stack.push(layout);
@@ -809,15 +879,26 @@ impl Page {
                     let rect = layout.finish(ui, self.root_font);
                     self.box_rects[layout.index] = rect;
                     let parent = stack.last_mut().unwrap();
+                    if layout.out_of_flow {
+                        continue;
+                    }
                     if parent.flex_row {
-                        parent.flex_cursor = rect.right() - parent.content_left
-                            + layout.margin_right
-                            + parent.flex_gap;
+                        let row_height = (rect.height() + layout.margin_bottom).max(0.0);
+                        parent.flex_row_height = parent.flex_row_height.max(row_height);
                         parent.flex_height = parent
                             .flex_height
-                            .max(rect.bottom() + layout.margin_bottom - parent.cursor);
+                            .max(parent.flex_y + parent.flex_row_height);
+                    } else if parent.flex_column {
+                        parent.cursor = layout.flow_top
+                            + rect.height()
+                            + layout.margin_bottom
+                            + parent.flex_row_gap;
+                    } else if parent.grid {
+                        let row_height = (rect.height() + layout.margin_bottom).max(0.0);
+                        parent.grid_row_height = parent.grid_row_height.max(row_height);
+                        parent.grid_height = parent.grid_height.max(parent.grid_y + row_height);
                     } else {
-                        parent.cursor = rect.bottom() + layout.margin_bottom;
+                        parent.cursor = layout.flow_top + rect.height() + layout.margin_bottom;
                     }
                 }
                 Command::Text(index) => {
@@ -965,20 +1046,23 @@ impl Page {
                         ui.painter().rect_filled(
                             outer,
                             placement.radius,
-                            color(image.style.background),
+                            paint_color(image.style.background, image.style.opacity),
                         );
                     }
                     ui.painter().image(
                         texture.id(),
                         content,
                         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE,
+                        Color32::WHITE.gamma_multiply(image.style.opacity),
                     );
                     if placement.border > 0.0 {
                         ui.painter().rect_stroke(
                             outer,
                             placement.radius,
-                            Stroke::new(placement.border, color(image.style.border_color)),
+                            Stroke::new(
+                                placement.border,
+                                paint_color(image.style.border_color, image.style.opacity),
+                            ),
                             egui::epaint::StrokeKind::Inside,
                         );
                     }
@@ -1272,16 +1356,48 @@ struct BoxLayout {
     content_left: f32,
     width: f32,
     cursor: f32,
+    flow_top: f32,
     content_top: f32,
     padding_bottom: f32,
     border: f32,
     margin_bottom: f32,
-    margin_right: f32,
     flex_row: bool,
-    flex_cursor: f32,
+    flex_column: bool,
+    flex_items: Vec<FlexPlacement>,
+    flex_child_index: usize,
+    flex_y: f32,
+    flex_row_height: f32,
     flex_height: f32,
-    flex_gap: f32,
+    flex_row_gap: f32,
+    grid: bool,
+    grid_columns: usize,
+    grid_child_index: usize,
+    grid_y: f32,
+    grid_row_height: f32,
+    grid_height: f32,
+    grid_row_gap: f32,
+    grid_column_gap: f32,
+    out_of_flow: bool,
+    shadow_paint: Option<egui::layers::ShapeIdx>,
     paint: Option<egui::layers::ShapeIdx>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct FlexPlacement {
+    width: f32,
+    x: f32,
+    break_before: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ChildPlacement {
+    Flex(FlexPlacement),
+    Grid { width: f32, x: f32, y: f32 },
+}
+
+struct FlexLayout {
+    items: Vec<FlexPlacement>,
+    has_anonymous_text: bool,
 }
 
 /// Measure a block flex item's contents without wrapping so auto-sized list
@@ -1292,15 +1408,25 @@ fn intrinsic_width(
     blocks: &mut [Block],
     images: &[RenderedImage],
     ui: &egui::Ui,
+    remaining_steps: &mut usize,
 ) -> f32 {
     let mut depth = 0usize;
     let mut width: f32 = 0.0;
     for command in commands.iter().skip(open_index + 1) {
+        if *remaining_steps == 0 {
+            break;
+        }
+        *remaining_steps -= 1;
         match *command {
             Command::Open(_) => depth += 1,
             Command::Close if depth == 0 => break,
             Command::Close => depth -= 1,
             Command::Text(index) => {
+                let cost = blocks[index].job.text.len();
+                if cost > *remaining_steps {
+                    break;
+                }
+                *remaining_steps -= cost;
                 let galley = layout_bidi(&mut blocks[index], ui, 10_000.0);
                 width = width.max(galley.size().x);
             }
@@ -1316,6 +1442,224 @@ fn intrinsic_width(
     width.max(1.0)
 }
 
+fn has_direct_text(commands: &[Command], open_index: usize, remaining_steps: &mut usize) -> bool {
+    let mut depth = 0usize;
+    let mut completed = false;
+    for command in commands.iter().skip(open_index + 1) {
+        if *remaining_steps == 0 {
+            return true;
+        }
+        *remaining_steps -= 1;
+        match *command {
+            Command::Text(_) if depth == 0 => return true,
+            Command::Open(_) => depth += 1,
+            Command::Close if depth == 0 => {
+                completed = true;
+                break;
+            }
+            Command::Close => depth -= 1,
+            _ => {}
+        }
+    }
+    !completed
+}
+
+fn flex_layouts(
+    commands: &[Command],
+    boxes: &[ComputedStyle],
+    blocks: &mut [Block],
+    images: &[RenderedImage],
+    ui: &egui::Ui,
+    open_index: usize,
+    style: ComputedStyle,
+    available_width: f32,
+    root: f32,
+    remaining_steps: &mut usize,
+) -> FlexLayout {
+    #[derive(Clone, Copy)]
+    struct Item {
+        base: f32,
+        extra: f32,
+        margin_left: f32,
+        grow: f32,
+        shrink: f32,
+    }
+
+    let gap = style
+        .column_gap
+        .resolve(0.0, style.font_size, root)
+        .max(0.0);
+    let mut rows: Vec<Vec<Item>> = Vec::new();
+    let mut row = Vec::new();
+    let mut row_used = 0.0;
+    let mut depth = 0usize;
+    let mut has_anonymous_text = false;
+    let mut completed = false;
+    for (command_index, command) in commands.iter().enumerate().skip(open_index + 1) {
+        if *remaining_steps == 0 {
+            has_anonymous_text = true;
+            break;
+        }
+        *remaining_steps -= 1;
+        match *command {
+            Command::Text(_) if depth == 0 => has_anonymous_text = true,
+            Command::Open(index) if depth == 0 => {
+                let child = boxes[index];
+                if child.position != Position::Absolute {
+                    let resolve =
+                        |length: Length| length.resolve(available_width, child.font_size, root);
+                    let margin_left = if child.margin[3] == Length::Auto {
+                        0.0
+                    } else {
+                        resolve(child.margin[3])
+                    };
+                    let margin_right = if child.margin[1] == Length::Auto {
+                        0.0
+                    } else {
+                        resolve(child.margin[1])
+                    };
+                    let padding = resolve(child.padding[1]) + resolve(child.padding[3]);
+                    let border = if child.border_solid {
+                        resolve(child.border_width).max(0.0) * 2.0
+                    } else {
+                        0.0
+                    };
+                    let explicit_width = if child.width == Length::Auto {
+                        None
+                    } else {
+                        Some(
+                            (resolve(child.width)
+                                - if child.border_box {
+                                    padding + border
+                                } else {
+                                    0.0
+                                })
+                            .max(1.0),
+                        )
+                    };
+                    let base = if child.flex_basis != Length::Auto {
+                        (resolve(child.flex_basis)
+                            - if child.border_box {
+                                padding + border
+                            } else {
+                                0.0
+                            })
+                        .max(1.0)
+                    } else {
+                        explicit_width.unwrap_or_else(|| {
+                            intrinsic_width(
+                                commands,
+                                command_index,
+                                blocks,
+                                images,
+                                ui,
+                                remaining_steps,
+                            )
+                        })
+                    };
+                    let extra = margin_left + margin_right + padding + border;
+                    let projected = base + extra + if row.is_empty() { 0.0 } else { gap };
+                    if style.flex_wrap == FlexWrap::Wrap
+                        && !row.is_empty()
+                        && row_used + projected > available_width
+                    {
+                        rows.push(std::mem::take(&mut row));
+                        row_used = 0.0;
+                    }
+                    if !row.is_empty() {
+                        row_used += gap;
+                    }
+                    row_used += base + extra;
+                    row.push(Item {
+                        base,
+                        extra,
+                        margin_left,
+                        grow: child.flex_grow,
+                        shrink: child.flex_shrink,
+                    });
+                }
+                depth += 1;
+            }
+            Command::Open(_) => depth += 1,
+            Command::Close if depth == 0 => {
+                completed = true;
+                break;
+            }
+            Command::Close => depth -= 1,
+            _ => {}
+        }
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    has_anonymous_text |= !completed;
+
+    let mut placements = Vec::new();
+    for (row_index, row) in rows.into_iter().enumerate() {
+        let mut widths: Vec<f32> = row.iter().map(|item| item.base).collect();
+        let base_used = row.iter().map(|item| item.base + item.extra).sum::<f32>()
+            + gap * row.len().saturating_sub(1) as f32;
+        let free = available_width - base_used;
+        if free > 0.0 {
+            let grow = row.iter().map(|item| item.grow).sum::<f32>();
+            if grow > 0.0 {
+                for (width, item) in widths.iter_mut().zip(&row) {
+                    *width += free * item.grow / grow;
+                }
+            }
+        } else if free < 0.0 {
+            let shrink = row
+                .iter()
+                .map(|item| item.shrink * item.base.max(1.0))
+                .sum::<f32>();
+            if shrink > 0.0 {
+                for (width, item) in widths.iter_mut().zip(&row) {
+                    *width = (*width + free * item.shrink * item.base.max(1.0) / shrink).max(1.0);
+                }
+            }
+        }
+        let used = widths
+            .iter()
+            .zip(&row)
+            .map(|(width, item)| width + item.extra)
+            .sum::<f32>()
+            + gap * row.len().saturating_sub(1) as f32;
+        let remaining = (available_width - used).max(0.0);
+        let mut start = 0.0;
+        let mut distributed_gap = gap;
+        match style.justify_content {
+            JustifyContent::Start => {}
+            JustifyContent::End => start = remaining,
+            JustifyContent::Center => start = remaining / 2.0,
+            JustifyContent::SpaceBetween if row.len() > 1 => {
+                distributed_gap += remaining / (row.len() - 1) as f32;
+            }
+            JustifyContent::SpaceAround if !row.is_empty() => {
+                distributed_gap += remaining / row.len() as f32;
+                start = remaining / (2.0 * row.len() as f32);
+            }
+            JustifyContent::SpaceEvenly if !row.is_empty() => {
+                distributed_gap += remaining / (row.len() + 1) as f32;
+                start = remaining / (row.len() + 1) as f32;
+            }
+            _ => {}
+        }
+        let mut x = start;
+        for ((item, width), item_index) in row.iter().zip(widths).zip(0..) {
+            placements.push(FlexPlacement {
+                width,
+                x: x + item.margin_left,
+                break_before: row_index > 0 && item_index == 0,
+            });
+            x += width + item.extra + distributed_gap;
+        }
+    }
+    FlexLayout {
+        items: placements,
+        has_anonymous_text,
+    }
+}
+
 impl BoxLayout {
     fn root(start: egui::Pos2, width: f32) -> Self {
         Self {
@@ -1327,25 +1671,85 @@ impl BoxLayout {
             content_left: start.x,
             width,
             cursor: start.y,
+            flow_top: start.y,
             content_top: start.y,
             padding_bottom: 0.0,
             border: 0.0,
             margin_bottom: 0.0,
-            margin_right: 0.0,
             flex_row: false,
-            flex_cursor: 0.0,
+            flex_column: false,
+            flex_items: Vec::new(),
+            flex_child_index: 0,
+            flex_y: 0.0,
+            flex_row_height: 0.0,
             flex_height: 0.0,
-            flex_gap: 0.0,
+            flex_row_gap: 0.0,
+            grid: false,
+            grid_columns: 1,
+            grid_child_index: 0,
+            grid_y: 0.0,
+            grid_row_height: 0.0,
+            grid_height: 0.0,
+            grid_row_gap: 0.0,
+            grid_column_gap: 0.0,
+            out_of_flow: false,
+            shadow_paint: None,
             paint: None,
         }
     }
+
+    fn child_placement(&mut self, child: ComputedStyle) -> Option<ChildPlacement> {
+        if child.position == Position::Absolute {
+            return None;
+        }
+        if self.flex_row {
+            let placement = self
+                .flex_items
+                .get(self.flex_child_index)
+                .copied()
+                .unwrap_or(FlexPlacement {
+                    width: self.width,
+                    ..Default::default()
+                });
+            self.flex_child_index = self.flex_child_index.saturating_add(1);
+            if placement.break_before {
+                self.flex_y += self.flex_row_height + self.flex_row_gap;
+                self.flex_row_height = 0.0;
+            }
+            return Some(ChildPlacement::Flex(placement));
+        }
+        if self.grid {
+            let index = self.grid_child_index;
+            self.grid_child_index = self.grid_child_index.saturating_add(1);
+            if index > 0 && index % self.grid_columns == 0 {
+                self.grid_y += self.grid_row_height + self.grid_row_gap;
+                self.grid_row_height = 0.0;
+            }
+            let gap_total = self.grid_column_gap * self.grid_columns.saturating_sub(1) as f32;
+            let track_width = ((self.width - gap_total) / self.grid_columns as f32).max(1.0);
+            let column = index % self.grid_columns;
+            return Some(ChildPlacement::Grid {
+                width: track_width,
+                x: column as f32 * (track_width + self.grid_column_gap),
+                y: self.grid_y,
+            });
+        }
+        None
+    }
+
     fn open(
         index: usize,
         style: ComputedStyle,
-        parent: &Self,
+        parent: &mut Self,
         root: f32,
         ui: &egui::Ui,
-        flex_item_width: Option<f32>,
+        placement: Option<ChildPlacement>,
+        commands: &[Command],
+        boxes: &[ComputedStyle],
+        blocks: &mut [Block],
+        images: &[RenderedImage],
+        command_index: usize,
+        remaining_steps: &mut usize,
     ) -> Self {
         let resolve = |v: Length| v.resolve(parent.width, style.font_size, root);
         let margin = style.margin.map(resolve);
@@ -1357,9 +1761,19 @@ impl BoxLayout {
         };
         let sides = padding[1] + padding[3] + border * 2.0;
         let available = (parent.width - margin[1] - margin[3] - sides).max(1.0);
-        let width = if style.width == Length::Auto {
-            if parent.flex_row {
-                flex_item_width.unwrap_or(available).min(available)
+        let assigned = match placement {
+            Some(ChildPlacement::Flex(item)) => Some(item.width),
+            Some(ChildPlacement::Grid { width, .. }) if style.width == Length::Auto => {
+                Some((width - margin[1] - margin[3] - sides).max(1.0))
+            }
+            Some(ChildPlacement::Grid { .. }) | None => None,
+        };
+        let width = if let Some(assigned) = assigned {
+            assigned.min(available)
+        } else if style.width == Length::Auto {
+            if style.position == Position::Absolute {
+                intrinsic_width(commands, command_index, blocks, images, ui, remaining_steps)
+                    .min(available)
             } else {
                 available
             }
@@ -1382,14 +1796,81 @@ impl BoxLayout {
             } else {
                 0.0
             };
-        let left = parent.content_left
-            + if parent.flex_row {
-                parent.flex_cursor + margin[3]
+        let flow_top = match placement {
+            Some(ChildPlacement::Flex(_)) => parent.content_top + parent.flex_y + margin[0],
+            Some(ChildPlacement::Grid { y, .. }) => parent.content_top + y + margin[0],
+            None => parent.cursor + margin[0],
+        };
+        let (normal_left, normal_top) = match placement {
+            Some(ChildPlacement::Flex(item)) => (parent.content_left + item.x, flow_top),
+            Some(ChildPlacement::Grid { x, .. }) => (parent.content_left + x + margin[3], flow_top),
+            None => (parent.content_left + left_margin, flow_top),
+        };
+        let absolute = style.position == Position::Absolute;
+        let left = if absolute {
+            if style.inset[3] != Length::Auto {
+                parent.content_left + resolve(style.inset[3])
+            } else if style.inset[1] != Length::Auto {
+                parent.content_left + parent.width - resolve(style.inset[1]) - width - sides
             } else {
-                left_margin
-            };
-        let top = parent.cursor + margin[0];
+                parent.content_left
+            }
+        } else if style.position == Position::Relative {
+            normal_left
+                + if style.inset[3] != Length::Auto {
+                    resolve(style.inset[3])
+                } else if style.inset[1] != Length::Auto {
+                    -resolve(style.inset[1])
+                } else {
+                    0.0
+                }
+        } else {
+            normal_left
+        };
+        let top = if absolute {
+            if style.inset[0] != Length::Auto {
+                parent.content_top + resolve(style.inset[0])
+            } else if style.inset[2] != Length::Auto {
+                parent.cursor - resolve(style.inset[2])
+            } else {
+                parent.cursor
+            }
+        } else if style.position == Position::Relative {
+            normal_top
+                + if style.inset[0] != Length::Auto {
+                    resolve(style.inset[0])
+                } else if style.inset[2] != Length::Auto {
+                    -resolve(style.inset[2])
+                } else {
+                    0.0
+                }
+        } else {
+            normal_top
+        };
         let content_top = top + border + padding[0];
+        let grid = style.display == Display::Grid
+            && !has_direct_text(commands, command_index, remaining_steps);
+        let row_flex = style.display == Display::Flex
+            && style.flex_direction == olive_html::css::FlexDirection::Row;
+        let mut has_anonymous_text = false;
+        let flex_items = if row_flex {
+            let layout = flex_layouts(
+                commands,
+                boxes,
+                blocks,
+                images,
+                ui,
+                command_index,
+                style,
+                width,
+                root,
+                remaining_steps,
+            );
+            has_anonymous_text = layout.has_anonymous_text;
+            layout.items
+        } else {
+            Vec::new()
+        };
         Self {
             index,
             style,
@@ -1399,16 +1880,36 @@ impl BoxLayout {
             content_left: left + border + padding[3],
             width,
             cursor: content_top,
+            flow_top,
             content_top,
             padding_bottom: padding[2],
             border,
             margin_bottom: margin[2],
-            margin_right: margin[1],
-            flex_row: style.display == Display::Flex
-                && style.flex_direction == olive_html::css::FlexDirection::Row,
-            flex_cursor: 0.0,
+            flex_row: row_flex && !has_anonymous_text,
+            flex_column: style.display == Display::Flex
+                && (style.flex_direction == olive_html::css::FlexDirection::Column
+                    || has_anonymous_text),
+            flex_items,
+            flex_child_index: 0,
+            flex_y: 0.0,
+            flex_row_height: 0.0,
             flex_height: 0.0,
-            flex_gap: style.flex_gap.resolve(0.0, style.font_size, root).max(0.0),
+            flex_row_gap: style.row_gap.resolve(0.0, style.font_size, root).max(0.0),
+            grid,
+            grid_columns: style.grid_columns.clamp(1, 12) as usize,
+            grid_child_index: 0,
+            grid_y: 0.0,
+            grid_row_height: 0.0,
+            grid_height: 0.0,
+            grid_row_gap: style.row_gap.resolve(0.0, style.font_size, root).max(0.0),
+            grid_column_gap: style
+                .column_gap
+                .resolve(0.0, style.font_size, root)
+                .max(0.0),
+            out_of_flow: absolute,
+            shadow_paint: style
+                .box_shadow
+                .map(|_| ui.painter().add(egui::Shape::Noop)),
             paint: Some(ui.painter().add(egui::Shape::Noop)),
         }
     }
@@ -1432,12 +1933,37 @@ impl BoxLayout {
             .cursor
             .max(self.content_top + min_height)
             .max(self.content_top + self.flex_height)
+            .max(self.content_top + self.grid_height)
             + self.padding_bottom
             + self.border;
         let rect = egui::Rect::from_min_max(
             egui::pos2(self.left, self.top),
             egui::pos2(self.left + self.outer_width, bottom),
         );
+        if let (Some(paint), Some(shadow)) = (self.shadow_paint, self.style.box_shadow) {
+            let resolve = |value: Length| value.resolve(0.0, self.style.font_size, root);
+            let offset = egui::vec2(resolve(shadow.offset_x), resolve(shadow.offset_y));
+            let blur = resolve(shadow.blur).clamp(0.0, 64.0);
+            let spread = resolve(shadow.spread).clamp(-32.0, 32.0);
+            let expansion =
+                (spread + blur * 0.7).clamp(-rect.width().min(rect.height()) / 2.0, 96.0);
+            let shadow_rect = rect.expand(expansion).translate(offset);
+            let radius = self
+                .style
+                .border_radius
+                .resolve(0.0, self.style.font_size, root)
+                .clamp(0.0, 255.0) as u8;
+            let alpha_scale = if blur == 0.0 { 1.0 } else { 0.28 };
+            let fill = paint_color(shadow.color, self.style.opacity * alpha_scale);
+            let shape = egui::epaint::RectShape::new(
+                shadow_rect,
+                radius.saturating_add(expansion.max(0.0).min(255.0) as u8),
+                fill,
+                Stroke::NONE,
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().set(paint, shape);
+        }
         if let Some(paint) = self.paint {
             let radius = self
                 .style
@@ -1449,8 +1975,11 @@ impl BoxLayout {
                 egui::epaint::RectShape::new(
                     rect,
                     radius,
-                    color(self.style.background),
-                    Stroke::new(self.border, color(self.style.border_color)),
+                    paint_color(self.style.background, self.style.opacity),
+                    Stroke::new(
+                        self.border,
+                        paint_color(self.style.border_color, self.style.opacity),
+                    ),
                     egui::StrokeKind::Inside,
                 ),
             );

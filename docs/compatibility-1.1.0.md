@@ -1,5 +1,8 @@
 # Olive 1.1.0 compatibility and resource review
 
+> Historical release snapshot. The feature and limitation statements below describe
+> Olive 1.1.0. For the current CSS renderer subset, see the [CSS compatibility map](css-compatibility.md).
+
 ## Scope and method
 
 The August 2026 Semrush all-category rankings supply 50 Israel and 50 global targets:

@@ -12,8 +12,8 @@ use cssparser::{
 use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
-    Color, ComputedStyle, Direction, Display, FlexDirection, Length, LineHeight, TextAlign,
-    WhiteSpace,
+    BoxShadow, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, JustifyContent,
+    Length, LineHeight, Position, TextAlign, WhiteSpace,
 };
 use values::{Declaration, PROPERTIES, Value};
 
@@ -22,44 +22,279 @@ pub const MAX_RULES: usize = 32_768;
 const MAX_DECLARATIONS: usize = 512;
 const MAX_SELECTORS: usize = 128;
 const MATCH_BUDGET: usize = 8_000_000;
+const MAX_CUSTOM_PROPERTIES: usize = 256;
+const MAX_CUSTOM_PROPERTY_BYTES: usize = 64 * 1024;
+const MAX_CUSTOM_PROPERTY_STORAGE_BYTES: usize = 1024 * 1024;
+const MAX_VAR_DEPTH: usize = 16;
+const MAX_MEDIA_ALTERNATIVES: usize = 32;
+const MAX_DEFERRED_DECLARATIONS: usize = 512;
 
 #[derive(Clone, Debug)]
 struct Rule {
     selectors: Vec<Selector>,
     declarations: Vec<Declaration>,
+    media: MediaCondition,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MediaBranch {
+    valid: bool,
+    screen: bool,
+    min_width: Option<f32>,
+    max_width: Option<f32>,
+    min_height: Option<f32>,
+    max_height: Option<f32>,
+    landscape: Option<bool>,
+}
+impl Default for MediaBranch {
+    fn default() -> Self {
+        Self {
+            valid: true,
+            screen: true,
+            min_width: None,
+            max_width: None,
+            min_height: None,
+            max_height: None,
+            landscape: None,
+        }
+    }
+}
+impl MediaBranch {
+    fn combine(self, child: Self) -> Self {
+        Self {
+            valid: self.valid
+                && child.valid
+                && !matches!((self.landscape, child.landscape), (Some(a), Some(b)) if a != b),
+            screen: self.screen && child.screen,
+            min_width: match (self.min_width, child.min_width) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+            max_width: match (self.max_width, child.max_width) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+            min_height: match (self.min_height, child.min_height) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+            max_height: match (self.max_height, child.max_height) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+            landscape: child.landscape.or(self.landscape),
+        }
+    }
+    fn matches(self, width: f32, height: f32) -> bool {
+        self.valid
+            && self.screen
+            && self.min_width.is_none_or(|value| width >= value)
+            && self.max_width.is_none_or(|value| width <= value)
+            && self.min_height.is_none_or(|value| height >= value)
+            && self.max_height.is_none_or(|value| height <= value)
+            && self
+                .landscape
+                .is_none_or(|value| (width >= height) == value)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MediaCondition {
+    alternatives: Vec<MediaBranch>,
+}
+impl Default for MediaCondition {
+    fn default() -> Self {
+        Self {
+            alternatives: vec![MediaBranch::default()],
+        }
+    }
+}
+impl MediaCondition {
+    fn never() -> Self {
+        Self {
+            alternatives: vec![MediaBranch {
+                valid: false,
+                ..MediaBranch::default()
+            }],
+        }
+    }
+
+    fn combine(&self, child: &Self) -> Self {
+        let mut alternatives = Vec::new();
+        for parent in &self.alternatives {
+            for nested in &child.alternatives {
+                if alternatives.len() == MAX_MEDIA_ALTERNATIVES {
+                    return Self {
+                        alternatives: vec![MediaBranch {
+                            valid: false,
+                            ..MediaBranch::default()
+                        }],
+                    };
+                }
+                alternatives.push((*parent).combine(*nested));
+            }
+        }
+        Self { alternatives }
+    }
+    fn matches(&self, width: f32, height: f32) -> bool {
+        self.alternatives
+            .iter()
+            .any(|condition| condition.matches(width, height))
+    }
+    fn has_screen(&self) -> bool {
+        self.alternatives.iter().any(|condition| condition.screen)
+    }
+    fn needs_viewport_reflow(&self) -> bool {
+        self.alternatives.iter().any(|condition| {
+            condition.min_width.is_some()
+                || condition.max_width.is_some()
+                || condition.min_height.is_some()
+                || condition.max_height.is_some()
+                || condition.landscape.is_some()
+        })
+    }
+}
+
+fn has_viewport_units(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    lower
+        .as_bytes()
+        .windows(2)
+        .enumerate()
+        .any(|(index, unit)| {
+            if unit != b"vw" && unit != b"vh" {
+                return false;
+            }
+            let bytes = lower.as_bytes();
+            index > 0
+                && bytes[index - 1].is_ascii_digit()
+                && bytes
+                    .get(index + 2)
+                    .is_none_or(|next| !next.is_ascii_alphanumeric() && *next != b'-')
+        })
+}
+
+fn parse_media_query(source: &str) -> Option<MediaCondition> {
+    let source = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    let source = source.trim().to_ascii_lowercase();
+    if source.is_empty() {
+        return Some(MediaCondition::default());
+    }
+    if source.contains(',') {
+        let alternatives: Vec<_> = source
+            .split(',')
+            .filter_map(parse_media_branch)
+            .take(MAX_MEDIA_ALTERNATIVES + 1)
+            .collect();
+        if alternatives.is_empty() || alternatives.len() > MAX_MEDIA_ALTERNATIVES {
+            return None;
+        }
+        return Some(MediaCondition { alternatives });
+    }
+    Some(MediaCondition {
+        alternatives: vec![parse_media_branch(&source)?],
+    })
+}
+
+fn parse_media_branch(source: &str) -> Option<MediaBranch> {
+    let mut condition = MediaBranch::default();
+    for part in source.split(" and ").map(str::trim) {
+        match part {
+            "screen" | "all" | "only screen" | "only all" => {}
+            "not print" => {}
+            "print" | "speech" => condition.screen = false,
+            _ => {
+                let feature = part.strip_prefix('(')?.strip_suffix(')')?.trim();
+                let (name, value) = feature.split_once(':')?;
+                let value = value.trim();
+                match name.trim() {
+                    "min-width" | "max-width" | "min-height" | "max-height" => {
+                        let number_end = value
+                            .find(|c: char| {
+                                !(c.is_ascii_digit() || c == '.' || c == '+' || c == '-')
+                            })
+                            .unwrap_or(value.len());
+                        let number = value[..number_end].parse::<f32>().ok()?;
+                        if !number.is_finite() || number < 0.0 {
+                            return None;
+                        }
+                        let unit = value[number_end..].trim();
+                        let px = match unit {
+                            "px" | "" => number,
+                            "em" | "rem" => number * 16.0,
+                            _ => return None,
+                        };
+                        match name.trim() {
+                            "min-width" => condition.min_width = Some(px),
+                            "max-width" => condition.max_width = Some(px),
+                            "min-height" => condition.min_height = Some(px),
+                            _ => condition.max_height = Some(px),
+                        }
+                    }
+                    "orientation" => {
+                        condition.landscape = Some(match value {
+                            "landscape" => true,
+                            "portrait" => false,
+                            _ => return None,
+                        });
+                    }
+                    _ => return None,
+                }
+            }
+        }
+    }
+    Some(condition)
 }
 
 /// Counts rejected syntax/features and reports an exceeded processing limit.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Diagnostics {
     pub ignored: usize,
     pub limited: bool,
+    pub unsupported_properties: HashMap<String, usize>,
 }
 /// Parsed author styles, ordered as they appeared in the document.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
     index: HashMap<Key, Vec<(usize, usize)>>,
     unindexed: Vec<(usize, usize)>,
     pub diagnostics: Diagnostics,
     bytes: usize,
+    viewport_dependent: bool,
 }
 /// A per-document work budget. Reuse it across the whole style traversal.
 #[derive(Debug)]
 pub struct StyleBudget {
     matches: usize,
     inline_bytes: usize,
+    custom_properties: HashMap<NodeId, std::sync::Arc<HashMap<String, String>>>,
+    custom_property_bytes_used: usize,
     pub limited: bool,
     pub ignored: usize,
+    pub unsupported_properties: HashMap<String, usize>,
+    viewport_width: f32,
+    viewport_height: f32,
 }
 impl Default for StyleBudget {
     fn default() -> Self {
         Self {
             matches: MATCH_BUDGET,
             inline_bytes: 0,
+            custom_properties: HashMap::new(),
+            custom_property_bytes_used: 0,
             limited: false,
             ignored: 0,
+            unsupported_properties: HashMap::new(),
+            viewport_width: 1024.0,
+            viewport_height: 768.0,
         }
+    }
+}
+impl StyleBudget {
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        self.viewport_width = width.clamp(1.0, 10_000.0);
+        self.viewport_height = height.clamp(1.0, 10_000.0);
     }
 }
 impl Stylesheet {
@@ -70,7 +305,8 @@ impl Stylesheet {
         sheet
     }
     /// Collect applicable HTML `<style>` elements in document order. Template
-    /// fragments, non-CSS types and media other than plain screen/all are ignored.
+    /// fragments and non-CSS types are ignored; supported media conditions are
+    /// evaluated later against the requested viewport.
     pub fn from_document(doc: &Document) -> Self {
         Self::from_document_with_sources(doc, &HashMap::new())
     }
@@ -85,6 +321,7 @@ impl Stylesheet {
             let Some(element) = doc.node(id).and_then(|n| n.as_element()) else {
                 continue;
             };
+            sheet.viewport_dependent |= element.attribute("style").is_some_and(has_viewport_units);
             if !applicable_style(element) {
                 continue;
             }
@@ -93,7 +330,11 @@ impl Stylesheet {
                     .get(&id)
                     .filter(|source| element.attribute("href") == Some(source.reference.as_str()))
                 {
-                    sheet.append(&source.source);
+                    let media = element
+                        .attribute("media")
+                        .and_then(parse_media_query)
+                        .unwrap_or_else(MediaCondition::never);
+                    sheet.append_with_media(&source.source, media);
                 }
                 continue;
             }
@@ -104,18 +345,29 @@ impl Stylesheet {
                     _ => None,
                 })
                 .collect();
-            sheet.append(&source);
+            let media = element
+                .attribute("media")
+                .and_then(parse_media_query)
+                .unwrap_or_else(MediaCondition::never);
+            sheet.append_with_media(&source, media);
         }
         sheet
     }
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }
+    pub fn needs_viewport_reflow(&self) -> bool {
+        self.viewport_dependent
+    }
     fn append(&mut self, source: &str) {
+        self.append_with_media(source, MediaCondition::default());
+    }
+    fn append_with_media(&mut self, source: &str, media: MediaCondition) {
         if self.bytes.saturating_add(source.len()) > MAX_CSS_BYTES {
             self.diagnostics.limited = true;
             return;
         }
+        self.viewport_dependent |= media.needs_viewport_reflow() || has_viewport_units(source);
         self.bytes += source.len();
         let mut input = Parser::new(source);
         let mut remaining = MAX_RULES - self.rules.len();
@@ -123,6 +375,8 @@ impl Stylesheet {
             diagnostics: &mut self.diagnostics,
             remaining: &mut remaining,
             depth: 0,
+            media,
+            viewport_dependent: &mut self.viewport_dependent,
         };
         let mut ignored = 0;
         let mut limited = false;
@@ -169,12 +423,39 @@ impl Stylesheet {
         user_agent(element, &mut style);
         type Priority = (bool, bool, (u16, u16, u16));
         let mut winners: [Option<(Priority, Value)>; PROPERTIES.len()] = [None; PROPERTIES.len()];
-        let mut consider = |declarations: &[Declaration], inline, specificity| {
-            for declaration in declarations {
-                let priority = (declaration.important, inline, specificity);
-                let winner = &mut winners[declaration.property as usize];
-                if winner.is_none_or(|(previous, _)| priority >= previous) {
-                    *winner = Some((priority, declaration.value));
+        let mut custom_winners: HashMap<String, (Priority, String)> = HashMap::new();
+        let mut deferred: Vec<(Priority, Declaration)> = Vec::new();
+        let mut custom_limited = false;
+        let mut deferred_limited = false;
+        let mut consider = |declaration: &Declaration, inline, specificity| {
+            let priority = (declaration.important, inline, specificity);
+            if declaration.name.starts_with("--") {
+                let eligible = custom_winners.contains_key(&declaration.name)
+                    || custom_winners.len() < MAX_CUSTOM_PROPERTIES;
+                if eligible
+                    && custom_winners
+                        .get(&declaration.name)
+                        .is_none_or(|(previous, _)| priority >= *previous)
+                {
+                    custom_winners.insert(
+                        declaration.name.clone(),
+                        (priority, declaration.raw.clone()),
+                    );
+                } else if !eligible {
+                    custom_limited = true;
+                }
+            } else if declaration.values.is_empty() {
+                if deferred.len() < MAX_DEFERRED_DECLARATIONS {
+                    deferred.push((priority, declaration.clone()));
+                } else {
+                    deferred_limited = true;
+                }
+            } else {
+                for (property, value) in &declaration.values {
+                    let winner = &mut winners[*property as usize];
+                    if winner.is_none_or(|(previous, _)| priority >= previous) {
+                        *winner = Some((priority, *value));
+                    }
                 }
             }
         };
@@ -213,9 +494,17 @@ impl Stylesheet {
                 break;
             }
             let rule = &self.rules[rule_index];
+            if !rule
+                .media
+                .matches(budget.viewport_width, budget.viewport_height)
+            {
+                continue;
+            }
             let selector = &rule.selectors[selector_index];
             if selector.matches(doc, id, &mut budget.matches) {
-                consider(&rule.declarations, false, selector.specificity);
+                for declaration in &rule.declarations {
+                    consider(declaration, false, selector.specificity);
+                }
             }
         }
         budget.limited |= budget.matches == 0;
@@ -232,16 +521,104 @@ impl Stylesheet {
                 let declarations = declarations(&mut input, &mut diagnostics);
                 budget.limited |= diagnostics.limited;
                 budget.ignored += diagnostics.ignored;
-                consider(&declarations, true, (0, 0, 0));
+                for (property, count) in diagnostics.unsupported_properties {
+                    record_unsupported(&mut budget.unsupported_properties, &property, count);
+                }
+                for declaration in &declarations {
+                    consider(declaration, true, (0, 0, 0));
+                }
             } else {
                 budget.limited = true;
+            }
+        }
+        drop(consider);
+        budget.limited |= custom_limited || deferred_limited;
+        let parent_variables = doc
+            .node(id)
+            .and_then(|node| node.parent())
+            .and_then(|parent| budget.custom_properties.get(&parent))
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::new(HashMap::new()));
+        let mut variables = parent_variables.clone();
+        for (name, (_, raw)) in custom_winners {
+            let variables_mut = std::sync::Arc::make_mut(&mut variables);
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "initial" => {
+                    variables_mut.remove(&name);
+                }
+                "inherit" | "unset" => {
+                    if let Some(value) = parent_variables.get(&name) {
+                        variables_mut.insert(name, value.clone());
+                    } else {
+                        variables_mut.remove(&name);
+                    }
+                }
+                _ => {
+                    if variables_mut.len() >= MAX_CUSTOM_PROPERTIES
+                        && !variables_mut.contains_key(&name)
+                    {
+                        budget.limited = true;
+                        continue;
+                    }
+                    if raw.len() > MAX_CUSTOM_PROPERTY_BYTES {
+                        budget.limited = true;
+                        continue;
+                    }
+                    variables_mut.insert(name, raw);
+                }
+            }
+        }
+        let variable_bytes = variables
+            .iter()
+            .map(|(name, value)| name.len().saturating_add(value.len()))
+            .sum::<usize>();
+        if variable_bytes > MAX_CUSTOM_PROPERTY_BYTES {
+            budget.limited = true;
+            variables = parent_variables.clone();
+        }
+        if !std::sync::Arc::ptr_eq(&variables, &parent_variables) {
+            if budget
+                .custom_property_bytes_used
+                .saturating_add(variable_bytes)
+                > MAX_CUSTOM_PROPERTY_STORAGE_BYTES
+            {
+                budget.limited = true;
+                variables = parent_variables.clone();
+            } else {
+                budget.custom_property_bytes_used += variable_bytes;
+            }
+        }
+        budget.custom_properties.insert(id, variables.clone());
+        for (priority, declaration) in deferred {
+            let Some(expanded) = substitute_variables(&declaration.raw, &variables) else {
+                budget.ignored += 1;
+                continue;
+            };
+            let parsed = parse_deferred(&declaration.name, &expanded);
+            match parsed {
+                Some(values) => {
+                    for (property, value) in values {
+                        let winner = &mut winners[property as usize];
+                        if winner.is_none_or(|(previous, _)| priority >= previous) {
+                            *winner = Some((priority, value));
+                        }
+                    }
+                }
+                None => budget.ignored += 1,
             }
         }
         // Font size precedes dependent lengths; color precedes currentColor.
         let mut root_font = root_font;
         for property in PROPERTIES {
             if let Some((_, value)) = winners[property as usize] {
-                values::apply(&mut style, parent, root_font, property, value);
+                values::apply(
+                    &mut style,
+                    parent,
+                    root_font,
+                    (budget.viewport_width, budget.viewport_height),
+                    property,
+                    value,
+                );
             }
             if property == values::Property::FontSize && element.name.local.as_str() == "html" {
                 root_font = style.font_size;
@@ -253,7 +630,34 @@ impl Stylesheet {
         // Resolve em/rem now so explicit inheritance preserves computed lengths.
         let font = style.font_size;
         let computed_length = |v| match v {
-            Length::Em(_) | Length::Rem(_) => Length::Px(v.resolve(0.0, font, root_font)),
+            Length::Em(_) | Length::Rem(_) | Length::Vw(_) | Length::Vh(_) => {
+                Length::Px(v.resolve_with_viewport(
+                    0.0,
+                    font,
+                    root_font,
+                    budget.viewport_width,
+                    budget.viewport_height,
+                ))
+            }
+            Length::Calc {
+                px,
+                em,
+                rem,
+                percent,
+                vw,
+                vh,
+            } => Length::Calc {
+                px: px
+                    + em * font
+                    + rem * root_font
+                    + vw * budget.viewport_width / 100.0
+                    + vh * budget.viewport_height / 100.0,
+                em: 0.0,
+                rem: 0.0,
+                percent,
+                vw: 0.0,
+                vh: 0.0,
+            },
             _ => v,
         };
         style.margin = style.margin.map(computed_length);
@@ -264,7 +668,17 @@ impl Stylesheet {
         style.min_height = computed_length(style.min_height);
         style.border_width = computed_length(style.border_width);
         style.border_radius = computed_length(style.border_radius);
-        style.flex_gap = computed_length(style.flex_gap);
+        style.flex_basis = computed_length(style.flex_basis);
+        style.row_gap = computed_length(style.row_gap);
+        style.column_gap = computed_length(style.column_gap);
+        style.inset = style.inset.map(computed_length);
+        style.box_shadow = style.box_shadow.map(|mut shadow| {
+            shadow.offset_x = computed_length(shadow.offset_x);
+            shadow.offset_y = computed_length(shadow.offset_y);
+            shadow.blur = computed_length(shadow.blur);
+            shadow.spread = computed_length(shadow.spread);
+            shadow
+        });
         if element.attribute("hidden").is_some() {
             style.display = Display::None;
         }
@@ -301,53 +715,39 @@ struct Rules<'a> {
     diagnostics: &'a mut Diagnostics,
     remaining: &'a mut usize,
     depth: usize,
+    media: MediaCondition,
+    viewport_dependent: &'a mut bool,
 }
-// Viewport-dependent features remain unsupported, rather than assuming a
-// desktop width and applying the wrong rules when the user resizes the window.
 fn screen_media(source: &str) -> bool {
     source.trim().is_empty()
-        || source.split(',').any(|query| {
-            let words = query
-                .split_ascii_whitespace()
-                .map(str::to_ascii_lowercase)
-                .collect::<Vec<_>>();
-            matches!(
-                words
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                ["screen"] | ["all"] | ["only", "screen"] | ["only", "all"] | ["not", "print"]
-            )
-        })
+        || source
+            .split(',')
+            .any(|query| parse_media_query(query).is_some_and(|condition| condition.has_screen()))
 }
 impl<'i> AtRuleParser<'i> for Rules<'_> {
-    type Prelude = bool;
+    type Prelude = MediaCondition;
     type AtRule = Vec<Rule>;
     type Error = ();
     fn parse_prelude(
         &mut self,
         name: CowRcStr<'i>,
         input: &mut Parser<'i>,
-    ) -> Result<bool, cssparser::ParseError<()>> {
+    ) -> Result<MediaCondition, cssparser::ParseError<()>> {
         if !name.eq_ignore_ascii_case("media") {
             return Err(cssparser::ParseError::custom(()));
         }
         let start = input.position();
         while input.next().is_ok() {}
         let source = input.slice_from(start);
-        Ok(!source.trim().is_empty() && screen_media(source))
+        parse_media_query(source).ok_or_else(|| cssparser::ParseError::custom(()))
     }
     fn parse_block(
         &mut self,
-        applies: bool,
+        condition: MediaCondition,
         _: &ParserState,
         input: &mut Parser<'i>,
     ) -> Result<Vec<Rule>, cssparser::ParseError<()>> {
-        if !applies {
-            while input.next().is_ok() {}
-            return Ok(vec![]);
-        }
+        *self.viewport_dependent |= condition.needs_viewport_reflow();
         if self.depth >= 8 {
             self.diagnostics.limited = true;
             while input.next().is_ok() {}
@@ -361,6 +761,8 @@ impl<'i> AtRuleParser<'i> for Rules<'_> {
             diagnostics: self.diagnostics,
             remaining: self.remaining,
             depth: self.depth + 1,
+            media: self.media.combine(&condition),
+            viewport_dependent: self.viewport_dependent,
         };
         for item in StyleSheetParser::new(input, &mut parser) {
             match item {
@@ -412,10 +814,14 @@ impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
         Ok(vec![Rule {
             selectors,
             declarations: declarations(input, self.diagnostics),
+            media: self.media.clone(),
         }])
     }
 }
-struct Declarations;
+#[derive(Default)]
+struct Declarations {
+    unsupported_properties: HashMap<String, usize>,
+}
 impl<'i> AtRuleParser<'i> for Declarations {
     type Prelude = ();
     type AtRule = Vec<Declaration>;
@@ -443,26 +849,228 @@ impl<'i> DeclarationParser<'i> for Declarations {
         input: &mut Parser<'i>,
         _: &ParserState,
     ) -> Result<Self::Declaration, cssparser::ParseError<()>> {
-        let values = input.parse_until_before(Delimiter::Bang, |p| {
-            let values = values::parse_values(&name.to_ascii_lowercase(), p)?;
-            p.expect_exhausted()?;
-            Ok(values)
+        let name = if name.starts_with("--") {
+            name.to_string()
+        } else {
+            name.to_ascii_lowercase()
+        };
+        if !name.starts_with("--") && !values::supports_property(&name) {
+            let bounded_name: String = name.chars().take(128).collect();
+            if self.unsupported_properties.len() < 512
+                || self.unsupported_properties.contains_key(&bounded_name)
+            {
+                *self.unsupported_properties.entry(bounded_name).or_default() += 1;
+            }
+            return Err(cssparser::ParseError::custom(()));
+        }
+        let (raw, parsed) = input.parse_until_before(Delimiter::Bang, |p| {
+            let start = p.position();
+            let raw = p.slice_from(start).trim().to_owned();
+            let parsed = if name.starts_with("--") || raw.to_ascii_lowercase().contains("var(") {
+                while p.next().is_ok() {}
+                Vec::new()
+            } else {
+                let parsed = values::parse_values(&name, p)?;
+                p.expect_exhausted()?;
+                parsed
+            };
+            Ok((raw, parsed))
         })?;
         let important = input.try_parse(cssparser::parse_important).is_ok();
         input.expect_exhausted()?;
-        Ok(values
-            .into_iter()
-            .map(|(property, value)| Declaration {
-                property,
-                value,
-                important,
-            })
-            .collect())
+        Ok(vec![Declaration {
+            name,
+            raw,
+            values: parsed,
+            important,
+        }])
     }
 }
+fn parse_deferred(name: &str, source: &str) -> Option<Vec<(values::Property, Value)>> {
+    let mut input = Parser::new(source);
+    let parsed = values::parse_values(name, &mut input).ok()?;
+    input.expect_exhausted().ok()?;
+    Some(parsed)
+}
+
+fn substitute_variables(source: &str, variables: &HashMap<String, String>) -> Option<String> {
+    fn resolve(
+        source: &str,
+        variables: &HashMap<String, String>,
+        stack: &mut std::collections::HashSet<String>,
+        depth: usize,
+        expanded: &mut usize,
+    ) -> Option<String> {
+        if depth > MAX_VAR_DEPTH || source.len() > MAX_CUSTOM_PROPERTY_BYTES {
+            return None;
+        }
+        let bytes = source.as_bytes();
+        let mut output = String::with_capacity(source.len());
+        let mut cursor = 0;
+        let mut i = 0;
+        let mut quote = None;
+        while i < bytes.len() {
+            let byte = bytes[i];
+            if let Some(end_quote) = quote {
+                if byte == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if byte == end_quote {
+                    quote = None;
+                }
+                i += 1;
+                continue;
+            }
+            if byte == b'\'' || byte == b'"' {
+                quote = Some(byte);
+                i += 1;
+                continue;
+            }
+            if byte == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            let is_var = i + 4 <= bytes.len()
+                && source
+                    .get(i..i + 4)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("var("))
+                && (i == 0
+                    || !(bytes[i - 1].is_ascii_alphanumeric()
+                        || matches!(bytes[i - 1], b'_' | b'-')));
+            if !is_var {
+                i += source[i..].chars().next()?.len_utf8();
+                continue;
+            }
+            let open = i + 3;
+            let close = matching_parenthesis(source, open)?;
+            let (name, fallback) = split_var_arguments(source.get(open + 1..close)?)?;
+            let name = name.trim();
+            if !name.starts_with("--") || name.len() <= 2 {
+                return None;
+            }
+            output.push_str(source.get(cursor..i)?);
+            let replacement = if let Some(value) = variables.get(name) {
+                if stack.insert(name.to_owned()) {
+                    let resolved = resolve(value, variables, stack, depth + 1, expanded);
+                    stack.remove(name);
+                    resolved.or_else(|| {
+                        fallback.and_then(|fallback| {
+                            resolve(fallback, variables, stack, depth + 1, expanded)
+                        })
+                    })
+                } else {
+                    fallback.and_then(|fallback| {
+                        resolve(fallback, variables, stack, depth + 1, expanded)
+                    })
+                }
+            } else {
+                fallback
+                    .and_then(|fallback| resolve(fallback, variables, stack, depth + 1, expanded))
+            }?;
+            *expanded = expanded.saturating_add(replacement.len());
+            if *expanded > MAX_CUSTOM_PROPERTY_BYTES {
+                return None;
+            }
+            output.push_str(&replacement);
+            i = close + 1;
+            cursor = i;
+        }
+        output.push_str(source.get(cursor..)?);
+        *expanded = expanded.saturating_add(output.len());
+        (*expanded <= MAX_CUSTOM_PROPERTY_BYTES).then_some(output)
+    }
+
+    let mut expanded = 0;
+    resolve(
+        source,
+        variables,
+        &mut std::collections::HashSet::new(),
+        0,
+        &mut expanded,
+    )
+}
+
+fn matching_parenthesis(source: &str, open: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut i = open;
+    let mut quote = None;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(end_quote) = quote {
+            if byte == b'\\' {
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            if byte == end_quote {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' => quote = Some(byte),
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_var_arguments(source: &str) -> Option<(&str, Option<&str>)> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    let mut quote = None;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(end_quote) = quote {
+            if byte == b'\\' {
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            if byte == end_quote {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' => quote = Some(byte),
+            b'(' => depth += 1,
+            b')' => depth = depth.checked_sub(1)?,
+            b',' if depth == 0 => return Some((&source[..i], Some(&source[i + 1..]))),
+            _ => {}
+        }
+        i += 1;
+    }
+    (depth == 0).then_some((source, None))
+}
+
 fn declarations(input: &mut Parser<'_>, diagnostics: &mut Diagnostics) -> Vec<Declaration> {
     let mut result = vec![];
-    for (count, item) in RuleBodyParser::new(input, &mut Declarations).enumerate() {
+    let mut parser = Declarations::default();
+    for (count, item) in RuleBodyParser::new(input, &mut parser).enumerate() {
         if count == MAX_DECLARATIONS {
             diagnostics.limited = true;
             break;
@@ -472,7 +1080,17 @@ fn declarations(input: &mut Parser<'_>, diagnostics: &mut Diagnostics) -> Vec<De
             Err(_) => diagnostics.ignored += 1,
         }
     }
+    for (property, count) in parser.unsupported_properties {
+        record_unsupported(&mut diagnostics.unsupported_properties, &property, count);
+    }
     result
+}
+
+fn record_unsupported(target: &mut HashMap<String, usize>, name: &str, count: usize) {
+    let bounded_name: String = name.chars().take(128).collect();
+    if target.len() < 512 || target.contains_key(&bounded_name) {
+        *target.entry(bounded_name).or_default() += count;
+    }
 }
 fn user_agent(element: &Element, style: &mut ComputedStyle) {
     let tag = element.name.local.as_str();

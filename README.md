@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.3.4** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.3.5** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -104,12 +104,14 @@ reload pages or add history visits. Saved browsing history is shared across tabs
 
 Each loaded document has a dedicated child process for networking, HTML/CSS,
 JavaScript and image decoding. A full navigation starts a fresh process; the
-previous document and its process remain available until the new load succeeds.
+previous document remains available until the new load succeeds.
 Tab failures leave other tab processes and the browser controls running. Use
 **Reload tab** after a crash, or **Stop** / **Escape** to cancel pending work.
 A stalled load is terminated after 60 seconds; a stalled click after 10 seconds.
-Closing a tab terminates its workers. Workers also exit if the browser's pipe
-closes, including while loading or executing scripts. Blank tabs need no worker.
+After loading, a worker stays resident when the page has a JavaScript session or
+viewport-dependent CSS; static pages release it. Closing a tab terminates its
+workers. Workers also exit if the browser's pipe closes, including while loading
+or executing scripts. Blank tabs need no worker.
 
 Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
@@ -349,30 +351,15 @@ advanced inline `unicode-bidi` CSS, and website font downloads are not implement
 native text selection currently copies characters in visual order.
 CSS comes from stylesheet links, `<style>` elements and inline `style` attributes,
 with linked and embedded rules merged in document order. The supported
-subset includes:
+subset covers common document styling, basic page layout and viewport-responsive
+rules. Its full property and value matrix, layout limits, and unsupported cases are
+listed in the [CSS compatibility map](docs/css-compatibility.md).
 
-- Type, class, ID, compound, descendant, child, adjacent/general sibling and
-  attribute selectors, including value operators and `i`/`s` case flags.
-- `:root`, `:empty`, child-position selectors, `:nth-child`/`:nth-last-child`,
-  `:nth-of-type`/`:nth-last-of-type`, `:is`, `:where`, `:not`, link and initial checked states.
-  Hover, focus, active and visited selectors do not match this static presentation.
-- The author cascade, specificity, inheritance, inline precedence and CSS-wide keywords.
-  Selector indexing avoids testing unrelated rules while retaining a shared
-  eight-million-step matching ceiling.
-- Nested screen/all media groups, `only screen`, `only all` and `not print`.
-  Viewport/feature-dependent queries, other at-rules and CSS variables remain unsupported.
-- Text styles, whitespace modes, colors, borders, rounded corners, spacing, widths,
-  minimum heights, content-box/border-box sizing, `direction`, and
-  `display: block`, `inline`, `inline-block` (block fallback), or `none`.
-
-Stylesheets share an 8 MiB input budget, 32,768 rules, 512 declarations per block,
-128 selectors per rule, and eight levels of media/functional-selector nesting.
-The browser still does not implement flex/grid layout, positioned content,
-SVG, downloaded fonts, CSS variables or viewport-responsive media queries.
-The [compatibility example](examples/compatibility.html) exercises the new selectors,
-RTL text and border-box sizing.
-Unsupported CSS is skipped and reported in the status bar. See the [styled
-example](examples/styled.html) for a working sample.
+The browser recomputes CSS when the content viewport changes, including zoom and
+window resizing. Unsupported property names appear in the status bar and Developer
+tools; invalid or unsupported values are counted with ignored declarations. The
+[compatibility example](examples/compatibility.html) covers selectors, variables,
+responsive rules, flex, grid, positioning and paint.
 
 JavaScript uses [Boa](https://docs.rs/boa_engine/0.22.0/boa_engine/) and runs
 inline and preloaded external classic scripts after the document is parsed, in

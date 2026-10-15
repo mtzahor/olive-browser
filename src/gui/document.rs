@@ -45,6 +45,8 @@ pub struct PageUpdate {
     pub resources: ResourceReport,
     #[serde(default)]
     pub session_available: bool,
+    #[serde(default)]
+    pub presentation_available: bool,
     pub alert: Option<String>,
     pub link: Option<String>,
     #[serde(default)]
@@ -53,8 +55,11 @@ pub struct PageUpdate {
 pub struct PreparedPage {
     pub loaded: LoadedPage,
     pub session: Option<DocumentSession>,
+    document: Option<olive_html::Document>,
     pub styles: HashMap<NodeId, ExternalSource>,
     pub images: HashMap<NodeId, ImageAsset>,
+    stylesheet: Stylesheet,
+    viewport: (f32, f32),
 }
 
 /// Build the first visible page from the parsed document before waiting on linked resources.
@@ -127,7 +132,7 @@ pub fn prepare_page_with_parsed(
     );
     let mut resource_report = resources.report;
     let images = decode_images(&resources.images, &mut resource_report);
-    let (page, reading, base, scripts, session) = if scripting_enabled {
+    let (page, reading, base, scripts, session, document, stylesheet) = if scripting_enabled {
         let session = DocumentSession::with_sources_and_cookies(
             parsed.document,
             ScriptOptions::browser(),
@@ -135,7 +140,7 @@ pub fn prepare_page_with_parsed(
             loader.cookies(),
             source.location.clone(),
         );
-        let (page, reading, base) = session.with_document(|document| {
+        let (page, reading, base, sheet) = session.with_document(|document| {
             let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
             let reading = Page::reading_with_base(
                 document,
@@ -145,12 +150,21 @@ pub fn prepare_page_with_parsed(
                 Some(&source.location.document_base(document)),
             );
             (
-                Page::with_stylesheet_and_images(document, true, sheet, &images),
+                Page::with_stylesheet_and_images(document, true, sheet.clone(), &images),
                 reading,
                 source.location.document_base(document),
+                sheet,
             )
         });
-        (page, reading, base, session.report().clone(), Some(session))
+        (
+            page,
+            reading,
+            base,
+            session.report().clone(),
+            Some(session),
+            None,
+            sheet,
+        )
     } else {
         let document = parsed.document;
         let sheet = Stylesheet::from_document_with_sources(&document, &resources.styles);
@@ -161,13 +175,15 @@ pub fn prepare_page_with_parsed(
             &images,
             Some(&source.location.document_base(&document)),
         );
-        let page = Page::with_stylesheet_and_images(&document, false, sheet, &images);
+        let page = Page::with_stylesheet_and_images(&document, false, sheet.clone(), &images);
         (
             page,
             reading,
             source.location.document_base(&document),
             ScriptReport::default(),
             None,
+            Some(document),
+            sheet,
         )
     };
     let mut cookie_updates = loader.take_cookie_updates();
@@ -190,8 +206,11 @@ pub fn prepare_page_with_parsed(
             cookie_updates,
         },
         session,
+        document,
         styles: resources.styles,
         images,
+        stylesheet,
+        viewport: (1024.0, 768.0),
     })
 }
 
@@ -310,20 +329,32 @@ fn color_image(width: u32, height: u32, rgba: &[u8]) -> std::sync::Arc<egui::Col
 }
 
 impl PreparedPage {
+    pub fn presentation_available(&self) -> bool {
+        self.session.is_some() || self.stylesheet.needs_viewport_reflow()
+    }
+
     pub fn click(&mut self, click: ClickRequest) -> Option<PageUpdate> {
         let session = self.session.as_mut()?;
         let allowed = session.click(click.target);
+        let viewport = self.viewport;
         let (page, reading, base) = session.with_document(|document| {
             let sheet = Stylesheet::from_document_with_sources(document, &self.styles);
-            let reading = Page::reading_with_base(
+            let reading = Page::reading_with_base_at_viewport(
                 document,
                 true,
                 &sheet,
                 &self.images,
                 Some(&self.loaded.location.document_base(document)),
+                viewport,
             );
             (
-                Page::with_stylesheet_and_images(document, true, sheet, &self.images),
+                Page::with_stylesheet_and_images_at_viewport(
+                    document,
+                    true,
+                    sheet,
+                    &self.images,
+                    viewport,
+                ),
                 reading,
                 self.loaded.location.document_base(document),
             )
@@ -337,9 +368,62 @@ impl PreparedPage {
             scripts: session.report().clone(),
             resources: self.loaded.resources.clone(),
             session_available: true,
+            presentation_available: true,
             alert: session.take_alerts().into_iter().next(),
             link: if allowed { click.href } else { None },
             cookie_updates,
+        })
+    }
+
+    pub fn resize(&mut self, viewport: (f32, f32)) -> Option<PageUpdate> {
+        let viewport = (
+            viewport.0.clamp(1.0, 10_000.0),
+            viewport.1.clamp(1.0, 10_000.0),
+        );
+        let styles = &self.styles;
+        let images = &self.images;
+        let location = &self.loaded.location;
+        let scripting_enabled = self.loaded.scripting_enabled;
+        let make_pages = |document: &olive_html::Document| {
+            let sheet = Stylesheet::from_document_with_sources(document, styles);
+            let base = location.document_base(document);
+            let reading = Page::reading_with_base_at_viewport(
+                document,
+                scripting_enabled,
+                &sheet,
+                images,
+                Some(&base),
+                viewport,
+            );
+            let page = Page::with_stylesheet_and_images_at_viewport(
+                document,
+                scripting_enabled,
+                sheet.clone(),
+                images,
+                viewport,
+            );
+            (page, reading, base, sheet)
+        };
+        let (page, reading, base, sheet) = if let Some(session) = self.session.as_mut() {
+            session.with_document(make_pages)
+        } else {
+            make_pages(self.document.as_ref()?)
+        };
+        self.viewport = viewport;
+        self.stylesheet = sheet;
+        self.loaded.base = base.clone();
+        Some(PageUpdate {
+            default_allowed: false,
+            page,
+            reading,
+            base,
+            scripts: self.loaded.scripts.clone(),
+            resources: self.loaded.resources.clone(),
+            session_available: self.session.is_some(),
+            presentation_available: true,
+            alert: None,
+            link: None,
+            cookie_updates: Vec::new(),
         })
     }
 }
