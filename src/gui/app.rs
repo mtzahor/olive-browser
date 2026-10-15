@@ -414,7 +414,7 @@ impl Tab {
             let pending = self.pending.take().unwrap();
             match event {
                 Ok(Event::Loaded(mut loaded)) => {
-                    let keep_worker = true;
+                    let keep_worker = loaded.scripting_enabled || loaded.resources.pending;
                     let resources_pending = loaded.resources.pending;
                     shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history

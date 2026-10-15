@@ -221,7 +221,7 @@ struct Builder {
     open_boxes: usize,
 }
 enum Visit {
-    Enter(NodeId, Style),
+    Enter(NodeId, Box<Style>),
     Exit { block: bool, list: bool },
 }
 impl Page {
@@ -384,7 +384,7 @@ impl Page {
         }
         let mut pending = vec![Visit::Enter(
             reading.map_or(doc.root(), |content| content.root),
-            initial,
+            Box::new(initial),
         )];
         let controls: HashMap<_, _> = builder
             .page
@@ -400,7 +400,7 @@ impl Page {
                 break;
             }
             let (id, mut style) = match visit {
-                Visit::Enter(id, style) => (id, style),
+                Visit::Enter(id, style) => (id, *style),
                 Visit::Exit { block, list } => {
                     if block {
                         builder.close();
@@ -591,7 +591,7 @@ impl Page {
                 children
                     .into_iter()
                     .rev()
-                    .map(|child| Visit::Enter(child, child_style)),
+                    .map(|child| Visit::Enter(child, Box::new(child_style))),
             );
         }
         builder.flush();
@@ -1464,6 +1464,8 @@ fn has_direct_text(commands: &[Command], open_index: usize, remaining_steps: &mu
     !completed
 }
 
+// These borrowed inputs are one render pass's shared measurement context.
+#[allow(clippy::too_many_arguments)]
 fn flex_layouts(
     commands: &[Command],
     boxes: &[ComputedStyle],
@@ -1737,6 +1739,8 @@ impl BoxLayout {
         None
     }
 
+    // Keep the layout pass inputs borrowed rather than cloning page structures.
+    #[allow(clippy::too_many_arguments)]
     fn open(
         index: usize,
         style: ComputedStyle,
@@ -1957,7 +1961,7 @@ impl BoxLayout {
             let fill = paint_color(shadow.color, self.style.opacity * alpha_scale);
             let shape = egui::epaint::RectShape::new(
                 shadow_rect,
-                radius.saturating_add(expansion.max(0.0).min(255.0) as u8),
+                radius.saturating_add(expansion.clamp(0.0, 255.0) as u8),
                 fill,
                 Stroke::NONE,
                 egui::StrokeKind::Inside,

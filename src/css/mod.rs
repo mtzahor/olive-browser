@@ -246,6 +246,13 @@ fn parse_media_branch(source: &str) -> Option<MediaBranch> {
     Some(condition)
 }
 
+fn media_attribute(source: Option<&str>) -> MediaCondition {
+    match source {
+        None => MediaCondition::default(),
+        Some(source) => parse_media_query(source).unwrap_or_else(MediaCondition::never),
+    }
+}
+
 /// Counts rejected syntax/features and reports an exceeded processing limit.
 #[derive(Clone, Debug, Default)]
 pub struct Diagnostics {
@@ -330,10 +337,7 @@ impl Stylesheet {
                     .get(&id)
                     .filter(|source| element.attribute("href") == Some(source.reference.as_str()))
                 {
-                    let media = element
-                        .attribute("media")
-                        .and_then(parse_media_query)
-                        .unwrap_or_else(MediaCondition::never);
+                    let media = media_attribute(element.attribute("media"));
                     sheet.append_with_media(&source.source, media);
                 }
                 continue;
@@ -345,10 +349,7 @@ impl Stylesheet {
                     _ => None,
                 })
                 .collect();
-            let media = element
-                .attribute("media")
-                .and_then(parse_media_query)
-                .unwrap_or_else(MediaCondition::never);
+            let media = media_attribute(element.attribute("media"));
             sheet.append_with_media(&source, media);
         }
         sheet

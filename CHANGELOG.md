@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.6 — CSS and worker stability fixes
+
+- Apply linked and inline stylesheets when their `media` attribute is omitted.
+- Release completed page workers when neither scripts nor page resources remain.
+- Resolve CI Clippy failures without changing the documented CSS support limits.
+
 ## 1.3.5 — Bounded CSS layout compatibility
 
 - Add inherited custom properties with bounded `var()` expansion, linear `calc()`
