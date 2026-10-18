@@ -37,9 +37,10 @@ Seatbelt profile denying `file-write*`. Linux workers apply a Landlock ruleset
 before starting any threads; it denies filesystem write operations and requires
 Landlock ABI v3 so truncate operations are covered. Windows launches a second
 copy of the browser under a `WRITE_RESTRICTED` token with the Restricted Code
-SID, and places it in a kill-on-close job so worker descendants stop with the
-tab. All three policies preserve local file reads and network access. Linux or
-Windows worker startup fails closed if its restriction cannot be established.
+SID on a private window station and desktop, and places it in a kill-on-close
+job so worker descendants stop with the tab. All three policies preserve local
+file reads and network access. Linux or Windows worker startup fails closed if
+its restriction cannot be established.
 The Windows token still relies on file ACLs for the Restricted Code SID, so an
 object whose ACL explicitly grants that SID can remain writable. `sandbox-exec`
 is deprecated by Apple, so the macOS path is an initial containment layer rather

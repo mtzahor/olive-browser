@@ -20,8 +20,11 @@ use windows_sys::Win32::{
     },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
-        CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, LUA_TOKEN, SID_AND_ATTRIBUTES,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, WRITE_RESTRICTED,
+        ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
+        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, LUA_TOKEN,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        WRITE_RESTRICTED,
     },
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
@@ -30,13 +33,22 @@ use windows_sys::Win32::{
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         },
+        StationsAndDesktops::{
+            CloseDesktop, CloseWindowStation, CreateDesktopW, CreateWindowStationW,
+            GetProcessWindowStation, HDESK, HWINSTA, SetProcessWindowStation,
+        },
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess,
-            GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
-            STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+            GetCurrentProcessId, GetExitCodeProcess, INFINITE, OpenProcessToken,
+            PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW,
+            TerminateProcess, WaitForSingleObject,
         },
     },
+    UI::WindowsAndMessaging::WINSTA_ALL_ACCESS,
 };
+
+const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+const DESKTOP_ALL_ACCESS: u32 = 0x000F01FF;
 
 pub(super) fn launch_worker() -> Result<u32, String> {
     validate_launcher_arguments()?;
@@ -74,14 +86,16 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.hStdInput = std_handle(STD_INPUT_HANDLE)?;
     startup.hStdOutput = std_handle(STD_OUTPUT_HANDLE)?;
     startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
+    let process_token = open_current_process_token()?;
+    let restricted_sid = restricted_code_sid()?;
+    let worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
+    startup.lpDesktop = worker_desktop.path.as_ptr();
     // std::process may provide non-inheritable duplicates for this broker's
     // pipes. The nested worker needs these three protocol handles explicitly
     // marked inheritable while CreateProcessAsUserW starts it.
     let inherited_handles =
         InheritableHandles::new([startup.hStdInput, startup.hStdOutput, startup.hStdError])?;
 
-    let process_token = open_current_process_token()?;
-    let restricted_sid = restricted_code_sid()?;
     let restricted_sid_entry = SID_AND_ATTRIBUTES {
         Sid: restricted_sid.0,
         Attributes: 0,
@@ -176,6 +190,220 @@ fn restricted_code_sid() -> io::Result<OwnedSid> {
         ));
     }
     Ok(OwnedSid(sid))
+}
+
+fn create_worker_desktop(
+    process_token: HANDLE,
+    restricted_sid: *mut core::ffi::c_void,
+) -> io::Result<WorkerDesktop> {
+    let user_sid = token_user_sid(process_token)?;
+    let station_security =
+        ObjectSecurity::new([user_sid.sid, restricted_sid], WINSTA_ALL_ACCESS as u32)?;
+    let desktop_security = ObjectSecurity::new([user_sid.sid, restricted_sid], DESKTOP_ALL_ACCESS)?;
+
+    let station_name = wide_nul(OsStr::new(&format!("OliveWorker-{}", unsafe {
+        GetCurrentProcessId()
+    })));
+    let desktop_name = wide_nul(OsStr::new("Worker"));
+    let desktop_path = wide_nul(OsStr::new(&format!(
+        "{}\\Worker",
+        String::from_utf16_lossy(&station_name[..station_name.len() - 1])
+    )));
+
+    // The restricted token needs its own non-interactive window station and
+    // desktop. The DACL grants access only to the current user and the
+    // Restricted Code SID used by the write-restricted token.
+    // SAFETY: the name is NUL-terminated and the security descriptor and ACL
+    // remain alive for the duration of the call.
+    let raw_station = unsafe {
+        CreateWindowStationW(
+            station_name.as_ptr(),
+            0,
+            WINSTA_ALL_ACCESS as u32,
+            &station_security.attributes,
+        )
+    };
+    let station = OwnedWindowStation::new(raw_station)?;
+    // SAFETY: this broker has no UI threads or windows; the original station
+    // is restored by WorkerDesktop::drop after the restricted child exits.
+    let original_station = unsafe { GetProcessWindowStation() };
+    if original_station.is_null() {
+        return Err(last_os_error("GetProcessWindowStation"));
+    }
+    // SAFETY: station is a valid window-station handle created above.
+    if unsafe { SetProcessWindowStation(station.0) } == 0 {
+        return Err(last_os_error("SetProcessWindowStation"));
+    }
+    // SAFETY: desktop_name is NUL-terminated and its DACL remains alive for
+    // the duration of the call. A null device and DEVMODE select defaults.
+    let raw_desktop = unsafe {
+        CreateDesktopW(
+            desktop_name.as_ptr(),
+            null(),
+            null(),
+            0,
+            DESKTOP_ALL_ACCESS,
+            &desktop_security.attributes,
+        )
+    };
+    if raw_desktop.is_null() {
+        let error = last_os_error("CreateDesktopW");
+        // SAFETY: original_station is the borrowed station handle captured
+        // before switching this process to the private station.
+        unsafe { SetProcessWindowStation(original_station) };
+        return Err(error);
+    }
+    Ok(WorkerDesktop {
+        _station: station,
+        _desktop: OwnedDesktop(raw_desktop),
+        original_station,
+        path: desktop_path,
+    })
+}
+
+struct TokenUserSid {
+    _storage: Vec<usize>,
+    sid: *mut core::ffi::c_void,
+}
+
+fn token_user_sid(token: HANDLE) -> io::Result<TokenUserSid> {
+    let mut required = 0u32;
+    // SAFETY: this size query uses a null output pointer and requests the
+    // required buffer length for TokenUser.
+    unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut required) };
+    if required == 0 {
+        return Err(last_os_error("GetTokenInformation(TokenUser size)"));
+    }
+    let words = (required as usize).div_ceil(size_of::<usize>());
+    let mut storage = vec![0usize; words];
+    // SAFETY: storage is pointer-aligned and large enough for the size queried
+    // above; the API initializes a TOKEN_USER structure in this buffer.
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            storage.as_mut_ptr().cast(),
+            (storage.len() * size_of::<usize>()) as u32,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(last_os_error("GetTokenInformation(TokenUser)"));
+    }
+    // SAFETY: the successful TokenUser query wrote a valid TOKEN_USER at the
+    // start of the aligned buffer, which remains owned by the returned value.
+    let user = unsafe { &*(storage.as_ptr().cast::<TOKEN_USER>()) };
+    if user.User.Sid.is_null() {
+        return Err(io::Error::other("TokenUser returned a null SID"));
+    }
+    Ok(TokenUserSid {
+        _storage: storage,
+        sid: user.User.Sid,
+    })
+}
+
+struct ObjectSecurity {
+    _acl: Vec<u64>,
+    _descriptor: Box<SECURITY_DESCRIPTOR>,
+    attributes: SECURITY_ATTRIBUTES,
+}
+
+impl ObjectSecurity {
+    fn new(sids: [*mut core::ffi::c_void; 2], access: u32) -> io::Result<Self> {
+        // Two ACEs fit comfortably in this aligned ACL buffer.
+        let mut acl = vec![0u64; 128];
+        let acl_ptr = acl.as_mut_ptr().cast();
+        // SAFETY: acl_ptr addresses a writable, correctly aligned buffer of
+        // 1024 bytes, enough for two access-allowed ACEs and their SIDs.
+        if unsafe { InitializeAcl(acl_ptr, (acl.len() * size_of::<u64>()) as u32, ACL_REVISION) }
+            == 0
+        {
+            return Err(last_os_error("InitializeAcl"));
+        }
+        for sid in sids {
+            // SAFETY: each SID is valid for this call and acl_ptr has capacity
+            // for both entries.
+            if unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, access, sid) } == 0 {
+                return Err(last_os_error("AddAccessAllowedAce"));
+            }
+        }
+        let mut descriptor = Box::<SECURITY_DESCRIPTOR>::default();
+        // SAFETY: descriptor and ACL are live, writable Win32 structures.
+        if unsafe {
+            InitializeSecurityDescriptor(
+                (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+                SECURITY_DESCRIPTOR_REVISION,
+            )
+        } == 0
+        {
+            return Err(last_os_error("InitializeSecurityDescriptor"));
+        }
+        // SAFETY: the descriptor points to the live ACL owned by this value.
+        if unsafe {
+            SetSecurityDescriptorDacl(
+                (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+                1,
+                acl_ptr,
+                0,
+            )
+        } == 0
+        {
+            return Err(last_os_error("SetSecurityDescriptorDacl"));
+        }
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+            bInheritHandle: 0,
+        };
+        Ok(Self {
+            _acl: acl,
+            _descriptor: descriptor,
+            attributes,
+        })
+    }
+}
+
+struct WorkerDesktop {
+    _station: OwnedWindowStation,
+    _desktop: OwnedDesktop,
+    original_station: HWINSTA,
+    path: Vec<u16>,
+}
+
+impl Drop for WorkerDesktop {
+    fn drop(&mut self) {
+        // SAFETY: original_station is the borrowed station handle captured
+        // before switching this launcher to its private window station.
+        unsafe { SetProcessWindowStation(self.original_station) };
+    }
+}
+
+struct OwnedWindowStation(HWINSTA);
+
+impl OwnedWindowStation {
+    fn new(handle: HWINSTA) -> io::Result<Self> {
+        if handle.is_null() {
+            Err(last_os_error("CreateWindowStationW"))
+        } else {
+            Ok(Self(handle))
+        }
+    }
+}
+
+impl Drop for OwnedWindowStation {
+    fn drop(&mut self) {
+        // SAFETY: this wrapper owns the handle returned by CreateWindowStationW.
+        unsafe { CloseWindowStation(self.0) };
+    }
+}
+
+struct OwnedDesktop(HDESK);
+
+impl Drop for OwnedDesktop {
+    fn drop(&mut self) {
+        // SAFETY: this wrapper owns the handle returned by CreateDesktopW.
+        unsafe { CloseDesktop(self.0) };
+    }
 }
 
 fn create_write_restricted_token(
