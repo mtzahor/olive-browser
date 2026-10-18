@@ -440,8 +440,9 @@ pass.
 Input, script, CSS, DOM, and preview work are bounded. These limits protect the
 viewer from oversized or pathological documents. Tab processes contain document
 crashes and have operation deadlines. The macOS and Linux worker sandboxes block
-filesystem writes; Windows uses a write-restricted token. Workers can still read
-files and use the network, and no platform has a hard memory ceiling. See
+filesystem writes; Windows uses a low-integrity token to block writes to
+medium- and higher-integrity objects. Workers can still read files and use the
+network, and no platform has a hard memory ceiling. See
 [SECURITY.md](SECURITY.md) for the trust boundary and current limits.
 
 ## Development

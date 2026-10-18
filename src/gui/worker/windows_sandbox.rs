@@ -1,8 +1,8 @@
-//! Windows launcher for write-restricted tab workers.
+//! Windows launcher for low-integrity tab workers.
 //!
 //! The small Win32 boundary is kept in this module. The parent starts this
 //! executable as a broker; this function starts a second copy with a
-//! write-restricted token, preserving the inherited worker pipes.
+//! low-integrity token, preserving the inherited worker pipes.
 
 use std::{
     ffi::OsStr,
@@ -15,19 +15,17 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GENERIC_ALL, GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
+        CloseHandle, GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
         INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, WAIT_OBJECT_0,
     },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
-        ACE_HEADER, ACL, ACL_REVISION, ACL_SIZE_INFORMATION, AclSizeInformation,
-        AddAccessAllowedAce, AddAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, GetAce,
-        GetAclInformation, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor,
-        LUA_TOKEN, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES,
-        SetSecurityDescriptorDacl, SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
-        TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenUser,
-        WRITE_RESTRICTED,
+        CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, GetLengthSid, LUA_TOKEN, SID_AND_ATTRIBUTES,
+        SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
+        TOKEN_MANDATORY_LABEL, TOKEN_MANDATORY_POLICY, TOKEN_MANDATORY_POLICY_NO_WRITE_UP,
+        TOKEN_QUERY, TokenIntegrityLevel, TokenMandatoryPolicy,
     },
+    System::SystemServices::SE_GROUP_INTEGRITY,
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
         JobObjects::{
@@ -35,22 +33,13 @@ use windows_sys::Win32::{
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         },
-        StationsAndDesktops::{
-            CloseDesktop, CloseWindowStation, CreateDesktopW, CreateWindowStationW,
-            GetProcessWindowStation, HDESK, HWINSTA, SetProcessWindowStation,
-        },
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess,
-            GetCurrentProcessId, GetExitCodeProcess, INFINITE, OpenProcessToken,
-            PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW,
-            TerminateProcess, WaitForSingleObject,
+            GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
+            STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
         },
     },
-    UI::WindowsAndMessaging::WINSTA_ALL_ACCESS,
 };
-
-const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
-const DESKTOP_ALL_ACCESS: u32 = 0x000F01FF;
 
 pub(super) fn launch_worker() -> Result<u32, String> {
     validate_launcher_arguments()?;
@@ -89,21 +78,13 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.hStdOutput = std_handle(STD_OUTPUT_HANDLE)?;
     startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
     let process_token = open_current_process_token()?;
-    let restricted_sid = restricted_code_sid()?;
-    let worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
-    startup.lpDesktop = worker_desktop.path.as_ptr().cast_mut();
     // std::process may provide non-inheritable duplicates for this broker's
     // pipes. The nested worker needs these three protocol handles explicitly
     // marked inheritable while CreateProcessAsUserW starts it.
     let inherited_handles =
         InheritableHandles::new([startup.hStdInput, startup.hStdOutput, startup.hStdError])?;
 
-    let restricted_sid_entry = SID_AND_ATTRIBUTES {
-        Sid: restricted_sid.0,
-        Attributes: 0,
-    };
-    let restricted_token = create_write_restricted_token(process_token.0, &restricted_sid_entry)?;
-    add_restricted_sid_to_default_dacl(process_token.0, restricted_token.0, restricted_sid.0)?;
+    let restricted_token = create_low_integrity_token(process_token.0)?;
     let job = create_kill_on_close_job()?;
 
     let mut process_info = PROCESS_INFORMATION::default();
@@ -180,10 +161,6 @@ fn open_current_process_token() -> io::Result<OwnedHandle> {
     OwnedHandle::new(token, "process token")
 }
 
-fn restricted_code_sid() -> io::Result<OwnedSid> {
-    sid_from_text("S-1-5-12")
-}
-
 fn sid_from_text(value: &str) -> io::Result<OwnedSid> {
     let sid_text = wide_nul(OsStr::new(value));
     let mut sid = null_mut();
@@ -199,368 +176,68 @@ fn sid_from_text(value: &str) -> io::Result<OwnedSid> {
     Ok(OwnedSid(sid))
 }
 
-fn create_worker_desktop(
-    process_token: HANDLE,
-    restricted_sid: *mut core::ffi::c_void,
-) -> io::Result<WorkerDesktop> {
-    let user_sid = token_user_sid(process_token)?;
-    let system_sid = sid_from_text("S-1-5-18")?;
-    let station_security = ObjectSecurity::new(
-        [user_sid.sid, restricted_sid, system_sid.0],
-        WINSTA_ALL_ACCESS as u32,
-    )?;
-    let desktop_security = ObjectSecurity::new(
-        [user_sid.sid, restricted_sid, system_sid.0],
-        DESKTOP_ALL_ACCESS,
-    )?;
-
-    let station_name = wide_nul(OsStr::new(&format!("OliveWorker-{}", unsafe {
-        GetCurrentProcessId()
-    })));
-    let desktop_name = wide_nul(OsStr::new("Worker"));
-    let desktop_path = wide_nul(OsStr::new(&format!(
-        "{}\\Worker",
-        String::from_utf16_lossy(&station_name[..station_name.len() - 1])
-    )));
-
-    // The restricted token gets a separate window station and desktop. Their
-    // DACLs grant access to the current user, SYSTEM, and Restricted Code.
-    // SAFETY: the name is NUL-terminated and the security descriptor and ACL
-    // remain alive for the duration of the call.
-    let raw_station = unsafe {
-        CreateWindowStationW(
-            station_name.as_ptr(),
-            0,
-            WINSTA_ALL_ACCESS as u32,
-            &station_security.attributes,
-        )
-    };
-    let station = OwnedWindowStation::new(raw_station)?;
-    // SAFETY: GetProcessWindowStation returns the current process's borrowed
-    // window-station handle; it remains valid for this launcher's lifetime.
-    let original_station = unsafe { GetProcessWindowStation() };
-    if original_station.is_null() {
-        return Err(last_os_error("GetProcessWindowStation"));
-    }
-    // SAFETY: station is a valid station handle created above.
-    if unsafe { SetProcessWindowStation(station.0) } == 0 {
-        return Err(last_os_error("SetProcessWindowStation"));
-    }
-
-    // SAFETY: desktop_name is NUL-terminated and its DACL remains alive for
-    // the duration of the call. A null device and DEVMODE select defaults.
-    let raw_desktop = unsafe {
-        CreateDesktopW(
-            desktop_name.as_ptr(),
-            null(),
-            null(),
-            0,
-            DESKTOP_ALL_ACCESS,
-            &desktop_security.attributes,
-        )
-    };
-    if raw_desktop.is_null() {
-        let error = last_os_error("CreateDesktopW");
-        // SAFETY: original_station is the borrowed station captured above.
-        unsafe { SetProcessWindowStation(original_station) };
-        return Err(error);
-    }
-    Ok(WorkerDesktop {
-        _desktop: OwnedDesktop(raw_desktop),
-        _station: station,
-        original_station,
-        path: desktop_path,
-    })
-}
-
-struct TokenUserSid {
-    _storage: Vec<usize>,
-    sid: *mut core::ffi::c_void,
-}
-
-fn token_user_sid(token: HANDLE) -> io::Result<TokenUserSid> {
-    let mut required = 0u32;
-    // SAFETY: this size query uses a null output pointer and requests the
-    // required buffer length for TokenUser.
-    unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut required) };
-    if required == 0 {
-        return Err(last_os_error("GetTokenInformation(TokenUser size)"));
-    }
-    let words = (required as usize).div_ceil(size_of::<usize>());
-    let mut storage = vec![0usize; words];
-    // SAFETY: storage is pointer-aligned and large enough for the size queried
-    // above; the API initializes a TOKEN_USER structure in this buffer.
-    if unsafe {
-        GetTokenInformation(
-            token,
-            TokenUser,
-            storage.as_mut_ptr().cast(),
-            (storage.len() * size_of::<usize>()) as u32,
-            &mut required,
-        )
-    } == 0
-    {
-        return Err(last_os_error("GetTokenInformation(TokenUser)"));
-    }
-    // SAFETY: the successful TokenUser query wrote a valid TOKEN_USER at the
-    // start of the aligned buffer, which remains owned by the returned value.
-    let user = unsafe { &*(storage.as_ptr().cast::<TOKEN_USER>()) };
-    if user.User.Sid.is_null() {
-        return Err(io::Error::other("TokenUser returned a null SID"));
-    }
-    Ok(TokenUserSid {
-        _storage: storage,
-        sid: user.User.Sid,
-    })
-}
-
-struct ObjectSecurity {
-    _acl: Vec<u64>,
-    _descriptor: Box<SECURITY_DESCRIPTOR>,
-    attributes: SECURITY_ATTRIBUTES,
-}
-
-impl ObjectSecurity {
-    fn new(sids: [*mut core::ffi::c_void; 3], access: u32) -> io::Result<Self> {
-        // Three ACEs fit comfortably in this aligned ACL buffer.
-        let mut acl = vec![0u64; 128];
-        let acl_ptr = acl.as_mut_ptr().cast();
-        // SAFETY: acl_ptr addresses a writable, correctly aligned buffer of
-        // 1024 bytes, enough for three access-allowed ACEs and their SIDs.
-        if unsafe { InitializeAcl(acl_ptr, (acl.len() * size_of::<u64>()) as u32, ACL_REVISION) }
-            == 0
-        {
-            return Err(last_os_error("InitializeAcl"));
-        }
-        for sid in sids {
-            // SAFETY: each SID is valid for this call and acl_ptr has capacity
-            // for all three entries.
-            if unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, access, sid) } == 0 {
-                return Err(last_os_error("AddAccessAllowedAce"));
-            }
-        }
-        let mut descriptor = Box::<SECURITY_DESCRIPTOR>::default();
-        // SAFETY: descriptor and ACL are live, writable Win32 structures.
-        if unsafe {
-            InitializeSecurityDescriptor(
-                (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-                SECURITY_DESCRIPTOR_REVISION,
-            )
-        } == 0
-        {
-            return Err(last_os_error("InitializeSecurityDescriptor"));
-        }
-        // SAFETY: the descriptor points to the live ACL owned by this value.
-        if unsafe {
-            SetSecurityDescriptorDacl(
-                (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-                1,
-                acl_ptr,
-                0,
-            )
-        } == 0
-        {
-            return Err(last_os_error("SetSecurityDescriptorDacl"));
-        }
-        let attributes = SECURITY_ATTRIBUTES {
-            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: (&mut *descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-            bInheritHandle: 0,
-        };
-        Ok(Self {
-            _acl: acl,
-            _descriptor: descriptor,
-            attributes,
-        })
-    }
-}
-
-struct WorkerDesktop {
-    _desktop: OwnedDesktop,
-    _station: OwnedWindowStation,
-    original_station: HWINSTA,
-    path: Vec<u16>,
-}
-
-impl Drop for WorkerDesktop {
-    fn drop(&mut self) {
-        // SAFETY: original_station is the borrowed station captured before
-        // switching this launcher to its private window station.
-        unsafe { SetProcessWindowStation(self.original_station) };
-    }
-}
-
-struct OwnedWindowStation(HWINSTA);
-
-impl OwnedWindowStation {
-    fn new(handle: HWINSTA) -> io::Result<Self> {
-        if handle.is_null() {
-            Err(last_os_error("CreateWindowStationW"))
-        } else {
-            Ok(Self(handle))
-        }
-    }
-}
-
-impl Drop for OwnedWindowStation {
-    fn drop(&mut self) {
-        // SAFETY: this wrapper owns the handle returned by CreateWindowStationW.
-        unsafe { CloseWindowStation(self.0) };
-    }
-}
-
-struct OwnedDesktop(HDESK);
-
-impl Drop for OwnedDesktop {
-    fn drop(&mut self) {
-        // SAFETY: this wrapper owns the handle returned by CreateDesktopW.
-        unsafe { CloseDesktop(self.0) };
-    }
-}
-
-fn create_write_restricted_token(
-    process_token: HANDLE,
-    restricted_sid: &SID_AND_ATTRIBUTES,
-) -> io::Result<OwnedHandle> {
+fn create_low_integrity_token(process_token: HANDLE) -> io::Result<OwnedHandle> {
     let mut token = null_mut();
-    // WRITE_RESTRICTED makes the restricted-code SID participate in write
-    // access checks while leaving normal read and network access available.
-    // SAFETY: the source token and SID are valid, the SID attributes are zero,
-    // and token points to writable output storage.
+    // Keep LUA token restrictions and remove privileges, then rely on
+    // Mandatory Integrity Control to block writes to medium and higher ILs.
+    // SAFETY: process_token is a primary token with TOKEN_DUPLICATE access and
+    // token points to writable output storage.
     if unsafe {
         CreateRestrictedToken(
             process_token,
-            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
             0,
             null(),
             0,
             null(),
-            1,
-            restricted_sid,
+            0,
+            null(),
             &mut token,
         )
     } == 0
     {
         return Err(last_os_error("CreateRestrictedToken"));
     }
-    OwnedHandle::new(token, "restricted worker token")
+    let token = OwnedHandle::new(token, "low-integrity worker token")?;
+    set_low_integrity_level(token.0)?;
+    Ok(token)
 }
 
-fn add_restricted_sid_to_default_dacl(
-    source_token: HANDLE,
-    restricted_token: HANDLE,
-    restricted_sid: *mut core::ffi::c_void,
-) -> io::Result<()> {
-    let mut required = 0u32;
-    // SAFETY: this size query asks for the required TokenDefaultDacl buffer.
-    unsafe { GetTokenInformation(source_token, TokenDefaultDacl, null_mut(), 0, &mut required) };
-    if required == 0 {
-        return Err(last_os_error("GetTokenInformation(TokenDefaultDacl size)"));
-    }
-    let words = (required as usize).div_ceil(size_of::<usize>());
-    let mut source_storage = vec![0usize; words];
-    // SAFETY: source_storage is aligned and large enough for the queried token
-    // information, including the ACL referenced by TOKEN_DEFAULT_DACL.
-    if unsafe {
-        GetTokenInformation(
-            source_token,
-            TokenDefaultDacl,
-            source_storage.as_mut_ptr().cast(),
-            (source_storage.len() * size_of::<usize>()) as u32,
-            &mut required,
-        )
-    } == 0
-    {
-        return Err(last_os_error("GetTokenInformation(TokenDefaultDacl)"));
-    }
-    // SAFETY: the successful query wrote TOKEN_DEFAULT_DACL at the start of
-    // the aligned buffer; its ACL pointer remains valid while source_storage lives.
-    let source = unsafe { &*(source_storage.as_ptr().cast::<TOKEN_DEFAULT_DACL>()) };
-    let source_acl = source.DefaultDacl;
-
-    let mut size_information = ACL_SIZE_INFORMATION::default();
-    let revision = if source_acl.is_null() {
-        ACL_REVISION
-    } else {
-        // SAFETY: source_acl points into the successful TokenDefaultDacl buffer.
-        let source_revision = unsafe { (*source_acl).AclRevision as u32 };
-        // SAFETY: source_acl is a valid ACL and size_information is writable.
-        if unsafe {
-            GetAclInformation(
-                source_acl,
-                (&mut size_information as *mut ACL_SIZE_INFORMATION).cast(),
-                size_of::<ACL_SIZE_INFORMATION>() as u32,
-                AclSizeInformation,
-            )
-        } == 0
-        {
-            return Err(last_os_error("GetAclInformation(TokenDefaultDacl)"));
-        }
-        source_revision
+fn set_low_integrity_level(token: HANDLE) -> io::Result<()> {
+    let low_sid = sid_from_text("S-1-16-4096")?;
+    let label = TOKEN_MANDATORY_LABEL {
+        Label: SID_AND_ATTRIBUTES {
+            Sid: low_sid.0,
+            Attributes: SE_GROUP_INTEGRITY as u32,
+        },
     };
-
-    let capacity = size_of::<ACL>()
-        .checked_add(size_information.AclBytesInUse as usize)
-        .and_then(|bytes| bytes.checked_add(256))
-        .ok_or_else(|| io::Error::other("default DACL size overflow"))?;
-    let mut acl_storage = vec![0u64; capacity.div_ceil(size_of::<u64>())];
-    let acl_ptr = acl_storage.as_mut_ptr().cast::<ACL>();
-    let acl_bytes = (acl_storage.len() * size_of::<u64>()) as u32;
-    // SAFETY: acl_storage is aligned and includes the original ACEs plus space
-    // for a Restricted Code ACE.
-    if unsafe { InitializeAcl(acl_ptr, acl_bytes, revision) } == 0 {
-        return Err(last_os_error("InitializeAcl(TokenDefaultDacl)"));
-    }
-    if !source_acl.is_null() {
-        for index in 0..size_information.AceCount {
-            let mut ace = null_mut();
-            // SAFETY: source_acl is valid and index is within its AceCount.
-            if unsafe { GetAce(source_acl, index, &mut ace) } == 0 {
-                return Err(last_os_error("GetAce(TokenDefaultDacl)"));
-            }
-            // SAFETY: GetAce returned a valid ACE pointer within source_storage.
-            let ace_size = unsafe { (*ace.cast::<ACE_HEADER>()).AceSize as u32 };
-            // SAFETY: ace_size describes the ACE returned by GetAce and the
-            // destination ACL has sufficient space for all copied entries.
-            if unsafe { AddAce(acl_ptr, revision, u32::MAX, ace.cast_const(), ace_size) } == 0 {
-                return Err(last_os_error("AddAce(TokenDefaultDacl)"));
-            }
-        }
-    } else {
-        let user_sid = token_user_sid(source_token)?;
-        let system_sid = sid_from_text("S-1-5-18")?;
-        // SAFETY: both SIDs are valid and acl_ptr has reserved capacity.
-        if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, user_sid.sid) } == 0 {
-            return Err(last_os_error("AddAccessAllowedAce(TokenDefaultDacl user)"));
-        }
-        // SAFETY: both SIDs are valid and acl_ptr has reserved capacity.
-        if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, system_sid.0) } == 0 {
-            return Err(last_os_error(
-                "AddAccessAllowedAce(TokenDefaultDacl SYSTEM)",
-            ));
-        }
-    }
-    // The restricted process must be able to access securable objects it
-    // creates itself; WRITE_RESTRICTED also checks this default DACL.
-    // SAFETY: restricted_sid is a valid SID and acl_ptr has reserved capacity.
-    if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, restricted_sid) } == 0 {
-        return Err(last_os_error("AddAccessAllowedAce(TokenDefaultDacl)"));
-    }
-    let default_dacl = TOKEN_DEFAULT_DACL {
-        DefaultDacl: acl_ptr,
-    };
-    // SAFETY: default_dacl and its ACL remain live until SetTokenInformation
-    // copies the TOKEN_DEFAULT_DACL into the restricted token.
+    // SAFETY: low_sid is a valid mandatory label SID; the API copies the SID
+    // from the TOKEN_MANDATORY_LABEL buffer during this call.
     if unsafe {
         SetTokenInformation(
-            restricted_token,
-            TokenDefaultDacl,
-            (&default_dacl as *const TOKEN_DEFAULT_DACL).cast(),
-            size_of::<TOKEN_DEFAULT_DACL>() as u32,
+            token,
+            TokenIntegrityLevel,
+            (&label as *const TOKEN_MANDATORY_LABEL).cast(),
+            (size_of::<TOKEN_MANDATORY_LABEL>() + GetLengthSid(low_sid.0) as usize) as u32,
         )
     } == 0
     {
-        return Err(last_os_error("SetTokenInformation(TokenDefaultDacl)"));
+        return Err(last_os_error("SetTokenInformation(TokenIntegrityLevel)"));
+    }
+    let policy = TOKEN_MANDATORY_POLICY {
+        Policy: TOKEN_MANDATORY_POLICY_NO_WRITE_UP,
+    };
+    // SAFETY: policy is a live TOKEN_MANDATORY_POLICY of the documented size.
+    if unsafe {
+        SetTokenInformation(
+            token,
+            TokenMandatoryPolicy,
+            (&policy as *const TOKEN_MANDATORY_POLICY).cast(),
+            size_of::<TOKEN_MANDATORY_POLICY>() as u32,
+        )
+    } == 0
+    {
+        return Err(last_os_error("SetTokenInformation(TokenMandatoryPolicy)"));
     }
     Ok(())
 }
