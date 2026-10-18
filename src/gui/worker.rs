@@ -303,7 +303,19 @@ impl Worker {
         match self.events.try_recv() {
             Ok(event) => {
                 self.deadline = None;
-                return Some(event);
+                match event {
+                    Ok(event) => return Some(Ok(event)),
+                    Err(error) => {
+                        if let Some(child) = &mut self.child {
+                            if let Ok(Some(status)) = child.try_wait() {
+                                return Some(Err(format!(
+                                    "{error}; worker launcher exited ({status})"
+                                )));
+                            }
+                        }
+                        return Some(Err(error));
+                    }
+                }
             }
             Err(TryRecvError::Disconnected) => {
                 return Some(Err("The tab process stopped. Reload to restart it.".into()));
