@@ -15,7 +15,8 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+        CloseHandle, GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
+        INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, WAIT_OBJECT_0,
     },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
@@ -78,6 +79,11 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.hStdInput = std_handle(STD_INPUT_HANDLE)?;
     startup.hStdOutput = std_handle(STD_OUTPUT_HANDLE)?;
     startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
+    // std::process may provide non-inheritable duplicates for this broker's
+    // pipes. The nested worker needs these three protocol handles explicitly
+    // marked inheritable while CreateProcessAsUserW starts it.
+    let inherited_handles =
+        InheritableHandles::new([startup.hStdInput, startup.hStdOutput, startup.hStdError])?;
 
     let process_token = open_current_process_token()?;
     let restricted_sid = restricted_code_sid()?;
@@ -108,8 +114,10 @@ fn launch_restricted_worker() -> io::Result<u32> {
             &mut process_info,
         )
     };
-    if created == 0 {
-        return Err(last_os_error("CreateProcessAsUserW"));
+    let create_error = (created == 0).then(|| last_os_error("CreateProcessAsUserW"));
+    drop(inherited_handles);
+    if let Some(error) = create_error {
+        return Err(error);
     }
     let process = OwnedHandle::new(process_info.hProcess, "worker process")?;
     let thread = OwnedHandle::new(process_info.hThread, "worker thread")?;
@@ -257,6 +265,48 @@ fn std_handle(which: u32) -> io::Result<HANDLE> {
         Err(last_os_error("GetStdHandle"))
     } else {
         Ok(handle)
+    }
+}
+
+struct InheritableHandles(Vec<(HANDLE, u32)>);
+
+impl InheritableHandles {
+    fn new(handles: [HANDLE; 3]) -> io::Result<Self> {
+        let mut original_flags = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let mut flags = 0;
+            // SAFETY: handle is a valid borrowed standard handle and flags is
+            // writable storage for the handle flags.
+            if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+                restore_inherit_flags(&original_flags);
+                return Err(last_os_error("GetHandleInformation"));
+            }
+            original_flags.push((handle, flags));
+            // SAFETY: only the inherit bit is changed; the borrowed handle
+            // remains owned by the Rust process launcher.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                let error = last_os_error("SetHandleInformation");
+                restore_inherit_flags(&original_flags);
+                return Err(error);
+            }
+        }
+        Ok(Self(original_flags))
+    }
+}
+
+impl Drop for InheritableHandles {
+    fn drop(&mut self) {
+        restore_inherit_flags(&self.0);
+    }
+}
+
+fn restore_inherit_flags(handles: &[(HANDLE, u32)]) {
+    for &(handle, flags) in handles.iter().rev() {
+        // SAFETY: these are the borrowed standard handles recorded by
+        // InheritableHandles::new; restore only their original inherit bit.
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, flags & HANDLE_FLAG_INHERIT) };
     }
 }
 
