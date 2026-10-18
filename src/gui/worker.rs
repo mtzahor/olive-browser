@@ -176,10 +176,11 @@ impl Worker {
         ctx: &egui::Context,
     ) -> Result<Self, String> {
         let mut command = tab_worker_command(executable);
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        #[cfg(all(windows, test))]
+        command.stderr(Stdio::inherit());
+        #[cfg(not(all(windows, test)))]
+        command.stderr(Stdio::null());
         command.arg(WORKER_ARG);
         #[cfg(windows)]
         {
@@ -388,6 +389,7 @@ pub fn run_windows_launcher() -> u32 {
     match windows_sandbox::launch_worker() {
         Ok(exit_code) => exit_code,
         Err(error) => {
+            eprintln!("Could not start tab worker in the Windows sandbox: {error}");
             report_start_error(format!(
                 "Could not start tab worker in the Windows sandbox: {error}"
             ));

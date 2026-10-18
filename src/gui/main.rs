@@ -30,7 +30,8 @@ fn main() -> eframe::Result {
         std::process::exit(worker::run_windows_launcher() as i32);
     }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(worker::WORKER_ARG)) {
-        if worker::run().is_err() {
+        if let Err(error) = worker::run() {
+            eprintln!("Tab worker failed: {error}");
             std::process::exit(1);
         }
         return Ok(());
