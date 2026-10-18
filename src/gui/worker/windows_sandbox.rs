@@ -20,10 +20,11 @@ use windows_sys::Win32::{
     },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
-        ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, GetTokenInformation,
-        InitializeAcl, InitializeSecurityDescriptor, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
-        SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-        TOKEN_QUERY, TOKEN_USER, TokenUser, WRITE_RESTRICTED,
+        ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
+        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, LUA_TOKEN,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        WRITE_RESTRICTED,
     },
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
@@ -173,7 +174,11 @@ fn open_current_process_token() -> io::Result<OwnedHandle> {
 }
 
 fn restricted_code_sid() -> io::Result<OwnedSid> {
-    let sid_text = wide_nul(OsStr::new("S-1-5-12"));
+    sid_from_text("S-1-5-12")
+}
+
+fn sid_from_text(value: &str) -> io::Result<OwnedSid> {
+    let sid_text = wide_nul(OsStr::new(value));
     let mut sid = null_mut();
     // SAFETY: sid_text is NUL-terminated and sid is writable output storage.
     if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 {
@@ -192,13 +197,17 @@ fn create_worker_desktop(
     restricted_sid: *mut core::ffi::c_void,
 ) -> io::Result<WorkerDesktop> {
     let user_sid = token_user_sid(process_token)?;
-    let desktop_security = ObjectSecurity::new([user_sid.sid, restricted_sid], DESKTOP_ALL_ACCESS)?;
+    let system_sid = sid_from_text("S-1-5-18")?;
+    let desktop_security = ObjectSecurity::new(
+        [user_sid.sid, restricted_sid, system_sid.0],
+        DESKTOP_ALL_ACCESS,
+    )?;
     let desktop_name = wide_nul(OsStr::new(&format!("OliveWorker-{}", unsafe {
         GetCurrentProcessId()
     })));
 
     // Create the private desktop on the browser's current interactive window
-    // station. Its DACL grants access only to the current user and the
+    // station. Its DACL grants access to the current user, SYSTEM, and the
     // Restricted Code SID used by the write-restricted token.
     // SAFETY: desktop_name is NUL-terminated and its DACL remains alive for
     // the duration of the call. A null device and DEVMODE select defaults.
@@ -269,12 +278,12 @@ struct ObjectSecurity {
 }
 
 impl ObjectSecurity {
-    fn new(sids: [*mut core::ffi::c_void; 2], access: u32) -> io::Result<Self> {
-        // Two ACEs fit comfortably in this aligned ACL buffer.
+    fn new(sids: [*mut core::ffi::c_void; 3], access: u32) -> io::Result<Self> {
+        // Three ACEs fit comfortably in this aligned ACL buffer.
         let mut acl = vec![0u64; 128];
         let acl_ptr = acl.as_mut_ptr().cast();
         // SAFETY: acl_ptr addresses a writable, correctly aligned buffer of
-        // 1024 bytes, enough for two access-allowed ACEs and their SIDs.
+        // 1024 bytes, enough for three access-allowed ACEs and their SIDs.
         if unsafe { InitializeAcl(acl_ptr, (acl.len() * size_of::<u64>()) as u32, ACL_REVISION) }
             == 0
         {
@@ -282,7 +291,7 @@ impl ObjectSecurity {
         }
         for sid in sids {
             // SAFETY: each SID is valid for this call and acl_ptr has capacity
-            // for both entries.
+            // for all three entries.
             if unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, access, sid) } == 0 {
                 return Err(last_os_error("AddAccessAllowedAce"));
             }
@@ -349,7 +358,7 @@ fn create_write_restricted_token(
     if unsafe {
         CreateRestrictedToken(
             process_token,
-            WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
             0,
             null(),
             0,
