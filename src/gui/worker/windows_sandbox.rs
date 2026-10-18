@@ -22,8 +22,7 @@ use windows_sys::Win32::{
     Security::{
         CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, GetLengthSid, LUA_TOKEN, SID_AND_ATTRIBUTES,
         SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-        TOKEN_MANDATORY_LABEL, TOKEN_MANDATORY_POLICY, TOKEN_MANDATORY_POLICY_NO_WRITE_UP,
-        TOKEN_QUERY, TokenIntegrityLevel, TokenMandatoryPolicy,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
     },
     System::SystemServices::SE_GROUP_INTEGRITY,
     System::{
@@ -223,21 +222,6 @@ fn set_low_integrity_level(token: HANDLE) -> io::Result<()> {
     } == 0
     {
         return Err(last_os_error("SetTokenInformation(TokenIntegrityLevel)"));
-    }
-    let policy = TOKEN_MANDATORY_POLICY {
-        Policy: TOKEN_MANDATORY_POLICY_NO_WRITE_UP,
-    };
-    // SAFETY: policy is a live TOKEN_MANDATORY_POLICY of the documented size.
-    if unsafe {
-        SetTokenInformation(
-            token,
-            TokenMandatoryPolicy,
-            (&policy as *const TOKEN_MANDATORY_POLICY).cast(),
-            size_of::<TOKEN_MANDATORY_POLICY>() as u32,
-        )
-    } == 0
-    {
-        return Err(last_os_error("SetTokenInformation(TokenMandatoryPolicy)"));
     }
     Ok(())
 }
