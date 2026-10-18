@@ -88,8 +88,8 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
     let process_token = open_current_process_token()?;
     let restricted_sid = restricted_code_sid()?;
-    let worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
-    startup.lpDesktop = worker_desktop.path.as_ptr();
+    let mut worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
+    startup.lpDesktop = worker_desktop.path.as_mut_ptr();
     // std::process may provide non-inheritable duplicates for this broker's
     // pipes. The nested worker needs these three protocol handles explicitly
     // marked inheritable while CreateProcessAsUserW starts it.
