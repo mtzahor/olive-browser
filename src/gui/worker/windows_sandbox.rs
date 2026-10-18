@@ -21,10 +21,9 @@ use windows_sys::Win32::{
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
         ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
-        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, LUA_TOKEN,
-        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
-        WRITE_RESTRICTED,
+        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl, TOKEN_ASSIGN_PRIMARY,
+        TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser, WRITE_RESTRICTED,
     },
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
@@ -350,7 +349,7 @@ fn create_write_restricted_token(
     if unsafe {
         CreateRestrictedToken(
             process_token,
-            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
             0,
             null(),
             0,
