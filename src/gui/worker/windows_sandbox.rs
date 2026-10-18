@@ -27,12 +27,7 @@ use windows_sys::Win32::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
-            JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS,
-            JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
-            JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
-            JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         },
         Threading::{
@@ -229,30 +224,6 @@ fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
     } == 0
     {
         return Err(last_os_error("SetInformationJobObject"));
-    }
-    let ui_limits = JOBOBJECT_BASIC_UI_RESTRICTIONS {
-        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES
-            | JOB_OBJECT_UILIMIT_READCLIPBOARD
-            | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
-            | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
-            | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
-            | JOB_OBJECT_UILIMIT_GLOBALATOMS
-            | JOB_OBJECT_UILIMIT_DESKTOP
-            | JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    };
-    // Also prevent the restricted worker from using desktop handles or
-    // interacting with the browser's windows and clipboard.
-    // SAFETY: ui_limits is the exact structure for this job information class.
-    if unsafe {
-        SetInformationJobObject(
-            job.0,
-            JobObjectBasicUIRestrictions,
-            &ui_limits as *const _ as *const _,
-            size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
-        )
-    } == 0
-    {
-        return Err(last_os_error("SetInformationJobObject(UI restrictions)"));
     }
     Ok(job)
 }
