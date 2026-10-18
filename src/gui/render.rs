@@ -958,9 +958,8 @@ impl Page {
                         });
                     }
                     if response.hovered() {
-                        if let Some(action) = ui
-                            .ctx()
-                            .pointer_hover_pos()
+                        if let Some(action) = response
+                            .hover_pos()
                             .and_then(|pos| action_at(block, &galley, pos - galley_origin))
                         {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

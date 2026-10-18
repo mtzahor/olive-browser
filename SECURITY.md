@@ -18,17 +18,32 @@ executes HTML. The `olive` DOM inspector remains inert; `olive-js` explicitly ru
 standalone JavaScript. The optional `net` feature explicitly loads HTTP(S)
 documents, and is included in the GUI. Parsing itself never performs networking.
 The viewer explicitly fetches supported CSS/JS/image resources; Olive does not enforce CSP.
-**The parser is not an HTML sanitizer, and script execution is not sandboxed.**
+**The parser is not an HTML sanitizer. GUI tab workers have partial OS
+containment on macOS, Linux, and Windows. Standalone JavaScript execution is not
+OS-sandboxed.**
 
 The GUI and CLI URL loader accept at most 8 MiB per document. The parser-only
 library default and CLI file/stdin paths remain at 1 MiB. Library callers can configure this limit.
 Recovery diagnostics are capped at 64 by default and 512 bytes per message.
 Tree output escapes terminal control characters and limits indentation.
-Olive's flat arena avoids ownership cycles and recursive DOM drop, and all
-first-party Rust targets forbid unsafe code.
+Olive's flat arena avoids ownership cycles and recursive DOM drop. Unsafe code is
+denied projectwide, with narrow Linux and Windows exceptions for Landlock and
+Win32 worker setup.
 
 The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
 display limit. Each document loads and executes in a dedicated child process.
+On macOS, the GUI launches that process through `/usr/bin/sandbox-exec` with a
+Seatbelt profile denying `file-write*`. Linux workers apply a Landlock ruleset
+before starting any threads; it denies filesystem write operations and requires
+Landlock ABI v3 so truncate operations are covered. Windows launches a second
+copy of the browser under a `WRITE_RESTRICTED` token with the Restricted Code
+SID, and places it in a kill-on-close job so worker descendants stop with the
+tab. All three policies preserve local file reads and network access. Linux or
+Windows worker startup fails closed if its restriction cannot be established.
+The Windows token still relies on file ACLs for the Restricted Code SID, so an
+object whose ACL explicitly grants that SID can remain writable. `sandbox-exec`
+is deprecated by Apple, so the macOS path is an initial containment layer rather
+than a long-term App Sandbox integration.
 The previous page and its process remain available if a new document cannot be read.
 Up to 32 tabs are open at once; a tab can temporarily own an old document process
 and a pending replacement. Empty tabs do not start a process.
@@ -178,9 +193,13 @@ inside native built-ins such as regular expressions and large string/array
 operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents and enable web
 JavaScript only for pages and their script providers you trust. Web scripting is
-an explicit experimental opt-in, not safe execution of untrusted code. Enforceable memory limits and OS sandboxing remain required before automatic
-execution of untrusted remote JavaScript. Tab processes provide fault isolation,
-not a security boundary against compromised native code.
+an explicit experimental opt-in, not safe execution of untrusted code. The worker
+policies do not restrict reads, outbound network access, or memory use. Linux
+workers can create processes; Windows keeps worker descendants in a job that is
+terminated with the tab. Enforceable memory limits and stronger OS sandboxing
+remain required before automatic execution of untrusted remote JavaScript. Tab
+processes provide fault isolation and partial containment, not a complete
+security boundary against compromised native code.
 
 The browser supervises child processes with 60-second load and 10-second click
 wall-clock deadlines, checked while polling all tabs every 100 ms. Stop, closing
@@ -205,7 +224,8 @@ DOM construction expands input, parser recovery can be expensive, allocations
 can fail, and dependencies can contain defects and unsafe code. OS-wide memory
 exhaustion can still affect the browser and other applications. The parser has
 not undergone an independent security audit. Browsing remains experimental;
-OS sandboxing and enforceable memory/CPU budgets remain necessary hardening work.
+stronger OS sandboxing and enforceable memory/CPU budgets remain necessary
+hardening work.
 
 ## Reporting
 

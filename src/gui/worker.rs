@@ -15,10 +15,17 @@ use std::{
 };
 
 pub const WORKER_ARG: &str = "--olive-tab-worker";
+#[cfg(windows)]
+pub const WINDOWS_LAUNCHER_ARG: &str = "--olive-launch-restricted-worker";
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 128 * 1024 * 1024;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
+
+// Apple deprecates sandbox-exec. Keep this initial macOS policy narrow: it
+// blocks filesystem writes and leaves reads and network access available.
+#[cfg(target_os = "macos")]
+const MACOS_TAB_SANDBOX_PROFILE: &str = "(version 1)\n(allow default)\n(deny file-write*)\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptPolicy {
@@ -168,20 +175,31 @@ impl Worker {
         initial: Command,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
-        let mut command = ProcessCommand::new(executable);
+        let mut command = tab_worker_command(executable);
         command
-            .arg(WORKER_ARG)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        command.arg(WORKER_ARG);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW: workers have no console/window.
         }
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("Could not start tab process: {e}"))?;
+        let mut child = command.spawn().map_err(|e| {
+            #[cfg(target_os = "macos")]
+            {
+                format!("Could not start tab worker in the macOS sandbox: {e}")
+            }
+            #[cfg(target_os = "windows")]
+            {
+                format!("Could not start tab worker in the Windows sandbox: {e}")
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                format!("Could not start tab process: {e}")
+            }
+        })?;
         let mut input = child.stdin.take().ok_or("Tab process has no input pipe")?;
         let mut output = child
             .stdout
@@ -342,6 +360,51 @@ impl Worker {
         )
     }
 }
+
+fn tab_worker_command(executable: &Path) -> ProcessCommand {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = ProcessCommand::new("/usr/bin/sandbox-exec");
+        command
+            .arg("-p")
+            .arg(MACOS_TAB_SANDBOX_PROFILE)
+            .arg(executable);
+        command
+    }
+    #[cfg(windows)]
+    {
+        let mut command = ProcessCommand::new(executable);
+        command.arg(WINDOWS_LAUNCHER_ARG);
+        command
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        ProcessCommand::new(executable)
+    }
+}
+
+#[cfg(windows)]
+pub fn run_windows_launcher() -> u32 {
+    match windows_sandbox::launch_worker() {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            report_start_error(format!(
+                "Could not start tab worker in the Windows sandbox: {error}"
+            ));
+            1
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn report_start_error(message: String) {
+    let _ = write_frame(
+        &mut io::stdout().lock(),
+        &Event::Error(message),
+        MAX_EVENT_BYTES,
+    );
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         self.terminate();
@@ -351,6 +414,14 @@ impl Drop for Worker {
 // Workers read commands on a separate thread so EOF kills even a stuck parser/VM.
 // Closing the parent process closes its pipes; no orphaned document work remains.
 pub fn run() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = restrict_linux_worker_writes() {
+        report_start_error(format!(
+            "Could not start tab worker in the Linux filesystem sandbox: {error}"
+        ));
+        return Err(io::Error::other(error));
+    }
+
     let (sender, commands) = mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("olive-parent-watch".into())
@@ -514,6 +585,21 @@ pub fn run() -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+fn restrict_linux_worker_writes() -> Result<(), String> {
+    linux_sandbox::restrict_writes()
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+#[path = "worker/linux_sandbox.rs"]
+mod linux_sandbox;
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+#[path = "worker/windows_sandbox.rs"]
+mod windows_sandbox;
 
 pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read, limit: usize) -> io::Result<T> {
     let mut prefix = [0; 4];

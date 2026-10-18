@@ -1,13 +1,15 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.3.6** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.4.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
 CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
-reload the current page with scripting. Use this only for pages you trust: the
-runtime runs in a separate tab process, without an OS security sandbox. **Disable JavaScript** reloads without scripts.
+reload the current page with scripting. Tab workers use partial OS sandboxes on
+macOS, Linux, and Windows: they can still read local files and use the network.
+Enable JavaScript only for pages you trust.
+**Disable JavaScript** reloads without scripts.
 To opt in for future pages, select **Browser menu → Settings → Browsing → Enable
 JavaScript by default on page loads**. This saved setting starts off and applies to
 new addresses, reloads, history traversal, redirects, form responses and normal
@@ -437,9 +439,10 @@ pass.
 
 Input, script, CSS, DOM, and preview work are bounded. These limits protect the
 viewer from oversized or pathological documents. Tab processes contain document
-crashes and have operation deadlines, but share the UI compositor and do not
-provide an OS security sandbox or a hard memory ceiling. See [SECURITY.md](SECURITY.md) for the trust boundary and current
-limits.
+crashes and have operation deadlines. The macOS and Linux worker sandboxes block
+filesystem writes; Windows uses a write-restricted token. Workers can still read
+files and use the network, and no platform has a hard memory ceiling. See
+[SECURITY.md](SECURITY.md) for the trust boundary and current limits.
 
 ## Development
 

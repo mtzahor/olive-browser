@@ -118,7 +118,7 @@ impl DailyWindows {
                         "Enable JavaScript by default on page loads",
                     );
                     ui.label(
-                        RichText::new("Applies to page loads, reloads, redirects, form responses and restored tabs. Enable only for sites you trust; scripts run without an OS security sandbox.")
+                        RichText::new("Applies to page loads, reloads, redirects, form responses and restored tabs. Use only with sites you trust: workers can still read local files and use the network.")
                             .small()
                             .weak(),
                     );

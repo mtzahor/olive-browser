@@ -23,6 +23,12 @@ mod zoom;
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(worker::WINDOWS_LAUNCHER_ARG))
+    {
+        std::process::exit(worker::run_windows_launcher() as i32);
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(worker::WORKER_ARG)) {
         if worker::run().is_err() {
             std::process::exit(1);

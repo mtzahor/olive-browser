@@ -961,7 +961,7 @@ impl Tab {
                             toggle_scripts = ui.add_enabled(!busy, IconButton::new(
                                 if loaded.scripting_enabled { Icon::CodeOff } else { Icon::Code },
                                 if loaded.scripting_enabled { "Disable JavaScript" } else { "Enable JavaScript" }
-                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Enable only for pages you trust: scripts run in this tab's process without an OS security sandbox. New addresses use the JavaScript default in Settings.").clicked();
+                            ).small()).on_hover_text("Reload this page with JavaScript enabled or disabled. Use only for pages you trust: workers can still read local files and use the network. New addresses use the JavaScript default in Settings.").clicked();
                         }
                         if loaded.resources.attempted > 0 || loaded.resources.limited {
                             ui_icons::menu(ui, if loaded.resources.diagnostics.is_empty() { Icon::Resources } else { Icon::Warning }, if loaded.resources.diagnostics.is_empty() { "Resources" } else { "Resource errors" }, |ui| {

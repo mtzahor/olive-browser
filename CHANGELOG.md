@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 — Cross-platform worker containment and navigation fixes
+
+- Add partial filesystem-write containment for GUI tab workers on macOS, Linux
+  and Windows. Reads and network access remain available; Linux requires
+  Landlock ABI v3 or later, and Windows enforcement follows file ACLs.
+- Fix text-link hit testing at non-100% browser zoom levels.
+- Explain the platform-specific sandbox limits in the browser and security docs.
+
 ## 1.3.6 — CSS and worker stability fixes
 
 - Apply linked and inline stylesheets when their `media` attribute is omitted.
