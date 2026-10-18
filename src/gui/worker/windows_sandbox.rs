@@ -14,7 +14,9 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree},
+    Foundation::{
+        CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
         CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, LUA_TOKEN, SID_AND_ATTRIBUTES,
@@ -35,8 +37,7 @@ use windows_sys::Win32::{
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess,
             GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
-            STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WAIT_OBJECT_0,
-            WaitForSingleObject,
+            STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
         },
     },
 };
