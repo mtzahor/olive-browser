@@ -33,10 +33,7 @@ use windows_sys::Win32::{
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         },
-        StationsAndDesktops::{
-            CloseDesktop, CloseWindowStation, CreateDesktopW, CreateWindowStationW,
-            GetProcessWindowStation, HDESK, HWINSTA, SetProcessWindowStation,
-        },
+        StationsAndDesktops::{CloseDesktop, CreateDesktopW, HDESK},
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess,
             GetCurrentProcessId, GetExitCodeProcess, INFINITE, OpenProcessToken,
@@ -44,7 +41,6 @@ use windows_sys::Win32::{
             TerminateProcess, WaitForSingleObject,
         },
     },
-    UI::WindowsAndMessaging::WINSTA_ALL_ACCESS,
 };
 
 const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
@@ -88,8 +84,8 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
     let process_token = open_current_process_token()?;
     let restricted_sid = restricted_code_sid()?;
-    let mut worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
-    startup.lpDesktop = worker_desktop.path.as_mut_ptr();
+    let worker_desktop = create_worker_desktop(process_token.0, restricted_sid.0)?;
+    startup.lpDesktop = worker_desktop.path.as_ptr().cast_mut();
     // std::process may provide non-inheritable duplicates for this broker's
     // pipes. The nested worker needs these three protocol handles explicitly
     // marked inheritable while CreateProcessAsUserW starts it.
@@ -197,43 +193,14 @@ fn create_worker_desktop(
     restricted_sid: *mut core::ffi::c_void,
 ) -> io::Result<WorkerDesktop> {
     let user_sid = token_user_sid(process_token)?;
-    let station_security =
-        ObjectSecurity::new([user_sid.sid, restricted_sid], WINSTA_ALL_ACCESS as u32)?;
     let desktop_security = ObjectSecurity::new([user_sid.sid, restricted_sid], DESKTOP_ALL_ACCESS)?;
-
-    let station_name = wide_nul(OsStr::new(&format!("OliveWorker-{}", unsafe {
+    let desktop_name = wide_nul(OsStr::new(&format!("OliveWorker-{}", unsafe {
         GetCurrentProcessId()
     })));
-    let desktop_name = wide_nul(OsStr::new("Worker"));
-    let desktop_path = wide_nul(OsStr::new(&format!(
-        "{}\\Worker",
-        String::from_utf16_lossy(&station_name[..station_name.len() - 1])
-    )));
 
-    // The restricted token needs its own non-interactive window station and
-    // desktop. The DACL grants access only to the current user and the
+    // Create the private desktop on the browser's current interactive window
+    // station. Its DACL grants access only to the current user and the
     // Restricted Code SID used by the write-restricted token.
-    // SAFETY: the name is NUL-terminated and the security descriptor and ACL
-    // remain alive for the duration of the call.
-    let raw_station = unsafe {
-        CreateWindowStationW(
-            station_name.as_ptr(),
-            0,
-            WINSTA_ALL_ACCESS as u32,
-            &station_security.attributes,
-        )
-    };
-    let station = OwnedWindowStation::new(raw_station)?;
-    // SAFETY: this broker has no UI threads or windows; the original station
-    // is restored by WorkerDesktop::drop after the restricted child exits.
-    let original_station = unsafe { GetProcessWindowStation() };
-    if original_station.is_null() {
-        return Err(last_os_error("GetProcessWindowStation"));
-    }
-    // SAFETY: station is a valid window-station handle created above.
-    if unsafe { SetProcessWindowStation(station.0) } == 0 {
-        return Err(last_os_error("SetProcessWindowStation"));
-    }
     // SAFETY: desktop_name is NUL-terminated and its DACL remains alive for
     // the duration of the call. A null device and DEVMODE select defaults.
     let raw_desktop = unsafe {
@@ -247,17 +214,11 @@ fn create_worker_desktop(
         )
     };
     if raw_desktop.is_null() {
-        let error = last_os_error("CreateDesktopW");
-        // SAFETY: original_station is the borrowed station handle captured
-        // before switching this process to the private station.
-        unsafe { SetProcessWindowStation(original_station) };
-        return Err(error);
+        return Err(last_os_error("CreateDesktopW"));
     }
     Ok(WorkerDesktop {
-        _station: station,
         _desktop: OwnedDesktop(raw_desktop),
-        original_station,
-        path: desktop_path,
+        path: desktop_name,
     })
 }
 
@@ -364,37 +325,8 @@ impl ObjectSecurity {
 }
 
 struct WorkerDesktop {
-    _station: OwnedWindowStation,
     _desktop: OwnedDesktop,
-    original_station: HWINSTA,
     path: Vec<u16>,
-}
-
-impl Drop for WorkerDesktop {
-    fn drop(&mut self) {
-        // SAFETY: original_station is the borrowed station handle captured
-        // before switching this launcher to its private window station.
-        unsafe { SetProcessWindowStation(self.original_station) };
-    }
-}
-
-struct OwnedWindowStation(HWINSTA);
-
-impl OwnedWindowStation {
-    fn new(handle: HWINSTA) -> io::Result<Self> {
-        if handle.is_null() {
-            Err(last_os_error("CreateWindowStationW"))
-        } else {
-            Ok(Self(handle))
-        }
-    }
-}
-
-impl Drop for OwnedWindowStation {
-    fn drop(&mut self) {
-        // SAFETY: this wrapper owns the handle returned by CreateWindowStationW.
-        unsafe { CloseWindowStation(self.0) };
-    }
 }
 
 struct OwnedDesktop(HDESK);
