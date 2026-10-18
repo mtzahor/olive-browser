@@ -15,15 +15,17 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
+        CloseHandle, GENERIC_ALL, GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
         INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, WAIT_OBJECT_0,
     },
     Security::Authorization::ConvertStringSidToSidW,
     Security::{
-        ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
-        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, LUA_TOKEN,
-        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, SetSecurityDescriptorDacl,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        ACE_HEADER, ACL, ACL_REVISION, ACL_SIZE_INFORMATION, AclSizeInformation,
+        AddAccessAllowedAce, AddAce, CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, GetAce,
+        GetAclInformation, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor,
+        LUA_TOKEN, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES,
+        SetSecurityDescriptorDacl, SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
+        TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenUser,
         WRITE_RESTRICTED,
     },
     System::{
@@ -101,6 +103,7 @@ fn launch_restricted_worker() -> io::Result<u32> {
         Attributes: 0,
     };
     let restricted_token = create_write_restricted_token(process_token.0, &restricted_sid_entry)?;
+    add_restricted_sid_to_default_dacl(process_token.0, restricted_token.0, restricted_sid.0)?;
     let job = create_kill_on_close_job()?;
 
     let mut process_info = PROCESS_INFORMATION::default();
@@ -167,7 +170,7 @@ fn open_current_process_token() -> io::Result<OwnedHandle> {
     if unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
-            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY,
+            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
             &mut token,
         )
     } == 0
@@ -441,6 +444,125 @@ fn create_write_restricted_token(
         return Err(last_os_error("CreateRestrictedToken"));
     }
     OwnedHandle::new(token, "restricted worker token")
+}
+
+fn add_restricted_sid_to_default_dacl(
+    source_token: HANDLE,
+    restricted_token: HANDLE,
+    restricted_sid: *mut core::ffi::c_void,
+) -> io::Result<()> {
+    let mut required = 0u32;
+    // SAFETY: this size query asks for the required TokenDefaultDacl buffer.
+    unsafe { GetTokenInformation(source_token, TokenDefaultDacl, null_mut(), 0, &mut required) };
+    if required == 0 {
+        return Err(last_os_error("GetTokenInformation(TokenDefaultDacl size)"));
+    }
+    let words = (required as usize).div_ceil(size_of::<usize>());
+    let mut source_storage = vec![0usize; words];
+    // SAFETY: source_storage is aligned and large enough for the queried token
+    // information, including the ACL referenced by TOKEN_DEFAULT_DACL.
+    if unsafe {
+        GetTokenInformation(
+            source_token,
+            TokenDefaultDacl,
+            source_storage.as_mut_ptr().cast(),
+            (source_storage.len() * size_of::<usize>()) as u32,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(last_os_error("GetTokenInformation(TokenDefaultDacl)"));
+    }
+    // SAFETY: the successful query wrote TOKEN_DEFAULT_DACL at the start of
+    // the aligned buffer; its ACL pointer remains valid while source_storage lives.
+    let source = unsafe { &*(source_storage.as_ptr().cast::<TOKEN_DEFAULT_DACL>()) };
+    let source_acl = source.DefaultDacl;
+
+    let mut size_information = ACL_SIZE_INFORMATION::default();
+    let revision = if source_acl.is_null() {
+        ACL_REVISION
+    } else {
+        // SAFETY: source_acl points into the successful TokenDefaultDacl buffer.
+        let source_revision = unsafe { (*source_acl).AclRevision as u32 };
+        // SAFETY: source_acl is a valid ACL and size_information is writable.
+        if unsafe {
+            GetAclInformation(
+                source_acl,
+                (&mut size_information as *mut ACL_SIZE_INFORMATION).cast(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        } == 0
+        {
+            return Err(last_os_error("GetAclInformation(TokenDefaultDacl)"));
+        }
+        source_revision
+    };
+
+    let capacity = size_of::<ACL>()
+        .checked_add(size_information.AclBytesInUse as usize)
+        .and_then(|bytes| bytes.checked_add(256))
+        .ok_or_else(|| io::Error::other("default DACL size overflow"))?;
+    let mut acl_storage = vec![0u64; capacity.div_ceil(size_of::<u64>())];
+    let acl_ptr = acl_storage.as_mut_ptr().cast::<ACL>();
+    let acl_bytes = (acl_storage.len() * size_of::<u64>()) as u32;
+    // SAFETY: acl_storage is aligned and includes the original ACEs plus space
+    // for a Restricted Code ACE.
+    if unsafe { InitializeAcl(acl_ptr, acl_bytes, revision) } == 0 {
+        return Err(last_os_error("InitializeAcl(TokenDefaultDacl)"));
+    }
+    if !source_acl.is_null() {
+        for index in 0..size_information.AceCount {
+            let mut ace = null_mut();
+            // SAFETY: source_acl is valid and index is within its AceCount.
+            if unsafe { GetAce(source_acl, index, &mut ace) } == 0 {
+                return Err(last_os_error("GetAce(TokenDefaultDacl)"));
+            }
+            // SAFETY: GetAce returned a valid ACE pointer within source_storage.
+            let ace_size = unsafe { (*ace.cast::<ACE_HEADER>()).AceSize as u32 };
+            // SAFETY: ace_size describes the ACE returned by GetAce and the
+            // destination ACL has sufficient space for all copied entries.
+            if unsafe { AddAce(acl_ptr, revision, u32::MAX, ace.cast_const(), ace_size) } == 0 {
+                return Err(last_os_error("AddAce(TokenDefaultDacl)"));
+            }
+        }
+    } else {
+        let user_sid = token_user_sid(source_token)?;
+        let system_sid = sid_from_text("S-1-5-18")?;
+        // SAFETY: both SIDs are valid and acl_ptr has reserved capacity.
+        if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, user_sid.sid) } == 0 {
+            return Err(last_os_error("AddAccessAllowedAce(TokenDefaultDacl user)"));
+        }
+        // SAFETY: both SIDs are valid and acl_ptr has reserved capacity.
+        if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, system_sid.0) } == 0 {
+            return Err(last_os_error(
+                "AddAccessAllowedAce(TokenDefaultDacl SYSTEM)",
+            ));
+        }
+    }
+    // The restricted process must be able to access securable objects it
+    // creates itself; WRITE_RESTRICTED also checks this default DACL.
+    // SAFETY: restricted_sid is a valid SID and acl_ptr has reserved capacity.
+    if unsafe { AddAccessAllowedAce(acl_ptr, revision, GENERIC_ALL, restricted_sid) } == 0 {
+        return Err(last_os_error("AddAccessAllowedAce(TokenDefaultDacl)"));
+    }
+    let default_dacl = TOKEN_DEFAULT_DACL {
+        DefaultDacl: acl_ptr,
+    };
+    // SAFETY: default_dacl and its ACL remain live until SetTokenInformation
+    // copies the TOKEN_DEFAULT_DACL into the restricted token.
+    if unsafe {
+        SetTokenInformation(
+            restricted_token,
+            TokenDefaultDacl,
+            (&default_dacl as *const TOKEN_DEFAULT_DACL).cast(),
+            size_of::<TOKEN_DEFAULT_DACL>() as u32,
+        )
+    } == 0
+    {
+        return Err(last_os_error("SetTokenInformation(TokenDefaultDacl)"));
+    }
+    Ok(())
 }
 
 fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
