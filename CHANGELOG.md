@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1 — Windows worker sandbox fixes
+
+- Fix Windows GUI worker compilation and startup, and run page workers with a
+  low-integrity token and inherited mandatory policy.
+- Keep worker processes isolated on a private desktop and terminate descendants
+  when a tab closes.
+
 ## 1.4.0 — Cross-platform worker containment and navigation fixes
 
 - Add partial filesystem-write containment for GUI tab workers on macOS, Linux
