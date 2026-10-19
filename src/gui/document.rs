@@ -99,7 +99,7 @@ fn present(
 ) -> Presentation {
     let sheet = Stylesheet::from_document_with_sources(document, styles);
     let base = location.document_base(document);
-    let reading = Page::reading_with_base_at_viewport(
+    let reading = Page::reading(
         document,
         scripting_enabled,
         &sheet,
@@ -107,13 +107,7 @@ fn present(
         Some(&base),
         viewport,
     );
-    let page = Page::with_stylesheet_and_images_at_viewport(
-        document,
-        scripting_enabled,
-        &sheet,
-        images,
-        viewport,
-    );
+    let page = Page::new(document, scripting_enabled, &sheet, images, viewport);
     Presentation {
         page,
         reading,
