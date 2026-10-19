@@ -2,8 +2,8 @@
 //! Drawn on a 24-unit grid with rounded 1.8-unit strokes; normally shown at 18 pt.
 
 use eframe::egui::{
-    self, Atom, Button, Color32, Id, Painter, Rect, Response, RichText, Shape, Stroke, Ui, Vec2,
-    Widget, WidgetInfo, WidgetType,
+    self, Atom, Button, Color32, IdSalt, Painter, Rect, Response, RichText, Role, Shape, Stroke,
+    Ui, Vec2, Widget, WidgetInfo,
 };
 
 #[derive(Clone, Copy)]
@@ -259,7 +259,7 @@ impl<'a> IconButton<'a> {
     }
 
     fn atom() -> Atom<'a> {
-        Atom::custom(Id::new(Self::ICON_ID), Vec2::splat(18.0))
+        Atom::custom(IdSalt::new(Self::ICON_ID), Vec2::splat(18.0))
     }
 
     pub fn icon_only(icon: Icon, label: &str) -> Self {
@@ -312,11 +312,13 @@ impl Widget for IconButton<'_> {
                 .inner;
         }
         let output = self.button.atom_ui(ui);
-        if let Some(rect) = output.rect(Id::new(Self::ICON_ID)) {
+        if let Some(rect) = output.rect(IdSalt::new(Self::ICON_ID)) {
             let color = self.color.unwrap_or_else(|| {
                 ui.style()
-                    .button_style(&Default::default(), output.response.widget_state())
-                    .text_style
+                    .visuals
+                    .widgets
+                    .style(&output.response)
+                    .fg_stroke
                     .color
             });
             self.icon.paint(ui.painter(), rect, color);
@@ -329,9 +331,9 @@ impl Widget for IconButton<'_> {
             }
         }
         if self.icon_only {
-            output.response.widget_info(|| {
-                WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), &self.label)
-            });
+            output
+                .response
+                .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.label));
             output.response.on_disabled_hover_text(self.label)
         } else {
             output.response

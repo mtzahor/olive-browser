@@ -755,7 +755,7 @@ impl Tab {
                         let address_width =
                             (ui.available_width() - 5.0 * 42.0 - focus_extra).max(60.0);
                         let mut output = egui::TextEdit::singleline(&mut self.address)
-                            .id(egui::Id::new(("address", self.id)))
+                            .id(egui::Id::unique(("address", self.id)))
                             .hint_text("Enter a URL or file path")
                             .char_limit(olive_html::net::MAX_URL_BYTES)
                             .desired_width(address_width - 20.0)
@@ -1249,7 +1249,7 @@ impl Tab {
         if let Some(message) = &self.alert {
             let mut close = false;
             egui::Window::new("JavaScript alert")
-                .id(egui::Id::new(("alert", self.id)))
+                .id(egui::Id::unique(("alert", self.id)))
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
@@ -1803,7 +1803,7 @@ impl eframe::App for OliveApp {
         if self.devtools_open {
             let tab = &self.tabs[self.active];
             egui::Window::new("Developer tools")
-                .id(egui::Id::new("developer-tools"))
+                .id(egui::Id::unique("developer-tools"))
                 .default_size(egui::vec2(620.0, 420.0))
                 .min_size(egui::vec2(420.0, 280.0))
                 .open(&mut self.devtools_open)
@@ -2732,7 +2732,7 @@ mod tests {
         );
         assert!(!output.shapes.is_empty());
         output.textures_delta.clear();
-        let scroll_id = |tab: &Tab| egui::Id::new(("document", tab.id, tab.generation, false));
+        let scroll_id = |tab: &Tab| egui::Id::unique(("document", tab.id, tab.generation, false));
         assert_ne!(scroll_id(&browser.tabs[0]), scroll_id(&browser.tabs[1]));
     }
     #[test]
