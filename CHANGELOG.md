@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.0 — Codebase cleanup
+
+- Add a `serde` feature that derives Serde support for node IDs and the CSS,
+  script, network and resource types without enabling the GUI.
+- Add `Element::is_html` and `Element::is_html_tag` to the library.
+- Default downloads on Windows now go to `%USERPROFILE%\Downloads` instead of a
+  `downloads` folder relative to the working directory.
+- Stop copying the page stylesheet on every page build, click and resize.
+- Split the largest GUI, rendering and networking modules, remove duplicated
+  and dead code, and stop running GUI unit tests twice.
+- Document the maintenance scripts, how to regenerate the app icon, and the
+  two-second per-resource request timeout.
+
 ## 1.4.2 — CSS navigation layout compatibility
 
 - Render common inline-block and floated navigation items horizontally, with
