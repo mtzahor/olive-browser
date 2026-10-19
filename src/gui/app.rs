@@ -1,5 +1,6 @@
 use crate::gui::{
     daily_ui::DailyWindows,
+    devtools::DevTools,
     document::{ClickRequest, LoadedPage},
     downloads::Downloads,
     find::FindBar,
@@ -1387,16 +1388,7 @@ pub struct OliveApp {
     reveal_tab: bool,
     recovery: Option<Session>,
     window_title: String,
-    devtools_open: bool,
-    devtools_tab: DevToolsTab,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum DevToolsTab {
-    #[default]
-    Overview,
-    Console,
-    Network,
+    devtools: DevTools,
 }
 
 impl OliveApp {
@@ -1429,8 +1421,7 @@ impl OliveApp {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
-            devtools_open: false,
-            devtools_tab: DevToolsTab::Overview,
+            devtools: DevTools::default(),
         };
         let defaults = app.shared.profile.data.settings.clone();
         app.tabs[0].zoom = defaults.default_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -1743,7 +1734,7 @@ impl eframe::App for OliveApp {
             })
         };
         if shortcut(egui::Modifiers::NONE, egui::Key::F12) {
-            self.devtools_open = !self.devtools_open;
+            self.devtools.toggle();
         }
         if shortcut(egui::Modifiers::COMMAND, egui::Key::T) {
             self.new_tab(None, &ctx);
@@ -1796,147 +1787,16 @@ impl eframe::App for OliveApp {
         }
         let autofocus = std::mem::take(&mut self.focus_address);
         if let Some(location) =
-            self.tabs[self.active].ui(ui, &mut self.shared, autofocus, &mut self.devtools_open)
+            self.tabs[self.active].ui(ui, &mut self.shared, autofocus, &mut self.devtools.open)
         {
             self.new_tab(Some(location), &ctx);
         }
-        if self.devtools_open {
-            let tab = &self.tabs[self.active];
-            egui::Window::new("Developer tools")
-                .id(egui::Id::unique("developer-tools"))
-                .default_size(egui::vec2(620.0, 420.0))
-                .min_size(egui::vec2(420.0, 280.0))
-                .open(&mut self.devtools_open)
-                .show(&ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.devtools_tab,
-                            DevToolsTab::Overview,
-                            "Overview",
-                        );
-                        ui.selectable_value(
-                            &mut self.devtools_tab,
-                            DevToolsTab::Console,
-                            "Console",
-                        );
-                        ui.selectable_value(
-                            &mut self.devtools_tab,
-                            DevToolsTab::Network,
-                            "Network",
-                        );
-                    });
-                    ui.separator();
-                    let Some(loaded) = &tab.loaded else {
-                        ui.label("No page is loaded in this tab.");
-                        return;
-                    };
-                    match self.devtools_tab {
-                        DevToolsTab::Overview => {
-                            egui::Grid::new("devtools-overview")
-                                .num_columns(2)
-                                .spacing(egui::vec2(16.0, 8.0))
-                                .show(ui, |ui| {
-                                    ui.strong("Title");
-                                    ui.label(&loaded.page.title);
-                                    ui.end_row();
-                                    ui.strong("Address");
-                                    ui.add(egui::Label::new(loaded.location.as_str()).truncate());
-                                    ui.end_row();
-                                    ui.strong("HTTP status");
-                                    ui.label(loaded.status.map_or_else(
-                                        || "Local file".into(),
-                                        |status| status.to_string(),
-                                    ));
-                                    ui.end_row();
-                                    ui.strong("JavaScript");
-                                    ui.label(if loaded.scripting_enabled {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    });
-                                    ui.end_row();
-                                    ui.strong("Worker process");
-                                    ui.label(
-                                        tab.worker.as_ref().and_then(Worker::pid).map_or_else(
-                                            || "Stopped".into(),
-                                            |pid| pid.to_string(),
-                                        ),
-                                    );
-                                    ui.end_row();
-                                    ui.strong("HTML corrections");
-                                    ui.label(loaded.corrections.to_string());
-                                    ui.end_row();
-                                    ui.strong("Unsupported CSS");
-                                    ui.label(loaded.page.css_ignored.to_string());
-                                    ui.end_row();
-                                    if !loaded.page.css_unsupported.is_empty() {
-                                        ui.strong("Unsupported properties");
-                                        ui.vertical(|ui| {
-                                            for (name, count) in
-                                                loaded.page.css_unsupported.iter().take(32)
-                                            {
-                                                ui.monospace(format!("{name}: {count}"));
-                                            }
-                                        });
-                                        ui.end_row();
-                                    }
-                                });
-                        }
-                        DevToolsTab::Console => {
-                            ui.label(format!(
-                                "{} scripts executed · {} skipped",
-                                loaded.scripts.executed, loaded.scripts.skipped
-                            ));
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for error in &loaded.scripts.diagnostics {
-                                        ui.colored_label(
-                                            ui.visuals().error_fg_color,
-                                            format!("{:?}: {}", error.kind, error.message),
-                                        );
-                                    }
-                                    for message in &loaded.scripts.console {
-                                        ui.monospace(message);
-                                    }
-                                    let omitted = loaded
-                                        .scripts
-                                        .omitted_diagnostics
-                                        .saturating_add(loaded.scripts.omitted_console_messages);
-                                    if omitted > 0 {
-                                        ui.weak(format!("{omitted} messages omitted"));
-                                    }
-                                    if loaded.scripts.diagnostics.is_empty()
-                                        && loaded.scripts.console.is_empty()
-                                    {
-                                        ui.weak("No console messages or JavaScript errors.");
-                                    }
-                                });
-                        }
-                        DevToolsTab::Network => {
-                            ui.label(format!(
-                                "{} of {} resources loaded",
-                                loaded.resources.loaded, loaded.resources.attempted
-                            ));
-                            if loaded.resources.limited {
-                                ui.weak("Resource loading reached a browser limit.");
-                            }
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for message in &loaded.resources.diagnostics {
-                                        ui.colored_label(ui.visuals().error_fg_color, message);
-                                    }
-                                    if loaded.resources.diagnostics.is_empty()
-                                        && loaded.resources.attempted == 0
-                                    {
-                                        ui.weak("No external resources were requested.");
-                                    }
-                                });
-                        }
-                    }
-                });
-        }
+        let tab = &self.tabs[self.active];
+        self.devtools.show(
+            &ctx,
+            tab.loaded.as_ref(),
+            tab.worker.as_ref().and_then(Worker::pid),
+        );
         if self.shared.profile.data.settings.browser_theme != previous_theme {
             self.apply_browser_theme(&ctx);
         }
@@ -2457,8 +2317,7 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
-            devtools_open: false,
-            devtools_tab: DevToolsTab::default(),
+            devtools: DevTools::default(),
         };
         // Warm every cache, including the views that will be hidden at the toggle.
         for tab in &mut browser.tabs {
@@ -2556,8 +2415,7 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
-            devtools_open: false,
-            devtools_tab: DevToolsTab::default(),
+            devtools: DevTools::default(),
         };
         browser.new_tab(None, &ctx);
         let second_id = browser.tabs[1].id;
@@ -2626,8 +2484,7 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
-            devtools_open: false,
-            devtools_tab: DevToolsTab::default(),
+            devtools: DevTools::default(),
         };
         let session = Session {
             tabs: vec![SavedTab {
@@ -2709,8 +2566,7 @@ mod tests {
             reveal_tab: false,
             recovery: None,
             window_title: String::new(),
-            devtools_open: false,
-            devtools_tab: DevToolsTab::default(),
+            devtools: DevTools::default(),
         };
         for _ in 0..8 {
             browser.new_tab(None, &ctx);

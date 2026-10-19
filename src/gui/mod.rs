@@ -4,6 +4,7 @@
 
 pub mod app;
 mod daily_ui;
+mod devtools;
 pub mod document;
 mod downloads;
 mod find;
