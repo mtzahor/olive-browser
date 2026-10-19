@@ -92,7 +92,10 @@ impl PageResources {
             let Some(element) = node.as_element() else {
                 continue;
             };
-            eligible[id.index()] = !element.is_inert_container();
+            // Without scripting, `noscript` holds the page's real fallback
+            // content, such as stylesheets that scripts would otherwise insert.
+            eligible[id.index()] =
+                !element.is_inert_container() || (!scripting && element.is_html_tag("noscript"));
             let (kind, reference) =
                 if element.name.local.as_str() == "link" && applicable_style(element) {
                     (ResourceKind::Stylesheet, element.attribute("href"))

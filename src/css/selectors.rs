@@ -112,6 +112,15 @@ pub(super) enum Key {
 pub(super) struct Selector {
     parts: Vec<Compound>,
     pub specificity: (u16, u16, u16),
+    /// The selector targets generated content such as `::before`, which Olive
+    /// does not render. It is valid, so the rest of its list still applies.
+    pub generated: bool,
+}
+
+/// Whether `name` is a pseudo-element that browsers accept. Other engines'
+/// prefixed pseudo-elements invalidate a selector list there, and here too.
+fn pseudo_element(name: &str) -> bool {
+    !name.starts_with("-moz-") && !name.starts_with("-ms-") && !name.starts_with("-o-")
 }
 impl Selector {
     pub fn parse(input: &mut Parser<'_>) -> Result<Self, Error> {
@@ -124,6 +133,7 @@ impl Selector {
         let mut result = Self {
             parts: vec![],
             specificity: (0, 0, 0),
+            generated: false,
         };
         let mut simple = vec![];
         let mut relation = Relation::Descendant;
@@ -177,6 +187,50 @@ impl Selector {
                 Token::SquareBracketBlock => {
                     result.specificity.1 = result.specificity.1.saturating_add(1);
                     Simple::Attribute(input.parse_nested_block(Attribute::parse)?)
+                }
+                // Pseudo-elements, including the legacy single-colon forms, are
+                // valid only at the top level and never match an element.
+                Token::Colon
+                    if depth == 0
+                        && input
+                            .try_parse(|input| {
+                                input.expect_colon()?;
+                                match input.next_including_whitespace()?.clone() {
+                                    Token::Ident(name)
+                                        if pseudo_element(&name.to_ascii_lowercase()) =>
+                                    {
+                                        Ok(())
+                                    }
+                                    Token::Function(name)
+                                        if pseudo_element(&name.to_ascii_lowercase()) =>
+                                    {
+                                        input.parse_nested_block(|input| {
+                                            while input.next().is_ok() {}
+                                            Ok::<_, Error>(())
+                                        })
+                                    }
+                                    _ => Err(Error::custom(())),
+                                }
+                            })
+                            .or_else(|_: Error| {
+                                input.try_parse(|input| {
+                                    match input.next_including_whitespace()? {
+                                        Token::Ident(name)
+                                            if matches!(
+                                                name.to_ascii_lowercase().as_str(),
+                                                "before" | "after" | "first-line" | "first-letter"
+                                            ) =>
+                                        {
+                                            Ok(())
+                                        }
+                                        _ => Err(Error::custom(())),
+                                    }
+                                })
+                            })
+                            .is_ok() =>
+                {
+                    result.generated = true;
+                    continue;
                 }
                 Token::Colon => match input.next_including_whitespace()?.clone() {
                     Token::Ident(name) => {
@@ -261,7 +315,10 @@ impl Selector {
             }
         }
         if simple.is_empty() {
-            return Err(Error::custom(()));
+            if !result.generated {
+                return Err(Error::custom(()));
+            }
+            simple.push(Simple::Universal);
         }
         result.parts.push(Compound { simple, relation });
         Ok(result)

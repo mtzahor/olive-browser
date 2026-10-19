@@ -9,8 +9,8 @@ use crate::{
     Document, NodeId, NodeKind,
     css::Direction,
     css::{
-        Color, ComputedStyle, Display, FlexWrap, FloatSide, JustifyContent, Length, Position,
-        StyleBudget, Stylesheet, TextAlign, WhiteSpace,
+        Clear, Color, ComputedStyle, Display, FlexWrap, FloatSide, JustifyContent, Length,
+        Position, StyleBudget, Stylesheet, TextAlign, VerticalAlign, WhiteSpace,
     },
 };
 use eframe::egui::epaint::text::VariationCoords;
@@ -43,7 +43,6 @@ fn paint_color(c: Color, opacity: f32) -> Color32 {
 #[derive(Clone, Copy, Default)]
 struct Style {
     css: ComputedStyle,
-    indent: usize,
     inline_background: Color32,
     flex_parent: bool,
     target: Option<NodeId>,
@@ -76,6 +75,10 @@ impl Style {
             },
             line_height: Some(css.line_height_px()),
             background: self.inline_background.gamma_multiply(css.opacity),
+            valign: match css.vertical_align {
+                VerticalAlign::Super => egui::Align::TOP,
+                VerticalAlign::Sub | VerticalAlign::Baseline => egui::Align::BOTTOM,
+            },
             ..Default::default()
         }
     }
@@ -86,8 +89,10 @@ struct Block {
     job: LayoutJob,
     #[serde(skip)]
     visual_job: LayoutJob,
-    indent: usize,
     rule: bool,
+    /// A list marker, painted beside the item rather than in the text flow.
+    #[serde(default)]
+    marker: bool,
     style: ComputedStyle,
     #[serde(skip)]
     layout: Option<(f32, f32, Arc<egui::Galley>)>,
@@ -450,8 +455,13 @@ impl Page {
         self.images.len()
     }
     pub fn find_query(&mut self, query: &str) -> usize {
-        self.find
-            .update(query, self.blocks.iter().map(|b| b.job.text.as_str()));
+        // List markers are decoration, so search skips them as browsers do.
+        self.find.update(
+            query,
+            self.blocks
+                .iter()
+                .map(|b| if b.marker { "" } else { b.job.text.as_str() }),
+        );
         self.find.count
     }
     pub fn scroll_to_fragment(&mut self, fragment: Option<String>) {

@@ -367,6 +367,17 @@ pub fn style(element: &Element, parent: ComputedStyle) -> ComputedStyle {
     ) {
         style.margin[2] = Length::Em(0.9);
     }
+    // List markers hang in the start padding; quotes and definitions indent.
+    let start = if style.direction == crate::css::Direction::Rtl {
+        1
+    } else {
+        3
+    };
+    match tag {
+        "ul" | "ol" => style.padding[start] = Length::Em(1.5),
+        "blockquote" | "dd" => style.margin[start] = Length::Em(1.1),
+        _ => {}
+    }
     match tag {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             style.font_size = DEFAULT_FONT_SIZE

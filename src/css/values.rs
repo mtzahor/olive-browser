@@ -108,6 +108,11 @@ pub enum Display {
     Grid,
     None,
     InlineBlock,
+    /// HTML `table`, `tr` and `td`/`th` layout. These come from the HTML
+    /// elements; the CSS `table` display values are not parsed.
+    Table,
+    TableRow,
+    TableCell,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -116,6 +121,16 @@ pub enum FloatSide {
     None,
     Left,
     Right,
+}
+/// Which earlier floats a box moves below.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Clear {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -175,6 +190,16 @@ pub enum Direction {
     Rtl,
     Auto,
 }
+/// Inline text raised by `sup` or lowered by `sub`. This comes from the HTML
+/// elements only; the CSS `vertical-align` property is not supported.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Super,
+    Sub,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineHeight {
@@ -199,8 +224,10 @@ pub struct ComputedStyle {
     pub white_space: WhiteSpace,
     pub text_align: TextAlign,
     pub direction: Direction,
+    pub vertical_align: VerticalAlign,
     pub display: Display,
     pub float_side: FloatSide,
+    pub clear: Clear,
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
     pub justify_content: JustifyContent,
@@ -216,6 +243,14 @@ pub struct ComputedStyle {
     pub grid_columns: u8,
     pub opacity: f32,
     pub list_marker: bool,
+    /// Table columns and rows a cell covers, from HTML `colspan` and `rowspan`.
+    pub column_span: u8,
+    pub row_span: u8,
+    /// Table cells share borders instead of keeping `border-spacing` apart.
+    pub border_collapse: bool,
+    /// Horizontal and vertical `overflow: hidden` or `clip`. `auto` and
+    /// `scroll` stay visible, because Olive has no inner scrolling.
+    pub overflow_hidden: [bool; 2],
     /// Top, right, bottom, left.
     pub margin: [Length; 4],
     /// Top, right, bottom, left.
@@ -229,7 +264,8 @@ pub struct ComputedStyle {
     pub border_width: Length,
     pub border_color: Color,
     pub border_solid: bool,
-    pub border_radius: Length,
+    /// Top-left, top-right, bottom-right, bottom-left.
+    pub border_radius: [Length; 4],
     pub box_shadow: Option<BoxShadow>,
 }
 impl Default for ComputedStyle {
@@ -247,8 +283,10 @@ impl Default for ComputedStyle {
             white_space: WhiteSpace::Normal,
             text_align: TextAlign::Start,
             direction: Direction::Ltr,
+            vertical_align: VerticalAlign::Baseline,
             display: Display::Inline,
             float_side: FloatSide::None,
+            clear: Clear::None,
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::Start,
@@ -262,6 +300,10 @@ impl Default for ComputedStyle {
             grid_columns: 1,
             opacity: 1.0,
             list_marker: true,
+            column_span: 1,
+            row_span: 1,
+            border_collapse: false,
+            overflow_hidden: [false; 2],
             margin: [Length::Px(0.0); 4],
             padding: [Length::Px(0.0); 4],
             width: Length::Auto,
@@ -273,7 +315,7 @@ impl Default for ComputedStyle {
             border_width: Length::Px(3.0),
             border_color: Color(38, 44, 32, 255),
             border_solid: false,
-            border_radius: Length::Px(0.0),
+            border_radius: [Length::Px(0.0); 4],
             box_shadow: None,
         }
     }
@@ -293,7 +335,9 @@ impl ComputedStyle {
             white_space: parent.white_space,
             text_align: parent.text_align,
             direction: parent.direction,
+            vertical_align: parent.vertical_align,
             list_marker: parent.list_marker,
+            border_collapse: parent.border_collapse,
             border_color: parent.color,
             ..Self::default()
         }
@@ -338,7 +382,10 @@ pub(super) enum Property {
     BorderWidth,
     BorderColor,
     BorderStyle,
-    BorderRadius,
+    BorderTopLeftRadius,
+    BorderTopRightRadius,
+    BorderBottomRightRadius,
+    BorderBottomLeftRadius,
     BoxShadow,
     FlexDirection,
     FlexWrap,
@@ -358,8 +405,12 @@ pub(super) enum Property {
     ListMarker,
     Float,
     MinWidth,
+    BorderCollapse,
+    Clear,
+    OverflowX,
+    OverflowY,
 }
-pub(super) const PROPERTIES: [Property; 48] = [
+pub(super) const PROPERTIES: [Property; 55] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -388,7 +439,10 @@ pub(super) const PROPERTIES: [Property; 48] = [
     Property::BorderWidth,
     Property::BorderColor,
     Property::BorderStyle,
-    Property::BorderRadius,
+    Property::BorderTopLeftRadius,
+    Property::BorderTopRightRadius,
+    Property::BorderBottomRightRadius,
+    Property::BorderBottomLeftRadius,
     Property::BoxShadow,
     Property::FlexDirection,
     Property::FlexWrap,
@@ -408,6 +462,10 @@ pub(super) const PROPERTIES: [Property; 48] = [
     Property::ListMarker,
     Property::Float,
     Property::MinWidth,
+    Property::BorderCollapse,
+    Property::Clear,
+    Property::OverflowX,
+    Property::OverflowY,
 ];
 impl Property {
     pub(super) fn inherited(self) -> bool {
@@ -423,6 +481,7 @@ impl Property {
                 | Self::Align
                 | Self::Direction
                 | Self::ListMarker
+                | Self::BorderCollapse
         )
     }
 }
@@ -439,6 +498,7 @@ pub(super) enum Value {
     Direction(Direction),
     Display(Display),
     Float(FloatSide),
+    Clear(Clear),
     FlexDirection(FlexDirection),
     FlexWrap(FlexWrap),
     JustifyContent(JustifyContent),
@@ -479,7 +539,7 @@ fn length(
                 "rem" => Length::Rem(*value),
                 "vw" => Length::Vw(*value),
                 "vh" => Length::Vh(*value),
-                _ => return Err(cssparser::ParseError::custom(())),
+                unit => Length::Px(*value * absolute_unit(unit)?),
             }
         }
         Token::Function(function) if function.eq_ignore_ascii_case("calc") => {
@@ -494,6 +554,19 @@ fn length(
         _ => return Err(cssparser::ParseError::custom(())),
     };
     Ok(value)
+}
+
+/// CSS pixels per absolute length unit (96 px per inch).
+fn absolute_unit(unit: &str) -> Result<f32, Error> {
+    Ok(match unit {
+        "pt" => 96.0 / 72.0,
+        "pc" => 16.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "q" => 96.0 / 101.6,
+        _ => return Err(cssparser::ParseError::custom(())),
+    })
 }
 
 fn calc_length(input: &mut Parser<'_>, percent: bool) -> Result<Length, Error> {
@@ -521,7 +594,7 @@ fn calc_length(input: &mut Parser<'_>, percent: bool) -> Result<Length, Error> {
                     "rem" => rem += sign * value,
                     "vw" => vw += sign * value,
                     "vh" => vh += sign * value,
-                    _ => return Err(cssparser::ParseError::custom(())),
+                    unit => px += sign * value * absolute_unit(unit)?,
                 }
                 terms += 1;
                 sign = 1.0;
@@ -674,6 +747,23 @@ fn hsl_color(input: &mut Parser<'_>) -> Result<Color, Error> {
         ))
     })
 }
+/// A legacy HTML color attribute such as `bgcolor`. Like browsers, this also
+/// accepts three or six hex digits without the leading `#`.
+pub(super) fn attribute_color(source: &str) -> Option<Color> {
+    let parse = |source: &str| {
+        let mut input = Parser::new(source);
+        match color(&mut input) {
+            Ok(Value::Color(value)) if input.is_exhausted() => Some(value),
+            _ => None,
+        }
+    };
+    let source = source.trim();
+    parse(source).or_else(|| {
+        (matches!(source.len(), 3 | 6) && source.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| parse(&format!("#{source}")))
+            .flatten()
+    })
+}
 fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
     let token = input.next()?.clone();
     let rgba = match token {
@@ -748,6 +838,10 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "direction" => &[P::Direction],
         "display" => &[P::Display],
         "float" => &[P::Float],
+        "clear" => &[P::Clear],
+        "overflow" => &[P::OverflowX, P::OverflowY],
+        "overflow-x" => &[P::OverflowX],
+        "overflow-y" => &[P::OverflowY],
         "position" => &[P::Position],
         "top" => &[P::Top],
         "right" => &[P::Right],
@@ -763,6 +857,9 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "flex-basis" => &[P::FlexBasis],
         "flex" => &[P::FlexGrow, P::FlexShrink, P::FlexBasis],
         "gap" => &[P::RowGap, P::ColumnGap],
+        // Only tables use spacing between boxes, so it shares the gap lengths.
+        "border-spacing" => &[P::ColumnGap, P::RowGap],
+        "border-collapse" => &[P::BorderCollapse],
         "row-gap" => &[P::RowGap],
         "column-gap" => &[P::ColumnGap],
         "list-style" | "list-style-type" => &[P::ListMarker],
@@ -791,7 +888,16 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "border-width" => &[P::BorderWidth],
         "border-style" => &[P::BorderStyle],
         "border-color" => &[P::BorderColor],
-        "border-radius" => &[P::BorderRadius],
+        "border-radius" => &[
+            P::BorderTopLeftRadius,
+            P::BorderTopRightRadius,
+            P::BorderBottomRightRadius,
+            P::BorderBottomLeftRadius,
+        ],
+        "border-top-left-radius" => &[P::BorderTopLeftRadius],
+        "border-top-right-radius" => &[P::BorderTopRightRadius],
+        "border-bottom-right-radius" => &[P::BorderBottomRightRadius],
+        "border-bottom-left-radius" => &[P::BorderBottomLeftRadius],
         "box-shadow" => &[P::BoxShadow],
         _ => return None,
     })
@@ -835,6 +941,44 @@ pub(super) fn parse_values(
             .zip(edges)
             .map(|(p, v)| (*p, Value::Length(v)))
             .collect());
+    }
+    if name == "border-radius" {
+        let radii = corner_radii(input)?;
+        // Corners are circular: elliptical vertical radii after `/` are
+        // validated but the horizontal radii are kept.
+        if input.try_parse(|input| input.expect_delim('/')).is_ok() {
+            corner_radii(input)?;
+        }
+        let corners = match radii.as_slice() {
+            [a] => [*a; 4],
+            [a, b] => [*a, *b, *a, *b],
+            [a, b, c] => [*a, *b, *c, *b],
+            [a, b, c, d] => [*a, *b, *c, *d],
+            _ => unreachable!(),
+        };
+        return Ok(props
+            .iter()
+            .zip(corners)
+            .map(|(p, v)| (*p, Value::Length(v)))
+            .collect());
+    }
+    if name == "overflow" {
+        let horizontal = overflow(input)?;
+        let vertical = input.try_parse(overflow).unwrap_or(horizontal);
+        return Ok(vec![
+            (P::OverflowX, Value::Bool(horizontal)),
+            (P::OverflowY, Value::Bool(vertical)),
+        ]);
+    }
+    if name == "border-spacing" {
+        let horizontal = length(input, false, false, false)?;
+        let vertical = input
+            .try_parse(|input| length(input, false, false, false))
+            .unwrap_or(horizontal);
+        return Ok(vec![
+            (P::ColumnGap, Value::Length(horizontal)),
+            (P::RowGap, Value::Length(vertical)),
+        ]);
     }
     if name == "gap" {
         let row = length(input, false, false, true)?;
@@ -1091,6 +1235,13 @@ pub(super) fn parse_values(
             "right" | "inline-end" => FloatSide::Right,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
+        P::Clear => Value::Clear(match keyword(input)?.as_str() {
+            "none" => Clear::None,
+            "left" | "inline-start" => Clear::Left,
+            "right" | "inline-end" => Clear::Right,
+            "both" => Clear::Both,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
         P::Position => Value::Position(match keyword(input)?.as_str() {
             "static" => Position::Static,
             "relative" => Position::Relative,
@@ -1141,8 +1292,22 @@ pub(super) fn parse_values(
         }),
         P::BorderWidth => Value::Length(border_width(input)?),
         P::BorderStyle => Value::Bool(border_style(input)?),
-        P::BorderRadius => Value::Length(length(input, false, false, false)?),
+        P::BorderTopLeftRadius
+        | P::BorderTopRightRadius
+        | P::BorderBottomRightRadius
+        | P::BorderBottomLeftRadius => {
+            let radius = length(input, false, false, true)?;
+            // An optional second, vertical radius is accepted and ignored.
+            let _ = input.try_parse(|input| length(input, false, false, true));
+            Value::Length(radius)
+        }
         P::BoxShadow => unreachable!("box-shadow is parsed before scalar property values"),
+        P::OverflowX | P::OverflowY => Value::Bool(overflow(input)?),
+        P::BorderCollapse => Value::Bool(match keyword(input)?.as_str() {
+            "collapse" => true,
+            "separate" => false,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
         P::BoxSizing => Value::Bool(match keyword(input)?.as_str() {
             "content-box" => false,
             "border-box" => true,
@@ -1185,6 +1350,25 @@ fn border_width(input: &mut Parser<'_>) -> Result<Length, Error> {
             }))
         })
 }
+/// One to four nonnegative corner radii; percentages resolve against the box.
+fn corner_radii(input: &mut Parser<'_>) -> Result<Vec<Length>, Error> {
+    let mut radii = vec![length(input, false, false, true)?];
+    while radii.len() < 4 {
+        match input.try_parse(|input| length(input, false, false, true)) {
+            Ok(radius) => radii.push(radius),
+            Err(_) => break,
+        }
+    }
+    Ok(radii)
+}
+/// Whether an `overflow` keyword clips the box's contents.
+fn overflow(input: &mut Parser<'_>) -> Result<bool, Error> {
+    match keyword(input)?.as_str() {
+        "hidden" | "clip" => Ok(true),
+        "visible" | "auto" | "scroll" | "overlay" => Ok(false),
+        _ => Err(cssparser::ParseError::custom(())),
+    }
+}
 fn border_style(input: &mut Parser<'_>) -> Result<bool, Error> {
     match keyword(input)?.as_str() {
         "solid" => Ok(true),
@@ -1225,6 +1409,7 @@ pub(super) fn apply(
             P::Direction => style.direction = source.direction,
             P::Display => style.display = source.display,
             P::Float => style.float_side = source.float_side,
+            P::Clear => style.clear = source.clear,
             P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft => {
                 let i = prop as usize - P::MarginTop as usize;
                 style.margin[i] = source.margin[i];
@@ -1242,7 +1427,13 @@ pub(super) fn apply(
             P::BorderWidth => style.border_width = source.border_width,
             P::BorderColor => style.border_color = source.border_color,
             P::BorderStyle => style.border_solid = source.border_solid,
-            P::BorderRadius => style.border_radius = source.border_radius,
+            P::BorderTopLeftRadius
+            | P::BorderTopRightRadius
+            | P::BorderBottomRightRadius
+            | P::BorderBottomLeftRadius => {
+                let i = prop as usize - P::BorderTopLeftRadius as usize;
+                style.border_radius[i] = source.border_radius[i];
+            }
             P::BoxShadow => style.box_shadow = source.box_shadow,
             P::FlexDirection => style.flex_direction = source.flex_direction,
             P::FlexWrap => style.flex_wrap = source.flex_wrap,
@@ -1260,6 +1451,11 @@ pub(super) fn apply(
             P::GridColumns => style.grid_columns = source.grid_columns,
             P::Opacity => style.opacity = source.opacity,
             P::ListMarker => style.list_marker = source.list_marker,
+            P::BorderCollapse => style.border_collapse = source.border_collapse,
+            P::OverflowX | P::OverflowY => {
+                let i = prop as usize - P::OverflowX as usize;
+                style.overflow_hidden[i] = source.overflow_hidden[i];
+            }
         }
         return;
     }
@@ -1314,6 +1510,7 @@ pub(super) fn apply(
         (P::Direction, Value::Direction(v)) => style.direction = v,
         (P::Display, Value::Display(v)) => style.display = v,
         (P::Float, Value::Float(v)) => style.float_side = v,
+        (P::Clear, Value::Clear(v)) => style.clear = v,
         (P::FlexDirection, Value::FlexDirection(v)) => style.flex_direction = v,
         (P::FlexWrap, Value::FlexWrap(v)) => style.flex_wrap = v,
         (P::JustifyContent, Value::JustifyContent(v)) => style.justify_content = v,
@@ -1342,7 +1539,13 @@ pub(super) fn apply(
         (P::MinHeight, Value::Length(v)) => style.min_height = v,
         (P::BoxSizing, Value::Bool(v)) => style.border_box = v,
         (P::BorderWidth, Value::Length(v)) => style.border_width = v,
-        (P::BorderRadius, Value::Length(v)) => style.border_radius = v,
+        (
+            P::BorderTopLeftRadius
+            | P::BorderTopRightRadius
+            | P::BorderBottomRightRadius
+            | P::BorderBottomLeftRadius,
+            Value::Length(v),
+        ) => style.border_radius[prop as usize - P::BorderTopLeftRadius as usize] = v,
         (P::BoxShadow, Value::BoxShadow(shadow)) => {
             style.box_shadow = shadow.map(|mut shadow| {
                 if shadow.current_color {
@@ -1352,6 +1555,10 @@ pub(super) fn apply(
             });
         }
         (P::BorderStyle, Value::Bool(v)) => style.border_solid = v,
+        (P::BorderCollapse, Value::Bool(v)) => style.border_collapse = v,
+        (P::OverflowX | P::OverflowY, Value::Bool(v)) => {
+            style.overflow_hidden[prop as usize - P::OverflowX as usize] = v
+        }
         _ => {}
     }
 }

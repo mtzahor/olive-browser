@@ -3,7 +3,7 @@ use olive_html::{
     NodeId,
     css::{
         Color, ComputedStyle, Direction, Display, Length, LineHeight, StyleBudget, Stylesheet,
-        TextAlign, WhiteSpace,
+        TextAlign, VerticalAlign, WhiteSpace,
     },
     parse,
 };
@@ -81,14 +81,14 @@ fn unsupported_selector_invalidates_whole_group_and_at_rules_stay_inert() {
         r#"<!doctype html><style>
         @import "file:///private.css";
         @media screen { p { color: red; } }
-        p::before, p { color: blue; } p:has(a), p { color: green; }
+        p:has(a), p { color: green; }
         p { font-style: italic; background: url("https://example.com/x;}.png"); color: purple; }
         </style><p id=a>x"#,
     );
     assert_eq!(s["a"].color, Color(128, 0, 128, 255));
     assert!(s["a"].italic);
     assert_eq!(s["a"].background.3, 0);
-    assert!(sheet.diagnostics.ignored >= 4);
+    assert!(sheet.diagnostics.ignored >= 3);
 }
 #[test]
 fn renderable_button_css_has_no_unsupported_declarations() {
@@ -466,4 +466,196 @@ fn border_box_and_min_height_compute_and_inherit_explicitly() {
     assert_eq!(s["a"].min_height, Length::Px(40.0));
     assert!(!s["b"].border_box);
     assert_eq!(s["b"].min_height, Length::Px(0.0));
+}
+
+fn px(length: Length) -> f32 {
+    match length {
+        Length::Px(value) => value,
+        other => panic!("expected a pixel length, got {other:?}"),
+    }
+}
+
+#[test]
+fn html_defaults_space_headings_lists_and_code_relative_to_their_text() {
+    let (s, _, _) = styles(
+        r#"<!doctype html><body id=body style="font-size:20px">
+        <h1 id=h1>T</h1><h2 id=h2>T</h2>
+        <p id=p><code id=code>x</code> <sup id=sup>1</sup> <sub id=sub>2</sub> <mark id=mark>m</mark></p>
+        <pre id=pre><code id=inner>x</code></pre>
+        <ul id=ul><li id=li>x<ul id=nested><li>y</li></ul></li></ul>
+        <ol id=rtl dir=rtl><li>x</li></ol>
+        <blockquote id=quote>q</blockquote>
+        <center id=center>c</center><dialog id=dialog>d</dialog><dialog id=open open>e</dialog>"#,
+    );
+    assert_eq!(s["body"].margin, [Length::Px(8.0); 4]);
+    // Headings scale with the surrounding text and keep more space above.
+    assert_eq!(s["h1"].font_size, 40.0);
+    assert_eq!(s["h2"].font_size, 32.0);
+    assert!((px(s["h1"].margin[0]) - 24.0).abs() < 0.01);
+    assert!((px(s["h1"].margin[2]) - 16.0).abs() < 0.01);
+    assert_eq!(s["code"].font_size, 20.0 * 15.0 / 17.0);
+    assert_eq!(s["inner"].font_size, s["pre"].font_size);
+    assert_eq!(s["pre"].border_radius, [Length::Px(6.0); 4]);
+    assert!(px(s["pre"].padding[3]) > 0.0);
+    assert_eq!(s["sup"].vertical_align, VerticalAlign::Super);
+    assert_eq!(s["sub"].vertical_align, VerticalAlign::Sub);
+    assert_eq!(s["sup"].font_size, 15.0);
+    assert_eq!(s["p"].vertical_align, VerticalAlign::Baseline);
+    assert!(s["mark"].background.3 > 0);
+    // Lists indent at the start side; only outer lists are spaced from what follows.
+    assert_eq!(s["ul"].padding[3], Length::Px(40.0));
+    assert_eq!(s["ul"].margin[2], Length::Px(12.0));
+    assert_eq!(s["li"].margin, [Length::Px(0.0); 4]);
+    assert_eq!(s["nested"].margin[2], Length::Px(0.0));
+    assert_eq!(s["rtl"].padding[1], Length::Px(40.0));
+    assert_eq!(s["rtl"].padding[3], Length::Px(0.0));
+    assert_eq!(s["quote"].margin[1], Length::Px(40.0));
+    assert_eq!(s["quote"].margin[3], Length::Px(40.0));
+    assert_eq!(s["center"].display, Display::Block);
+    assert_eq!(s["center"].text_align, TextAlign::Center);
+    assert_eq!(s["dialog"].display, Display::None);
+    assert_eq!(s["open"].display, Display::Inline);
+}
+
+#[test]
+fn tables_take_display_spans_and_legacy_presentational_attributes() {
+    let (s, _, _) = styles(
+        r##"<!doctype html><center><table id=t width="85%" bgcolor="f6f6ef" cellspacing=0 cellpadding=3 border=1>
+        <tr id=r align=right><td id=a colspan=3 rowspan=0 bgcolor="#ff6600" nowrap width=18>x</td>
+        <th id=h>y</th><td id=deep><table id=inner><tr><td>n</td></tr></table></td></tr></table></center>
+        <table id=plain><tr><td id=b>z</td></tr><col id=col></table>
+        <font id=font color=green>f</font>"##,
+    );
+    let t = s["t"];
+    assert_eq!(t.display, Display::Table);
+    assert_eq!(t.width, Length::Percent(0.85));
+    assert_eq!(t.background, Color(246, 246, 239, 255));
+    assert_eq!(
+        (t.row_gap, t.column_gap),
+        (Length::Px(0.0), Length::Px(0.0))
+    );
+    assert!(t.border_solid);
+    assert_eq!(t.border_width, Length::Px(1.0));
+    assert_eq!(t.border_color, Color(128, 128, 128, 255));
+    assert_eq!((t.margin[1], t.margin[3]), (Length::Auto, Length::Auto));
+    assert_eq!(t.margin[2], Length::Px(12.0));
+    assert_eq!(s["r"].display, Display::TableRow);
+    let a = s["a"];
+    assert_eq!(a.display, Display::TableCell);
+    assert_eq!((a.column_span, a.row_span), (3, 1));
+    assert_eq!(a.background, Color(255, 102, 0, 255));
+    assert_eq!(a.white_space, WhiteSpace::NoWrap);
+    assert_eq!(a.width, Length::Px(18.0));
+    assert_eq!(a.padding, [Length::Px(3.0); 4]);
+    assert!(a.border_solid);
+    assert_eq!(a.border_width, Length::Px(1.0));
+    assert_eq!(a.text_align, TextAlign::Right);
+    assert_eq!(s["h"].font_weight, 700.0);
+    assert_eq!(s["h"].text_align, TextAlign::Center);
+    // Layout tables nested in cells add no space below themselves.
+    assert_eq!(s["inner"].margin[2], Length::Px(0.0));
+    let plain = s["plain"];
+    assert_eq!(plain.row_gap, Length::Px(2.0));
+    assert_eq!(plain.margin[1], Length::Px(0.0));
+    assert!(!plain.border_solid);
+    assert!(px(s["b"].padding[1]) > px(s["b"].padding[0]));
+    assert_eq!(s["col"].display, Display::None);
+    assert_eq!(s["font"].color, Color(0, 128, 0, 255));
+}
+
+#[test]
+fn quirks_mode_tables_do_not_inherit_alignment_or_fonts() {
+    let markup =
+        r#"<center style="font-size:30px"><table id=t><tr><td id=c>x</td></tr></table></center>"#;
+    let (quirks, _, _) = styles(markup);
+    assert_eq!(quirks["t"].text_align, TextAlign::Start);
+    assert_eq!(quirks["c"].font_size, 17.0);
+    let (standard, _, _) = styles(&format!("<!doctype html>{markup}"));
+    assert_eq!(standard["t"].text_align, TextAlign::Center);
+    assert_eq!(standard["c"].font_size, 30.0);
+}
+
+#[test]
+fn table_border_model_corner_radii_and_absolute_units_parse() {
+    let (s, sheet, budget) = styles(
+        r#"<!doctype html><style>
+        .c { border-collapse: collapse; border-spacing: 4px 6px; font-size: 12pt }
+        .r { border-radius: 50% 4px / 2px }
+        .r3 { border-radius: 1px 2px 3px; border-top-left-radius: 9px 1px }
+        .u { width: 1in; height: 2.54cm; padding: 1pc 10mm 0 0 }
+        </style><table id=c class=c><tr><td id=d>w</td></tr></table>
+        <div id=r class=r></div><div id=r3 class=r3></div><div id=u class=u></div>"#,
+    );
+    assert!(s["c"].border_collapse);
+    assert!(s["d"].border_collapse);
+    assert_eq!(s["c"].column_gap, Length::Px(4.0));
+    assert_eq!(s["c"].row_gap, Length::Px(6.0));
+    assert_eq!(s["c"].font_size, 16.0);
+    assert_eq!(
+        s["r"].border_radius,
+        [
+            Length::Percent(0.5),
+            Length::Px(4.0),
+            Length::Percent(0.5),
+            Length::Px(4.0)
+        ]
+    );
+    assert_eq!(
+        s["r3"].border_radius,
+        [
+            Length::Px(9.0),
+            Length::Px(2.0),
+            Length::Px(3.0),
+            Length::Px(2.0)
+        ]
+    );
+    assert_eq!(s["u"].width, Length::Px(96.0));
+    assert!((px(s["u"].height) - 96.0).abs() < 0.01);
+    assert_eq!(s["u"].padding[0], Length::Px(16.0));
+    assert!((px(s["u"].padding[1]) - 37.795).abs() < 0.01);
+    assert_eq!(sheet.diagnostics.ignored + budget.ignored, 0);
+    assert!(sheet.diagnostics.unsupported_properties.is_empty());
+}
+
+#[test]
+fn pseudo_element_selectors_never_match_but_keep_their_list_valid() {
+    let (s, sheet, _) = styles(
+        r#"<!doctype html><style>
+        *, *:before, *::after { box-sizing: border-box }
+        p::selection, .x::-webkit-scrollbar { color: red }
+        .only::before { content: "x"; float: left }
+        p::-moz-selection, p { font-weight: 700 }
+        :is(::before, p) { font-style: italic }
+        </style><p id=a class=only>x</p>"#,
+    );
+    let a = s["a"];
+    assert!(a.border_box);
+    assert_eq!(a.color, ComputedStyle::default().color);
+    assert_eq!(a.float_side, olive_html::css::FloatSide::None);
+    // Another engine's prefixed pseudo-element still invalidates its list.
+    assert_eq!(a.font_weight, 400.0);
+    // Pseudo-elements are not valid inside functional pseudo-classes.
+    assert!(a.italic);
+    assert_eq!(sheet.rule_count(), 2);
+}
+
+#[test]
+fn overflow_and_clear_parse_their_supported_keywords() {
+    let (s, sheet, budget) = styles(
+        r#"<!doctype html><style>
+        #a { overflow: hidden auto; clear: both } #b { overflow-y: clip; clear: inline-start }
+        #c { overflow: scroll; clear: right } #d { overflow: sideways; clear: top }
+        </style><div id=a></div><div id=b></div><div id=c></div><div id=d></div>"#,
+    );
+    use olive_html::css::Clear;
+    assert_eq!(s["a"].overflow_hidden, [true, false]);
+    assert_eq!(s["a"].clear, Clear::Both);
+    assert_eq!(s["b"].overflow_hidden, [false, true]);
+    assert_eq!(s["b"].clear, Clear::Left);
+    // Scrolling overflow stays visible: Olive has no inner scrolling.
+    assert_eq!(s["c"].overflow_hidden, [false, false]);
+    assert_eq!(s["c"].clear, Clear::Right);
+    assert_eq!(s["d"].overflow_hidden, [false, false]);
+    assert_eq!(s["d"].clear, Clear::None);
+    assert_eq!(sheet.diagnostics.ignored + budget.ignored, 2);
 }

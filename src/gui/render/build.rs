@@ -149,7 +149,7 @@ impl Page {
                     {
                         let mut has_layout_children = false;
                         let mut all_horizontal_items = true;
-                        let mut all_right_floats = true;
+                        let mut all_floats = true;
                         let mut has_direct_text = false;
                         for child in doc.children(id) {
                             let Some(child_node) = doc.node(child) else {
@@ -171,7 +171,7 @@ impl Page {
                                         has_layout_children = true;
                                         all_horizontal_items &= css.display == Display::InlineBlock
                                             || css.float_side != FloatSide::None;
-                                        all_right_floats &= css.float_side == FloatSide::Right;
+                                        all_floats &= css.float_side != FloatSide::None;
                                     }
                                     if child_element.is_html() {
                                         prefetched_child_styles.insert(child, css);
@@ -180,14 +180,15 @@ impl Page {
                                 _ => {}
                             }
                         }
-                        if has_layout_children && all_horizontal_items && !has_direct_text {
-                            // Inline-block and floated siblings share a horizontal
-                            // run and wrap to the next row when needed.
+                        // Inline-block siblings share a horizontal run and wrap to
+                        // the next row when needed. Floats alone lay out as floats.
+                        if has_layout_children
+                            && all_horizontal_items
+                            && !all_floats
+                            && !has_direct_text
+                        {
                             style.css.display = Display::Flex;
                             style.css.flex_wrap = FlexWrap::Wrap;
-                            if all_right_floats {
-                                style.css.justify_content = JustifyContent::End;
-                            }
                         }
                     }
                     if reading.is_none()
@@ -214,12 +215,28 @@ impl Page {
                         builder.page.background =
                             Some(paint_color(style.css.background, style.css.opacity));
                     }
+                    // Near the display limits, cells fall back to inline runs, one
+                    // line per row, so large tables keep their text visible.
+                    if style.css.display == Display::TableCell
+                        && (builder.page.boxes.len() >= MAX_BOXES * 7 / 10
+                            || builder.page.blocks.len() >= MAX_BLOCKS * 7 / 10)
+                    {
+                        style.css.display = Display::Inline;
+                    }
+                    // Relative offsets do not apply to inline runs, so only absolute
+                    // positioning and floats turn an inline element into a box.
                     let block = style.flex_parent
-                        || style.css.position != Position::Static
+                        || style.css.position == Position::Absolute
                         || style.css.float_side != FloatSide::None
                         || matches!(
                             style.css.display,
-                            Display::Block | Display::Flex | Display::Grid | Display::InlineBlock
+                            Display::Block
+                                | Display::Flex
+                                | Display::Grid
+                                | Display::InlineBlock
+                                | Display::Table
+                                | Display::TableRow
+                                | Display::TableCell
                         );
                     if block {
                         builder.open(style.css);
@@ -257,13 +274,13 @@ impl Page {
                         }
                         continue;
                     }
-                    if matches!(tag, "td" | "th") {
+                    // Inline cells, as in Focus, still need a gap between them.
+                    if !block && matches!(tag, "td" | "th") {
                         builder.text(" ", style);
                     }
-                    let list = matches!(tag, "ul" | "ol");
+                    let list = matches!(tag, "ul" | "ol" | "menu");
                     match tag {
-                        "blockquote" | "dd" => style.indent += 1,
-                        "ul" => lists.push(None),
+                        "ul" | "menu" => lists.push(None),
                         "ol" => lists.push(Some(
                             element
                                 .attribute("start")
@@ -271,21 +288,29 @@ impl Page {
                                 .unwrap_or(1),
                         )),
                         "li" => {
-                            style.indent += usize::from(lists.len() > 1);
-                            let marker = if !style.css.list_marker {
-                                String::new()
-                            } else if let Some(Some(next)) = lists.last_mut() {
-                                *next = element
-                                    .attribute("value")
-                                    .and_then(|v| v.parse().ok())
-                                    .unwrap_or(*next);
-                                let marker = format!("{next}. ");
-                                *next = next.saturating_add(1);
-                                marker
-                            } else {
-                                "• ".to_owned()
+                            let number = match lists.last_mut() {
+                                Some(Some(next)) => {
+                                    *next = element
+                                        .attribute("value")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(*next);
+                                    let number = *next;
+                                    *next = next.saturating_add(1);
+                                    Some(number)
+                                }
+                                _ => None,
                             };
-                            builder.literal(&marker, style);
+                            // Only list-item boxes show a marker, as in browsers;
+                            // inline menu items keep their numbering silently.
+                            if style.css.list_marker && style.css.display == Display::Block {
+                                let marker = match number {
+                                    Some(number) => format!("{number}."),
+                                    // Bullets step through disc, circle and square with
+                                    // the nesting depth of all enclosing lists.
+                                    None => ["•", "◦", "▪"][lists.len().clamp(1, 3) - 1].to_owned(),
+                                };
+                                builder.marker(&marker, style);
+                            }
                         }
                         "br" => builder.literal("\n", style),
                         "hr" => {
@@ -432,6 +457,22 @@ impl Builder {
             self.page.truncated = true;
         }
     }
+    /// A list marker, painted outside the item's start edge on its first line.
+    fn marker(&mut self, text: &str, style: Style) {
+        self.flush();
+        let mut marker = Block {
+            style: style.css,
+            marker: true,
+            characters: text.chars().count(),
+            ..Default::default()
+        };
+        let mut format = style.format();
+        format.underline = Stroke::NONE;
+        format.strikethrough = Stroke::NONE;
+        format.background = Color32::TRANSPARENT;
+        marker.job.append(text, 0.0, format);
+        self.push(marker);
+    }
     fn literal(&mut self, text: &str, style: Style) {
         let remaining = MAX_TEXT.saturating_sub(self.characters);
         let accepted: String = text.chars().take(remaining).collect();
@@ -448,7 +489,6 @@ impl Builder {
             self.current.job.halign =
                 text_alignment(style.css.text_align, style.css.direction == Direction::Rtl);
         }
-        self.current.indent = style.indent;
         let characters = accepted.chars().count();
         let action = Action {
             target: style.target,
