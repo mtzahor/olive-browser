@@ -1,9 +1,9 @@
 //! Bounded native HTML form state. No networking or page code runs in widgets.
-use eframe::egui;
-use olive_html::{
+use crate::{
     Document, Element, NodeId, NodeKind,
     net::{FormRequest, Location, MAX_FORM_BYTES},
 };
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -710,7 +710,7 @@ fn crlf(value: &str) -> String {
 mod tests {
     use super::*;
     fn forms(html: &str) -> Forms {
-        Forms::from_document(&olive_html::parse(html).unwrap().document, false)
+        Forms::from_document(&crate::parse(html).unwrap().document, false)
     }
     fn location() -> Location {
         Location::from_input("https://example.com/dir/page?old=1#part").unwrap()

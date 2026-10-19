@@ -1,26 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod app;
-mod daily_ui;
-mod document;
-mod downloads;
-mod find;
-mod focus;
-mod focus_export;
-mod fonts;
-mod forms;
-mod history;
-mod history_ui;
-mod icon;
-mod navigation;
-mod profile;
-mod render;
-mod theme;
-mod ui_icons;
-mod worker;
-mod zoom;
-
 use eframe::egui;
+use olive_html::gui::{app, icon, worker};
 
 fn main() -> eframe::Result {
     #[cfg(windows)]

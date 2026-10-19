@@ -1,7 +1,7 @@
 //! Versioned, bounded daily-driver state. Page content, credentials and form bodies
 //! never belong in this file. A damaged file is preserved until an explicit reset.
-use crate::focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings};
-use olive_html::net::{Location, Url};
+use crate::gui::focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings};
+use crate::net::{Location, Url};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -19,7 +19,7 @@ const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub browser_theme: crate::theme::Theme,
+    pub browser_theme: crate::gui::theme::Theme,
     pub restore_session: bool,
     pub javascript_by_default: bool,
     pub default_zoom: u16,
@@ -29,7 +29,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            browser_theme: crate::theme::Theme::default(),
+            browser_theme: crate::gui::theme::Theme::default(),
             restore_session: true,
             javascript_by_default: false,
             default_zoom: 100,
@@ -94,7 +94,7 @@ pub struct Profile {
 
 impl Profile {
     pub fn load_default() -> Self {
-        match crate::history::default_path() {
+        match crate::gui::history::default_path() {
             Ok(path) => Self::load(path.with_file_name("profile.json")),
             Err(error) => Self {
                 error: Some(error),
@@ -158,7 +158,7 @@ impl Profile {
                 0,
                 Bookmark {
                     url: url.into(),
-                    title: crate::history::bounded_title(title),
+                    title: crate::gui::history::bounded_title(title),
                 },
             );
         }
@@ -253,7 +253,7 @@ fn read(path: &Path) -> Result<Data, String> {
     let mut seen = HashSet::new();
     for bookmark in &mut data.bookmarks {
         bookmark.url = canonical_url(&bookmark.url)?;
-        bookmark.title = crate::history::bounded_title(&bookmark.title);
+        bookmark.title = crate::gui::history::bounded_title(&bookmark.title);
         if !seen.insert(bookmark.url.clone()) {
             return Err("duplicate bookmark".into());
         }
@@ -294,7 +294,7 @@ mod tests {
             .toggle_bookmark(&location, " A\n title 🫒 ")
             .unwrap();
         profile.data.settings.default_zoom = 125;
-        profile.data.settings.browser_theme = crate::theme::Theme::Dark;
+        profile.data.settings.browser_theme = crate::gui::theme::Theme::Dark;
         profile.data.settings.javascript_by_default = true;
         profile.data.session = Session {
             active: 1,
@@ -336,11 +336,14 @@ mod tests {
         assert!(!profile.load_failed);
         assert_eq!(
             profile.data.settings.browser_theme,
-            crate::theme::Theme::Light
+            crate::gui::theme::Theme::Light
         );
         assert_eq!(profile.data.settings.default_zoom, 125);
-        assert_eq!(profile.data.settings.focus.theme, crate::focus::Theme::Dark);
-        profile.data.settings.browser_theme = crate::theme::Theme::Dark;
+        assert_eq!(
+            profile.data.settings.focus.theme,
+            crate::gui::focus::Theme::Dark
+        );
+        profile.data.settings.browser_theme = crate::gui::theme::Theme::Dark;
         profile.save_if_changed();
         assert_eq!(Profile::load(path).data, profile.data);
     }
@@ -360,7 +363,7 @@ mod tests {
         assert!(!profile.data.settings.javascript_by_default);
         assert_eq!(
             profile.data.settings.browser_theme,
-            crate::theme::Theme::Dark
+            crate::gui::theme::Theme::Dark
         );
         assert!(!Settings::default().javascript_by_default);
     }

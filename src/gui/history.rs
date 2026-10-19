@@ -1,6 +1,6 @@
 //! Saved, searchable browsing history, separate from the back/forward stack.
 
-use olive_html::net::{Location, Url};
+use crate::net::{Location, Url};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,

@@ -1,22 +1,22 @@
 //! Inert CSS presentation of Olive's DOM. No HTML reparsing or resource loading.
-use crate::focus::{self, Content, Settings};
-use crate::{
+use crate::gui::focus::{self, Content, Settings};
+use crate::gui::{
     find::Matches,
     forms::{Activation, Forms, Kind},
+};
+use crate::{
+    Document, NodeId, NodeKind,
+    css::Direction,
+    css::{
+        Color, ComputedStyle, DEFAULT_VIEWPORT, Display, FlexWrap, FloatSide, JustifyContent,
+        Length, Position, StyleBudget, Stylesheet, TextAlign, WhiteSpace,
+    },
 };
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Color32, ColorImage, FontFamily, FontId, Role, Stroke, TextureHandle, TextureOptions,
     WidgetInfo,
     text::{LayoutJob, TextFormat},
-};
-use olive_html::{
-    Document, NodeId, NodeKind,
-    css::Direction,
-    css::{
-        Color, ComputedStyle, Display, FlexWrap, FloatSide, JustifyContent, Length, Position,
-        StyleBudget, Stylesheet, TextAlign, WhiteSpace,
-    },
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
@@ -104,7 +104,7 @@ pub struct ImageAsset {
 struct RenderedImage {
     node: NodeId,
     reference: String,
-    #[serde(with = "crate::worker::wire_image")]
+    #[serde(with = "crate::gui::worker::wire_image")]
     image: Arc<ColorImage>,
     alt: Option<String>,
     style: ComputedStyle,
@@ -231,16 +231,16 @@ impl Page {
     }
     #[cfg(test)]
     pub fn with_scripts(doc: &Document, scripting_enabled: bool) -> Self {
-        Self::with_stylesheet(doc, scripting_enabled, Stylesheet::from_document(doc))
+        Self::with_stylesheet(doc, scripting_enabled, &Stylesheet::from_document(doc))
     }
     #[cfg(test)]
-    pub fn with_stylesheet(doc: &Document, scripting_enabled: bool, sheet: Stylesheet) -> Self {
+    pub fn with_stylesheet(doc: &Document, scripting_enabled: bool, sheet: &Stylesheet) -> Self {
         Self::with_stylesheet_and_images(doc, scripting_enabled, sheet, &HashMap::new())
     }
     pub fn with_stylesheet_and_images(
         doc: &Document,
         scripting_enabled: bool,
-        sheet: Stylesheet,
+        sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
     ) -> Self {
         Self::with_stylesheet_and_images_at_viewport(
@@ -248,18 +248,18 @@ impl Page {
             scripting_enabled,
             sheet,
             images,
-            (1024.0, 768.0),
+            DEFAULT_VIEWPORT,
         )
     }
 
     pub fn with_stylesheet_and_images_at_viewport(
         doc: &Document,
         scripting_enabled: bool,
-        sheet: Stylesheet,
+        sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
         viewport: (f32, f32),
     ) -> Self {
-        Self::build(doc, scripting_enabled, &sheet, images, None, viewport)
+        Self::build(doc, scripting_enabled, sheet, images, None, viewport)
     }
 
     #[cfg(test)]
@@ -277,7 +277,7 @@ impl Page {
         scripting_enabled: bool,
         sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
-        base: Option<&olive_html::net::Location>,
+        base: Option<&crate::net::Location>,
     ) -> Self {
         Self::reading_with_base_at_viewport(
             doc,
@@ -285,7 +285,7 @@ impl Page {
             sheet,
             images,
             base,
-            (1024.0, 768.0),
+            DEFAULT_VIEWPORT,
         )
     }
 
@@ -294,7 +294,7 @@ impl Page {
         scripting_enabled: bool,
         sheet: &Stylesheet,
         images: &HashMap<NodeId, ImageAsset>,
-        base: Option<&olive_html::net::Location>,
+        base: Option<&crate::net::Location>,
         viewport: (f32, f32),
     ) -> Self {
         let content = Content::extract(doc, sheet, scripting_enabled);
@@ -310,7 +310,7 @@ impl Page {
             viewport,
         );
         if let Some(base) = base {
-            match crate::focus_export::export(doc, &content, &page.title, base, images) {
+            match crate::gui::focus_export::export(doc, &content, &page.title, base, images) {
                 Ok(html) => page.export_html = Some(html),
                 Err(error) => page.export_error = Some(error),
             }
@@ -370,13 +370,13 @@ impl Page {
             initial.css.direction = content.direction;
             initial.css.font_size = focus::DEFAULT_FONT_SIZE;
             initial.css.color = focus::Theme::Light.ink();
-            initial.css.line_height = olive_html::css::LineHeight::Number(1.65);
+            initial.css.line_height = crate::css::LineHeight::Number(1.65);
             if !content.has_heading && !builder.page.title.trim().is_empty() {
                 let mut heading = initial;
                 heading.css.font_size *= 1.9;
                 heading.css.font_weight = 700.0;
                 heading.css.margin[2] = Length::Em(0.5);
-                heading.css.line_height = olive_html::css::LineHeight::Number(1.25);
+                heading.css.line_height = crate::css::LineHeight::Number(1.25);
                 builder.open(heading.css);
                 builder.text(&builder.page.title.clone(), heading);
                 builder.close();
@@ -638,7 +638,7 @@ impl Page {
             let mut child_style = style;
             child_style.flex_parent = style.css.display == Display::Grid
                 || (style.css.display == Display::Flex
-                    && style.css.flex_direction == olive_html::css::FlexDirection::Row);
+                    && style.css.flex_direction == crate::css::FlexDirection::Row);
             pending.extend(
                 children
                     .into_iter()
@@ -675,7 +675,7 @@ impl Page {
         if self
             .export_html
             .as_ref()
-            .is_some_and(|html| html.len() > crate::focus_export::MAX_EXPORT_BYTES)
+            .is_some_and(|html| html.len() > crate::gui::focus_export::MAX_EXPORT_BYTES)
             || self
                 .export_error
                 .as_ref()
@@ -851,7 +851,6 @@ impl Page {
                 .iter()
                 .any(|s| s.background.3 > 0 || s.border_solid || s.height != Length::Auto)
     }
-    #[cfg(test)]
     pub fn image_count(&self) -> usize {
         self.images.len()
     }
@@ -863,7 +862,6 @@ impl Page {
     pub fn scroll_to_fragment(&mut self, fragment: Option<String>) {
         self.scroll_to = Some(fragment.unwrap_or_default());
     }
-    #[cfg(test)]
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PageClick> {
         let mut textures = ImageTextureCache::default();
         self.show_with_textures(ui, &mut textures)
@@ -1915,7 +1913,7 @@ impl BoxLayout {
         let grid = style.display == Display::Grid
             && !has_direct_text(commands, command_index, remaining_steps);
         let row_flex = style.display == Display::Flex
-            && style.flex_direction == olive_html::css::FlexDirection::Row;
+            && style.flex_direction == crate::css::FlexDirection::Row;
         let mut has_anonymous_text = false;
         let flex_items = if row_flex {
             let layout = flex_layouts(
@@ -1951,7 +1949,7 @@ impl BoxLayout {
             margin_bottom: margin[2],
             flex_row: row_flex && !has_anonymous_text,
             flex_column: style.display == Display::Flex
-                && (style.flex_direction == olive_html::css::FlexDirection::Column
+                && (style.flex_direction == crate::css::FlexDirection::Column
                     || has_anonymous_text),
             flex_items,
             flex_child_index: 0,
@@ -2463,7 +2461,7 @@ fn text_alignment(align: TextAlign, rtl: bool) -> egui::Align {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use olive_html::parse;
+    use crate::parse;
 
     fn page(html: &str) -> Page {
         Page::from_document(&parse(html).unwrap().document)
@@ -2526,7 +2524,7 @@ mod tests {
             "<p dir=rtl><a href='/hebrew'>שָׁלוֹם</a> (123) abc</p><p dir=auto>אבג דהו זחט יכל מנס עפר צקת</p><p dir=ltr>abc &#x202e;DEF&#x202c;</p>",
         );
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         let mut wide = Vec::new();
         let mut output = ctx.run_ui(Default::default(), |ui| {
             for block in &mut page.blocks {
@@ -2803,7 +2801,7 @@ mod tests {
         )]);
         let sheet = Stylesheet::from_document(&doc);
         let mut focus = Page::reading(&doc, true, &sheet, &images);
-        let original = Page::with_stylesheet_and_images(&doc, true, sheet, &images);
+        let original = Page::with_stylesheet_and_images(&doc, true, &sheet, &images);
         assert_eq!(focus.image_count(), 1);
         assert_eq!(focus.images[0].html_width, Some(100.0));
         assert!(focus.images[0].action.link.is_some());
@@ -2912,7 +2910,7 @@ mod tests {
     #[test]
     fn javascript_mutations_feed_text_and_css_rendering() {
         let doc = parse("<!doctype html><style>.done {color:red}</style><p id=p>before</p><noscript>fallback</noscript><script>const p=document.getElementById('p'); p.textContent='after'; p.className='done'; document.title='Changed';</script>").unwrap().document;
-        let (doc, report) = olive_html::js::run_document(doc, Default::default());
+        let (doc, report) = crate::js::run_document(doc, Default::default());
         assert!(report.diagnostics.is_empty());
         let page = Page::from_document(&doc);
         assert_eq!(texts(&page), ["after"]);
@@ -2985,7 +2983,7 @@ mod tests {
         let mut page = Page::with_stylesheet_and_images(
             &document,
             false,
-            Stylesheet::from_document(&document),
+            &Stylesheet::from_document(&document),
             &images,
         );
         assert!(!page.is_empty());
@@ -3060,7 +3058,7 @@ mod tests {
 
     fn draw(page: &mut Page, width: f32) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

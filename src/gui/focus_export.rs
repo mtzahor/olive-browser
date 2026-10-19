@@ -1,11 +1,11 @@
 //! Passive, self-contained HTML from the same bounded selection as Focus mode.
-use crate::{focus::Content, render::ImageAsset};
+use crate::gui::{focus::Content, render::ImageAsset};
+use crate::{Document, NodeId, NodeKind, css::Direction, net::Location};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use html5ever::{
     QualName, ns,
     serialize::{HtmlSerializer, SerializeOpts, Serializer},
 };
-use olive_html::{Document, NodeId, NodeKind, css::Direction, net::Location};
 use std::{
     collections::HashMap,
     io::{self, Write},
@@ -297,7 +297,7 @@ pub fn save(path: &std::path::Path, html: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use olive_html::{css::Stylesheet, parse};
+    use crate::{css::Stylesheet, parse};
     fn exported(html: &str, images: &HashMap<NodeId, ImageAsset>) -> String {
         let doc = parse(html).unwrap().document;
         let content = Content::extract(&doc, &Stylesheet::from_document(&doc), false);

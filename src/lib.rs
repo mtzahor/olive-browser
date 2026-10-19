@@ -29,6 +29,10 @@ pub mod net;
 #[cfg(all(feature = "net", feature = "css", feature = "js"))]
 pub mod resources;
 
+#[cfg(feature = "gui")]
+#[doc(hidden)]
+pub mod gui;
+
 /// A preloaded source bound to the original href/src attribute of one DOM node.
 /// Changing that attribute does not fetch or execute a new resource.
 #[cfg(any(feature = "css", feature = "js"))]

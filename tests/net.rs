@@ -2,8 +2,9 @@
 
 use flate2::{Compression, write::GzEncoder};
 use olive_html::net::{CookieJar, DocumentLoader, Location, MAX_DOCUMENT_BYTES};
+#[cfg(all(feature = "css", feature = "js"))]
+use std::collections::HashMap;
 use std::{
-    collections::HashMap,
     io::{Read, Write},
     net::TcpListener,
     thread,
@@ -18,6 +19,7 @@ fn server(responses: Vec<Vec<u8>>) -> (Location, thread::JoinHandle<Vec<String>>
     })
 }
 
+#[cfg(all(feature = "css", feature = "js"))]
 fn server_by_path(
     responses: HashMap<String, Vec<u8>>,
 ) -> (Location, thread::JoinHandle<Vec<String>>) {

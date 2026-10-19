@@ -1,6 +1,6 @@
+use crate::net::download::suggested_name;
+use crate::net::{DocumentLoader, Location};
 use eframe::egui;
-use olive_html::net::download::{MAX_DOWNLOAD_BYTES, suggested_name};
-use olive_html::net::{DocumentLoader, Location};
 use std::{
     fs,
     path::PathBuf,
@@ -173,8 +173,6 @@ pub fn fraction(received: u64, total: Option<u64>) -> f32 {
         })
         .unwrap_or(0.0)
 }
-#[allow(dead_code)]
-const _: u64 = MAX_DOWNLOAD_BYTES;
 
 #[cfg(test)]
 mod tests {

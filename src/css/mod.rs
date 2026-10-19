@@ -19,6 +19,8 @@ use values::{Declaration, PROPERTIES, Value};
 
 pub const MAX_CSS_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_RULES: usize = 32_768;
+/// Viewport assumed until the host reports the real content size.
+pub(crate) const DEFAULT_VIEWPORT: (f32, f32) = (1024.0, 768.0);
 const MAX_DECLARATIONS: usize = 512;
 const MAX_SELECTORS: usize = 128;
 const MATCH_BUDGET: usize = 8_000_000;
@@ -293,8 +295,8 @@ impl Default for StyleBudget {
             limited: false,
             ignored: 0,
             unsupported_properties: HashMap::new(),
-            viewport_width: 1024.0,
-            viewport_height: 768.0,
+            viewport_width: DEFAULT_VIEWPORT.0,
+            viewport_height: DEFAULT_VIEWPORT.1,
         }
     }
 }
