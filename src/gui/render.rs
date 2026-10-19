@@ -14,8 +14,8 @@ use olive_html::{
     Document, NodeId, NodeKind,
     css::Direction,
     css::{
-        Color, ComputedStyle, Display, FlexWrap, JustifyContent, Length, Position, StyleBudget,
-        Stylesheet, TextAlign, WhiteSpace,
+        Color, ComputedStyle, Display, FlexWrap, FloatSide, JustifyContent, Length, Position,
+        StyleBudget, Stylesheet, TextAlign, WhiteSpace,
     },
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -395,6 +395,7 @@ impl Page {
             .map(|(i, c)| (c.node, i))
             .collect();
         let mut lists: Vec<Option<i64>> = Vec::new();
+        let mut prefetched_child_styles = HashMap::new();
         while let Some(visit) = pending.pop() {
             if builder.page.truncated {
                 break;
@@ -440,11 +441,61 @@ impl Page {
                     {
                         continue;
                     }
-                    style.css = if reading.is_some() {
+                    style.css = if let Some(css) = prefetched_child_styles.remove(&id) {
+                        css
+                    } else if reading.is_some() {
                         focus::style(element, style.css)
                     } else {
                         sheet.compute(doc, id, style.css, builder.page.root_font, &mut budget)
                     };
+                    if reading.is_none()
+                        && matches!(style.css.display, Display::Block | Display::InlineBlock)
+                    {
+                        let mut has_layout_children = false;
+                        let mut all_horizontal_items = true;
+                        let mut all_right_floats = true;
+                        let mut has_direct_text = false;
+                        for child in doc.children(id) {
+                            let Some(child_node) = doc.node(child) else {
+                                continue;
+                            };
+                            match &child_node.kind {
+                                NodeKind::Text(text) => {
+                                    has_direct_text |= !text.trim().is_empty();
+                                }
+                                NodeKind::Element(child_element) => {
+                                    let css = sheet.compute(
+                                        doc,
+                                        child,
+                                        style.css,
+                                        builder.page.root_font,
+                                        &mut budget,
+                                    );
+                                    if css.display != Display::None {
+                                        has_layout_children = true;
+                                        all_horizontal_items &= css.display == Display::InlineBlock
+                                            || css.float_side != FloatSide::None;
+                                        all_right_floats &= css.float_side == FloatSide::Right;
+                                    }
+                                    if child_element.name.ns.as_str()
+                                        == "http://www.w3.org/1999/xhtml"
+                                    {
+                                        prefetched_child_styles.insert(child, css);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if has_layout_children && all_horizontal_items && !has_direct_text {
+                            // Inline-block and floated siblings share a horizontal
+                            // run and wrap to the next row when needed.
+                            style.css.display = Display::Flex;
+                            style.css.flex_wrap = FlexWrap::Wrap;
+                            if all_right_floats {
+                                style.css.justify_content = JustifyContent::End;
+                            }
+                        }
+                    }
                     if reading.is_none()
                         && scripting_enabled
                         && element.attribute("onclick").is_some()
@@ -471,9 +522,10 @@ impl Page {
                     }
                     let block = style.flex_parent
                         || style.css.position != Position::Static
+                        || style.css.float_side != FloatSide::None
                         || matches!(
                             style.css.display,
-                            Display::Block | Display::Flex | Display::Grid
+                            Display::Block | Display::Flex | Display::Grid | Display::InlineBlock
                         );
                     if block {
                         builder.open(style.css);
@@ -1558,6 +1610,14 @@ fn flex_layouts(
                             )
                         })
                     };
+                    let min_width = (resolve(child.min_width)
+                        - if child.border_box {
+                            padding + border
+                        } else {
+                            0.0
+                        })
+                    .max(1.0);
+                    let base = base.max(min_width);
                     let extra = margin_left + margin_right + padding + border;
                     let projected = base + extra + if row.is_empty() { 0.0 } else { gap };
                     if style.flex_wrap == FlexWrap::Wrap
@@ -1790,6 +1850,7 @@ impl BoxLayout {
                 (resolve(style.max_width) - if style.border_box { sides } else { 0.0 }).max(1.0),
             )
         };
+        let width = width.max(resolve(style.min_width).max(1.0));
         let spare = (available - width).max(0.0);
         let left_auto = style.margin[3] == Length::Auto;
         let right_auto = style.margin[1] == Length::Auto;

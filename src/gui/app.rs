@@ -1109,8 +1109,12 @@ impl Tab {
                                 // Native form controls belong to the document, not browser chrome.
                                 ui.style_mut().visuals = Theme::Light.visuals();
                             }
-                            let column = if focus { 720.0 } else { 820.0 };
-                            let margin = ((ui.available_width() - column) / 2.0).max(24.0);
+                            let column = if focus { 720.0 } else { ui.available_width() };
+                            let margin = if focus {
+                                ((ui.available_width() - column) / 2.0).max(24.0)
+                            } else {
+                                0.0
+                            };
                             // Keep the column centered beyond the integer frame-margin limit.
                             let inset = if focus { (margin - 100.0).max(0.0) } else { 0.0 };
                             let mut rect = ui.available_rect_before_wrap();

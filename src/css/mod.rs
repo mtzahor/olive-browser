@@ -12,8 +12,8 @@ use cssparser::{
 use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
-    BoxShadow, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, JustifyContent,
-    Length, LineHeight, Position, TextAlign, WhiteSpace,
+    BoxShadow, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, FloatSide,
+    JustifyContent, Length, LineHeight, Position, TextAlign, WhiteSpace,
 };
 use values::{Declaration, PROPERTIES, Value};
 
@@ -664,6 +664,7 @@ impl Stylesheet {
         style.margin = style.margin.map(computed_length);
         style.padding = style.padding.map(computed_length);
         style.width = computed_length(style.width);
+        style.min_width = computed_length(style.min_width);
         style.max_width = computed_length(style.max_width);
         style.height = computed_length(style.height);
         style.min_height = computed_length(style.min_height);

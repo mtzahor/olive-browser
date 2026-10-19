@@ -106,6 +106,15 @@ pub enum Display {
     Flex,
     Grid,
     None,
+    InlineBlock,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+pub enum FloatSide {
+    #[default]
+    None,
+    Left,
+    Right,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
@@ -190,6 +199,7 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub direction: Direction,
     pub display: Display,
+    pub float_side: FloatSide,
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
     pub justify_content: JustifyContent,
@@ -210,6 +220,7 @@ pub struct ComputedStyle {
     /// Top, right, bottom, left.
     pub padding: [Length; 4],
     pub width: Length,
+    pub min_width: Length,
     pub max_width: Length,
     pub height: Length,
     pub min_height: Length,
@@ -236,6 +247,7 @@ impl Default for ComputedStyle {
             text_align: TextAlign::Start,
             direction: Direction::Ltr,
             display: Display::Inline,
+            float_side: FloatSide::None,
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::Start,
@@ -252,6 +264,7 @@ impl Default for ComputedStyle {
             margin: [Length::Px(0.0); 4],
             padding: [Length::Px(0.0); 4],
             width: Length::Auto,
+            min_width: Length::Px(0.0),
             max_width: Length::Auto,
             height: Length::Auto,
             min_height: Length::Px(0.0),
@@ -342,8 +355,10 @@ pub(super) enum Property {
     GridColumns,
     Opacity,
     ListMarker,
+    Float,
+    MinWidth,
 }
-pub(super) const PROPERTIES: [Property; 46] = [
+pub(super) const PROPERTIES: [Property; 48] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -390,6 +405,8 @@ pub(super) const PROPERTIES: [Property; 46] = [
     Property::GridColumns,
     Property::Opacity,
     Property::ListMarker,
+    Property::Float,
+    Property::MinWidth,
 ];
 impl Property {
     pub(super) fn inherited(self) -> bool {
@@ -420,6 +437,7 @@ pub(super) enum Value {
     Align(TextAlign),
     Direction(Direction),
     Display(Display),
+    Float(FloatSide),
     FlexDirection(FlexDirection),
     FlexWrap(FlexWrap),
     JustifyContent(JustifyContent),
@@ -730,6 +748,7 @@ pub(super) fn parse_values(
         "text-align" => &[P::Align],
         "direction" => &[P::Direction],
         "display" => &[P::Display],
+        "float" => &[P::Float],
         "position" => &[P::Position],
         "top" => &[P::Top],
         "right" => &[P::Right],
@@ -764,6 +783,7 @@ pub(super) fn parse_values(
         "padding-bottom" => &[P::PaddingBottom],
         "padding-left" => &[P::PaddingLeft],
         "width" => &[P::Width],
+        "min-width" => &[P::MinWidth],
         "max-width" => &[P::MaxWidth],
         "height" => &[P::Height],
         "min-height" => &[P::MinHeight],
@@ -1051,10 +1071,17 @@ pub(super) fn parse_values(
         }),
         P::Display => Value::Display(match keyword(input)?.as_str() {
             "inline" => Display::Inline,
-            "block" | "list-item" | "inline-block" => Display::Block,
+            "inline-block" => Display::InlineBlock,
+            "block" | "list-item" => Display::Block,
             "flex" | "inline-flex" => Display::Flex,
             "grid" | "inline-grid" => Display::Grid,
             "none" => Display::None,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
+        P::Float => Value::Float(match keyword(input)?.as_str() {
+            "none" => FloatSide::None,
+            "left" | "inline-start" => FloatSide::Left,
+            "right" | "inline-end" => FloatSide::Right,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Position => Value::Position(match keyword(input)?.as_str() {
@@ -1114,7 +1141,7 @@ pub(super) fn parse_values(
             "border-box" => true,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
-        P::Width | P::MaxWidth | P::Height | P::MinHeight => {
+        P::Width | P::MinWidth | P::MaxWidth | P::Height | P::MinHeight => {
             if p == P::MaxWidth && input.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
                 Value::Length(Length::Auto)
             } else {
@@ -1153,6 +1180,7 @@ pub(super) fn supports_property(name: &str) -> bool {
             | "text-align"
             | "direction"
             | "display"
+            | "float"
             | "position"
             | "top"
             | "right"
@@ -1183,6 +1211,7 @@ pub(super) fn supports_property(name: &str) -> bool {
             | "padding-bottom"
             | "padding-left"
             | "width"
+            | "min-width"
             | "max-width"
             | "height"
             | "min-height"
@@ -1246,6 +1275,7 @@ pub(super) fn apply(
             P::Align => style.text_align = source.text_align,
             P::Direction => style.direction = source.direction,
             P::Display => style.display = source.display,
+            P::Float => style.float_side = source.float_side,
             P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft => {
                 let i = prop as usize - P::MarginTop as usize;
                 style.margin[i] = source.margin[i];
@@ -1255,6 +1285,7 @@ pub(super) fn apply(
                 style.padding[i] = source.padding[i];
             }
             P::Width => style.width = source.width,
+            P::MinWidth => style.min_width = source.min_width,
             P::MaxWidth => style.max_width = source.max_width,
             P::Height => style.height = source.height,
             P::MinHeight => style.min_height = source.min_height,
@@ -1333,6 +1364,7 @@ pub(super) fn apply(
         (P::Align, Value::Align(v)) => style.text_align = v,
         (P::Direction, Value::Direction(v)) => style.direction = v,
         (P::Display, Value::Display(v)) => style.display = v,
+        (P::Float, Value::Float(v)) => style.float_side = v,
         (P::FlexDirection, Value::FlexDirection(v)) => style.flex_direction = v,
         (P::FlexWrap, Value::FlexWrap(v)) => style.flex_wrap = v,
         (P::JustifyContent, Value::JustifyContent(v)) => style.justify_content = v,
@@ -1355,6 +1387,7 @@ pub(super) fn apply(
             style.padding[prop as usize - P::PaddingTop as usize] = v
         }
         (P::Width, Value::Length(v)) => style.width = v,
+        (P::MinWidth, Value::Length(v)) => style.min_width = v,
         (P::MaxWidth, Value::Length(v)) => style.max_width = v,
         (P::Height, Value::Length(v)) => style.height = v,
         (P::MinHeight, Value::Length(v)) => style.min_height = v,

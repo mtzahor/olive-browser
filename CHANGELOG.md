@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2 — CSS navigation layout compatibility
+
+- Render common inline-block and floated navigation items horizontally, with
+  wrapping when the available page width is too narrow.
+- Honor CSS `float` and `min-width`, and give standard pages the full viewport
+  width so horizontal navigation can lay out as intended.
+
 ## 1.4.1 — Windows worker sandbox fixes
 
 - Fix Windows GUI worker compilation and startup, and run page workers with a

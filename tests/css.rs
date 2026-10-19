@@ -103,7 +103,7 @@ fn renderable_button_css_has_no_unsupported_declarations() {
         </style><body><div id=button class=button onclick="alert('ok')">Click</div>"#,
     );
     assert_eq!(sheet.diagnostics.ignored, 0);
-    assert_eq!(s["button"].display, Display::Block);
+    assert_eq!(s["button"].display, Display::InlineBlock);
     assert_eq!(s["button"].background, Color(0, 102, 204, 255));
     assert_eq!(
         s["button"].padding,
