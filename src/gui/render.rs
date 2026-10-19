@@ -2431,7 +2431,7 @@ mod tests {
         output.textures_delta.clear();
         assert_eq!(texts(&page), ["שלום world 123"]);
         assert_eq!(page.blocks[0].visual_job.text, "world 123 שלום");
-        let rendered: String = page.blocks[0]
+        let mut glyphs: Vec<_> = page.blocks[0]
             .layout
             .as_ref()
             .unwrap()
@@ -2440,8 +2440,9 @@ mod tests {
             .iter()
             .flat_map(|row| &row.glyphs)
             .filter(|glyph| glyph.advance_width > 0.0)
-            .map(|glyph| glyph.chr)
             .collect();
+        glyphs.sort_by(|left, right| left.pos.x.total_cmp(&right.pos.x));
+        let rendered: String = glyphs.into_iter().map(|glyph| glyph.chr).collect();
         assert_eq!(rendered, "world 123 םולש");
         assert_eq!(page.blocks[0].visual_to_logical.len(), 14);
         assert_eq!(page.find_query("שלום"), 1);
