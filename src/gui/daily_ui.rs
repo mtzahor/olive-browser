@@ -38,7 +38,7 @@ impl DailyWindows {
                             let text_width = (ui.available_width() - 48.0).max(120.0);
                             ui.vertical(|ui| {
                                 ui.set_width(text_width);
-                                let mut button = IconButton::new(
+                                let button = IconButton::new(
                                     Icon::Page,
                                     RichText::new(if bookmark.title.is_empty() {
                                         &bookmark.url
@@ -47,11 +47,9 @@ impl DailyWindows {
                                     })
                                     .strong(),
                                 )
-                                .quiet();
-                                button.button = button
-                                    .button
-                                    .truncate()
-                                    .min_size(egui::vec2(text_width, 32.0));
+                                .quiet()
+                                .truncate()
+                                .min_size(egui::vec2(text_width, 32.0));
                                 if ui.add(button).clicked() {
                                     open_url = Some(bookmark.url.clone());
                                 }
@@ -96,9 +94,7 @@ impl DailyWindows {
                             (Theme::Light, Icon::Sun, "Light"),
                             (Theme::Dark, Icon::Moon, "Dark"),
                         ] {
-                            let mut button = IconButton::new(icon, label);
-                            button.button = button
-                                .button
+                            let button = IconButton::new(icon, label)
                                 .selected(profile.data.settings.browser_theme == theme);
                             if ui.add(button).clicked() {
                                 profile.data.settings.browser_theme = theme;
@@ -158,12 +154,12 @@ impl DailyWindows {
                         ui.label("Reading theme");
                         ui.selectable_value(
                             &mut profile.data.settings.focus.theme,
-                            crate::gui::focus::Theme::Light,
+                            Theme::Light,
                             "Light",
                         );
                         ui.selectable_value(
                             &mut profile.data.settings.focus.theme,
-                            crate::gui::focus::Theme::Dark,
+                            Theme::Dark,
                             "Dark",
                         );
                     });
@@ -229,10 +225,8 @@ impl DailyWindows {
                                 ),
                             );
                             ui.horizontal(|ui| {
-                                ui.label(&item.state);
-                                if (item.state == "Downloading…" || item.state == "Starting…")
-                                    && ui.button("Cancel").clicked()
-                                {
+                                ui.label(item.state.to_string());
+                                if item.state.active() && ui.button("Cancel").clicked() {
                                     cancel_id = Some(item.id);
                                 }
                             });

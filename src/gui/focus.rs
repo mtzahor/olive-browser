@@ -1,4 +1,5 @@
 //! Bounded, document-local reading extraction and presentation preferences.
+use crate::gui::theme::Theme;
 use crate::{
     Document, Element, NodeId, NodeKind,
     css::{
@@ -13,15 +14,9 @@ pub const DEFAULT_FONT_SIZE: f32 = 20.0;
 pub const MIN_FONT_SIZE: f32 = 14.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Theme {
-    #[default]
-    Light,
-    Dark,
-}
-
+/// Colors of the Focus reading surface, independent of the browser chrome palette.
 impl Theme {
-    pub fn visuals(self) -> egui::Visuals {
+    pub fn reading_visuals(self) -> egui::Visuals {
         let mut visuals = match self {
             Self::Light => egui::Visuals::light(),
             Self::Dark => egui::Visuals::dark(),
@@ -32,28 +27,28 @@ impl Theme {
         };
         visuals
     }
-    pub fn paper(self) -> Color32 {
+    pub fn reading_paper(self) -> Color32 {
         match self {
             Self::Light => Color32::from_rgb(250, 248, 241),
             Self::Dark => Color32::from_rgb(27, 30, 26),
         }
     }
 
-    pub fn ink(self) -> Color {
+    pub fn reading_ink(self) -> Color {
         match self {
             Self::Light => Color(42, 46, 37, 255),
             Self::Dark => Color(226, 229, 218, 255),
         }
     }
 
-    pub fn link(self) -> Color {
+    pub fn reading_link(self) -> Color {
         match self {
             Self::Light => Color(75, 99, 39, 255),
             Self::Dark => Color(179, 205, 137, 255),
         }
     }
 
-    pub fn code(self) -> Color {
+    pub fn reading_code(self) -> Color {
         match self {
             Self::Light => Color(236, 235, 225, 255),
             Self::Dark => Color(42, 46, 39, 255),
@@ -390,14 +385,14 @@ pub fn style(element: &Element, parent: ComputedStyle) -> ComputedStyle {
         "u" => style.underline = true,
         "s" | "del" => style.strike = true,
         "a" if element.attribute("href").is_some() => {
-            style.color = Theme::Light.link();
+            style.color = Theme::Light.reading_link();
             style.underline = true;
         }
         "small" | "figcaption" => style.font_size = DEFAULT_FONT_SIZE * 0.85,
         "code" | "kbd" | "samp" | "pre" => {
             style.monospace = true;
             style.font_size = DEFAULT_FONT_SIZE * 0.85;
-            style.background = Theme::Light.code();
+            style.background = Theme::Light.reading_code();
             if tag == "pre" {
                 style.white_space = WhiteSpace::PreWrap;
                 style.padding = [Length::Em(0.7); 4];

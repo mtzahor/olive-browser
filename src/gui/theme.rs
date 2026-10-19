@@ -1,4 +1,5 @@
-//! Browser chrome only. Documents and Focus keep their own presentation.
+//! Light and dark appearance. The chrome palette lives here; Focus reading
+//! colors are in `focus`, and documents keep their own presentation.
 use eframe::egui::{self, Color32, Stroke};
 
 pub const DOCUMENT_PAPER: Color32 = Color32::from_rgb(250, 250, 246);

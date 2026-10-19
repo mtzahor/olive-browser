@@ -233,7 +233,7 @@ impl Icon {
 /// A normal egui button with a custom-painted icon atom. Keeping egui's button
 /// preserves keyboard activation, focus rings, disabled states and accessibility.
 pub struct IconButton<'a> {
-    pub button: Button<'a>,
+    button: Button<'a>,
     icon: Icon,
     label: String,
     icon_only: bool,
@@ -279,6 +279,21 @@ impl<'a> IconButton<'a> {
 
     pub fn quiet(mut self) -> Self {
         self.button = self.button.frame(false);
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.button = self.button.selected(selected);
+        self
+    }
+
+    pub fn truncate(mut self) -> Self {
+        self.button = self.button.truncate();
+        self
+    }
+
+    pub fn min_size(mut self, size: Vec2) -> Self {
+        self.button = self.button.min_size(size);
         self
     }
 

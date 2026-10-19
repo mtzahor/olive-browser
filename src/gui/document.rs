@@ -53,6 +53,15 @@ pub struct PageUpdate {
     pub cookie_updates: Vec<CookieUpdate>,
 }
 impl LoadedPage {
+    /// Swap in a worker's newer presentation, keeping the user's form edits.
+    pub fn apply_update(&mut self, update: &mut PageUpdate) {
+        update.page.forms.preserve_edits(&self.page.forms);
+        self.page = std::mem::take(&mut update.page);
+        self.reading = std::mem::take(&mut update.reading);
+        self.base = update.base.clone();
+        self.scripts = std::mem::take(&mut update.scripts);
+    }
+
     /// Hand the whole page to the browser as a completed resource update.
     pub fn into_update(self) -> PageUpdate {
         PageUpdate {
@@ -99,7 +108,7 @@ fn present(
 ) -> Presentation {
     let sheet = Stylesheet::from_document_with_sources(document, styles);
     let base = location.document_base(document);
-    let reading = Page::reading_with_base_at_viewport(
+    let reading = Page::reading(
         document,
         scripting_enabled,
         &sheet,
@@ -107,13 +116,7 @@ fn present(
         Some(&base),
         viewport,
     );
-    let page = Page::with_stylesheet_and_images_at_viewport(
-        document,
-        scripting_enabled,
-        &sheet,
-        images,
-        viewport,
-    );
+    let page = Page::new(document, scripting_enabled, &sheet, images, viewport);
     Presentation {
         page,
         reading,

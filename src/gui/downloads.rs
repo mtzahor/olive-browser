@@ -2,7 +2,7 @@ use crate::net::download::suggested_name;
 use crate::net::{DocumentLoader, Location};
 use eframe::egui;
 use std::{
-    fs,
+    fmt, fs,
     path::PathBuf,
     sync::{
         Arc,
@@ -17,13 +17,35 @@ enum Message {
     Finished(PathBuf, u64),
     Failed(String),
 }
+pub enum DownloadState {
+    Starting,
+    Downloading,
+    Saved(PathBuf),
+    /// Includes cancellation, reported with the reason.
+    Failed(String),
+}
+impl DownloadState {
+    pub fn active(&self) -> bool {
+        matches!(self, Self::Starting | Self::Downloading)
+    }
+}
+impl fmt::Display for DownloadState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Starting => f.write_str("Starting…"),
+            Self::Downloading => f.write_str("Downloading…"),
+            Self::Saved(path) => write!(f, "Saved to {}", path.display()),
+            Self::Failed(error) => f.write_str(error),
+        }
+    }
+}
 pub struct DownloadItem {
     pub id: u64,
     pub name: String,
     pub url: String,
     pub received: u64,
     pub total: Option<u64>,
-    pub state: String,
+    pub state: DownloadState,
     cancel: Arc<AtomicBool>,
 }
 pub struct Downloads {
@@ -62,7 +84,7 @@ impl Downloads {
             url: url.clone(),
             received: 0,
             total: None,
-            state: "Starting…".into(),
+            state: DownloadState::Starting,
             cancel,
         });
         thread::spawn(move || {
@@ -100,22 +122,18 @@ impl Downloads {
                     Message::Progress(received, total) => {
                         item.received = received;
                         item.total = total;
-                        item.state = "Downloading…".into();
+                        item.state = DownloadState::Downloading;
                     }
                     Message::Finished(path, bytes) => {
                         item.received = bytes;
                         item.total = Some(bytes);
-                        item.state = format!("Saved to {}", path.display());
+                        item.state = DownloadState::Saved(path);
                     }
-                    Message::Failed(error) => item.state = error,
+                    Message::Failed(error) => item.state = DownloadState::Failed(error),
                 }
             }
         }
-        if self
-            .items
-            .iter()
-            .any(|item| item.state == "Starting…" || item.state == "Downloading…")
-        {
+        if self.items.iter().any(|item| item.state.active()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }

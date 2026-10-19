@@ -219,64 +219,36 @@ impl DocumentSession {
         }
         let mut remaining = options.max_input_bytes;
         for id in scripts {
-            let document = bindings::take_document(&runtime.context);
-            let script = document.node(id).unwrap().as_element().unwrap();
-            if !eligible_ancestry(&document, id) {
-                bindings::restore_document(&runtime.context, document);
-                continue;
-            }
-            let external = script.attribute("src").and_then(|reference| {
-                sources
-                    .get(&id)
-                    .filter(|source| source.reference == reference)
+            let step = bindings::with_document(&runtime.context, |document| {
+                script_step(document, id, sources, remaining)
             });
-            if (script.attribute("src").is_some() && external.is_none())
-                || !classic_type(script.attribute("type"), script.attribute("language"))
-            {
-                report.skipped += 1;
-                bindings::restore_document(&runtime.context, document);
-                continue;
-            }
-            if report.attempted >= options.max_scripts {
-                report.error(
-                    Some(id),
-                    ScriptError::new(ErrorKind::Limit, "Script count limit exceeded"),
-                    options,
-                );
-                bindings::restore_document(&runtime.context, document);
-                break;
-            }
-            let mut source = String::new();
-            let mut oversized = false;
-            if let Some(external) = external {
-                if external.source.len() > remaining {
-                    oversized = true;
-                } else {
-                    source.push_str(&external.source);
+            let source = match step {
+                ScriptStep::Ineligible => continue,
+                ScriptStep::Skipped => {
+                    report.skipped += 1;
+                    continue;
                 }
-            } else {
-                for child in document.children(id) {
-                    if let NodeKind::Text(text) = &document.node(child).unwrap().kind {
-                        if text.len() > remaining.saturating_sub(source.len()) {
-                            oversized = true;
-                            break;
-                        }
-                        source.push_str(text);
-                    }
+                _ if report.attempted >= options.max_scripts => {
+                    report.error(
+                        Some(id),
+                        ScriptError::new(ErrorKind::Limit, "Script count limit exceeded"),
+                        options,
+                    );
+                    break;
                 }
-            }
-            bindings::restore_document(&runtime.context, document);
-            if oversized {
-                report.error(
-                    Some(id),
-                    ScriptError::new(
-                        ErrorKind::Limit,
-                        "Combined JavaScript source limit exceeded",
-                    ),
-                    options,
-                );
-                break;
-            }
+                ScriptStep::TooLarge => {
+                    report.error(
+                        Some(id),
+                        ScriptError::new(
+                            ErrorKind::Limit,
+                            "Combined JavaScript source limit exceeded",
+                        ),
+                        options,
+                    );
+                    break;
+                }
+                ScriptStep::Run(source) => source,
+            };
             remaining -= source.len();
             report.attempted += 1;
             match runtime.eval(&source) {
@@ -423,6 +395,56 @@ impl DocumentSession {
         self.refresh_report();
         allowed
     }
+}
+
+/// What the post-parse pass does with one discovered script element.
+enum ScriptStep {
+    /// An earlier script moved it under an inert container or detached it.
+    Ineligible,
+    /// An unavailable external source or a non-classic script type.
+    Skipped,
+    /// The source exceeds what remains of the combined source budget.
+    TooLarge,
+    Run(String),
+}
+
+fn script_step(
+    document: &Document,
+    id: NodeId,
+    sources: &HashMap<NodeId, ExternalSource>,
+    remaining: usize,
+) -> ScriptStep {
+    if !eligible_ancestry(document, id) {
+        return ScriptStep::Ineligible;
+    }
+    let script = document.node(id).unwrap().as_element().unwrap();
+    let external = script.attribute("src").and_then(|reference| {
+        sources
+            .get(&id)
+            .filter(|source| source.reference == reference)
+    });
+    if (script.attribute("src").is_some() && external.is_none())
+        || !classic_type(script.attribute("type"), script.attribute("language"))
+    {
+        return ScriptStep::Skipped;
+    }
+    if let Some(external) = external {
+        return if external.source.len() > remaining {
+            ScriptStep::TooLarge
+        } else {
+            ScriptStep::Run(external.source.clone())
+        };
+    }
+    let mut source = String::new();
+    for child in document.children(id) {
+        if let NodeKind::Text(text) = &document.node(child).unwrap().kind {
+            if text.len() > remaining.saturating_sub(source.len()) {
+                return ScriptStep::TooLarge;
+            }
+            source.push_str(text);
+        }
+    }
+    ScriptStep::Run(source)
 }
 
 pub(crate) fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
