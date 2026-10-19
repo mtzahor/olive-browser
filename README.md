@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.5.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.6.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -232,7 +232,8 @@ Linked `<link rel="stylesheet" href="…">`, classic `<script src="…">`, and
 before the script pass; changed URLs and dynamically inserted resources do not
 fetch. Failed resources leave the document readable and appear under
 **Resource errors** in the status bar. Disabled web JavaScript does not fetch
-external scripts, but images still load.
+external scripts, but images still load, and so do the stylesheets and images in
+`noscript` fallbacks.
 
 Resource loading shares a 30-second deadline and 256-attempt limit per document,
 with a two-second cap per resource request. Stylesheets load first, then images,
@@ -341,10 +342,18 @@ the result preview goes to stdout.
 ## Supported rendering
 
 The GUI renders headings, paragraphs, lists, emphasis, code and preformatted
-text, block quotes, rules, PNG, JPEG and WebP images with alt-text fallbacks, and selectable text.
+text, block quotes, rules, tables, PNG, JPEG and WebP images with alt-text fallbacks, and selectable text.
 Images use their intrinsic dimensions unless numeric HTML `width`/`height` or
 the supported CSS width/height properties specify another size; oversized images
 scale down to fit the content column.
+Unstyled pages get browser-like defaults: an 8px page margin, headings sized
+relative to the surrounding text, list markers hanging outside the item text
+(disc, circle and square bullets by nesting depth), raised superscripts, and
+padded code blocks. Tables share column widths across rows, size columns from
+their content, and support `colspan`, `rowspan`, right-to-left column order and
+cell backgrounds that fill the row, plus the legacy `bgcolor`, `width`, `align`,
+`border`, `cellpadding` and `cellspacing` attributes. List markers are not part
+of Find matches.
 The GUI bundles Inter with Noto Sans Hebrew fallback for page text, code blocks,
 and browser controls, so Hebrew letters and vowel marks do not become missing-glyph
 rectangles; `examples/fonts.html` shows the coverage. Mixed-direction text uses

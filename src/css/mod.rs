@@ -12,8 +12,8 @@ use cssparser::{
 use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
-    BoxShadow, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, FloatSide,
-    JustifyContent, Length, LineHeight, Position, TextAlign, WhiteSpace,
+    BoxShadow, Clear, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, FloatSide,
+    JustifyContent, Length, LineHeight, Position, TextAlign, VerticalAlign, WhiteSpace,
 };
 use values::{Declaration, PROPERTIES, Value};
 
@@ -423,7 +423,19 @@ impl Stylesheet {
         let Some(element) = doc.node(id).and_then(|n| n.as_element()) else {
             return style;
         };
-        user_agent(element, &mut style);
+        let parent_id = doc.node(id).and_then(|node| node.parent());
+        let parent_element = parent_id.and_then(|parent| doc.node(parent)?.as_element());
+        // Cells take `cellpadding` and `border` from their table: td, tr, tbody, table.
+        let table = if matches!(element.name.local.as_str(), "td" | "th") {
+            std::iter::successors(parent_id, |&ancestor| doc.node(ancestor)?.parent())
+                .take(3)
+                .filter_map(|ancestor| doc.node(ancestor)?.as_element())
+                .find(|ancestor| ancestor.is_html_tag("table"))
+        } else {
+            None
+        };
+        let quirks = doc.quirks_mode() == crate::QuirksMode::Quirks;
+        let border_color = user_agent(element, parent_element, table, quirks, &mut style);
         type Priority = (bool, bool, (u16, u16, u16));
         let mut winners: [Option<(Priority, Value)>; PROPERTIES.len()] = [None; PROPERTIES.len()];
         let mut custom_winners: HashMap<String, (Priority, String)> = HashMap::new();
@@ -627,7 +639,7 @@ impl Stylesheet {
                 root_font = style.font_size;
             }
             if property == values::Property::Color {
-                style.border_color = style.color;
+                style.border_color = border_color.unwrap_or(style.color);
             }
         }
         // Resolve em/rem now so explicit inheritance preserves computed lengths.
@@ -671,7 +683,7 @@ impl Stylesheet {
         style.height = computed_length(style.height);
         style.min_height = computed_length(style.min_height);
         style.border_width = computed_length(style.border_width);
-        style.border_radius = computed_length(style.border_radius);
+        style.border_radius = style.border_radius.map(computed_length);
         style.flex_basis = computed_length(style.flex_basis);
         style.row_gap = computed_length(style.row_gap);
         style.column_gap = computed_length(style.column_gap);
@@ -795,14 +807,19 @@ impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
         input: &mut Parser<'i>,
     ) -> Result<Self::Prelude, cssparser::ParseError<()>> {
         let mut count = 0;
-        input.parse_comma_separated(|input| {
+        let selectors = input.parse_comma_separated(|input| {
             count += 1;
             if count > MAX_SELECTORS {
                 self.diagnostics.limited = true;
                 return Err(cssparser::ParseError::custom(()));
             }
             Selector::parse(input)
-        })
+        })?;
+        // Generated-content selectors are valid but never match an element.
+        Ok(selectors
+            .into_iter()
+            .filter(|selector| !selector.generated)
+            .collect())
     }
     fn parse_block(
         &mut self,
@@ -810,6 +827,11 @@ impl<'i> QualifiedRuleParser<'i> for Rules<'_> {
         _: &ParserState,
         input: &mut Parser<'i>,
     ) -> Result<Vec<Rule>, cssparser::ParseError<()>> {
+        // Rules that only style generated content have nothing to match.
+        if selectors.is_empty() {
+            while input.next().is_ok() {}
+            return Ok(vec![]);
+        }
         if *self.remaining == 0 {
             self.diagnostics.limited = true;
             return Ok(vec![]);
@@ -1096,8 +1118,38 @@ fn record_unsupported(target: &mut HashMap<String, usize>, name: &str, count: us
         *target.entry(bounded_name).or_default() += count;
     }
 }
-fn user_agent(element: &Element, style: &mut ComputedStyle) {
+/// A legacy HTML length attribute such as `width="85%"` or `cellpadding="4"`.
+fn attribute_length(source: &str) -> Option<Length> {
+    let source = source.trim();
+    let (number, percent) = match source.strip_suffix('%') {
+        Some(number) => (number, true),
+        None => (source.strip_suffix("px").unwrap_or(source), false),
+    };
+    let value = number
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)?;
+    Some(if percent {
+        Length::Percent(value.min(100.0) / 100.0)
+    } else {
+        Length::Px(value.min(10_000.0))
+    })
+}
+
+/// The built-in presentation of HTML elements, before author styles. `parent`
+/// is the parent element, `table` a cell's table, and `quirks` whether the
+/// document lacks a standards doctype. Returns the default border color when
+/// it differs from the text color.
+fn user_agent(
+    element: &Element,
+    parent: Option<&Element>,
+    table: Option<&Element>,
+    quirks: bool,
+    style: &mut ComputedStyle,
+) -> Option<Color> {
     let tag = element.name.local.as_str();
+    let mut border_color = None;
     if let Some(direction) = element.attribute("dir") {
         style.direction = match direction.trim().to_ascii_lowercase().as_str() {
             "rtl" => Direction::Rtl,
@@ -1112,6 +1164,12 @@ fn user_agent(element: &Element, style: &mut ComputedStyle) {
         // below, and an explicit dir always wins this fallback.
         style.direction = direction;
     }
+    // Indentation that belongs at the start of the line in the element's direction.
+    let start = if style.direction == Direction::Rtl {
+        1
+    } else {
+        3
+    };
     if matches!(
         tag,
         "html"
@@ -1137,61 +1195,226 @@ fn user_agent(element: &Element, style: &mut ComputedStyle) {
             | "pre"
             | "blockquote"
             | "hr"
-            | "table"
-            | "tr"
             | "dl"
             | "dt"
             | "dd"
             | "figure"
             | "figcaption"
             | "form"
+            | "center"
+            | "address"
+            | "caption"
+            | "details"
+            | "summary"
+            | "fieldset"
+            | "hgroup"
+            | "menu"
     ) {
         style.display = Display::Block;
     }
     if matches!(
         tag,
-        "p" | "h1"
-            | "h2"
-            | "h3"
-            | "h4"
-            | "h5"
-            | "h6"
-            | "li"
-            | "pre"
-            | "blockquote"
-            | "hr"
-            | "tr"
-            | "dt"
-            | "dd"
-            | "figcaption"
+        "p" | "pre" | "blockquote" | "hr" | "dl" | "figure" | "figcaption" | "address"
     ) {
         style.margin[2] = Length::Px(12.0);
     }
-    match tag {
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-            style.font_size =
-                [34.0, 27.0, 23.0, 20.0, 18.0, 17.0][(tag.as_bytes()[1] - b'1') as usize];
-            style.font_weight = 700.0;
+    let centered = |element: &Element| {
+        element
+            .attribute("align")
+            .is_some_and(|align| align.trim().eq_ignore_ascii_case("center"))
+    };
+    // Legacy presentational attributes; author styles still override them.
+    if matches!(tag, "th" | "caption") {
+        style.text_align = TextAlign::Center;
+    }
+    if let Some(align) = element.attribute("align").filter(|_| {
+        matches!(
+            tag,
+            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption"
+        )
+    }) {
+        match align.trim().to_ascii_lowercase().as_str() {
+            "left" => style.text_align = TextAlign::Left,
+            "right" => style.text_align = TextAlign::Right,
+            "center" | "middle" => style.text_align = TextAlign::Center,
+            _ => {}
         }
-        "b" | "strong" | "th" | "dt" => style.font_weight = 700.0,
-        "i" | "em" | "cite" | "dfn" => style.italic = true,
-        "u" => style.underline = true,
-        "s" | "del" => style.strike = true,
+    }
+    if let Some(background) = element
+        .attribute("bgcolor")
+        .filter(|_| matches!(tag, "body" | "table" | "tr" | "td" | "th"))
+        .and_then(values::attribute_color)
+    {
+        style.background = background;
+    }
+    if let Some(ink) = match tag {
+        "body" => element.attribute("text"),
+        "font" => element.attribute("color"),
+        _ => None,
+    }
+    .and_then(values::attribute_color)
+    {
+        style.color = ink;
+    }
+    if let Some(width) = element
+        .attribute("width")
+        .filter(|_| matches!(tag, "table" | "td" | "th"))
+        .and_then(attribute_length)
+    {
+        style.width = width;
+    }
+    let table_border = |table: &Element| {
+        table
+            .attribute("border")
+            .and_then(attribute_length)
+            .filter(|width| matches!(width, Length::Px(width) if *width > 0.0))
+    };
+    match tag {
+        "body" => style.margin = [Length::Px(8.0); 4],
+        // A quiet neutral rule that reads on light and dark pages alike.
+        "hr" => style.color = Color(150, 156, 140, 255),
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+            // Sizes follow the surrounding text, so a heading inside small
+            // print stays in proportion. More space above than below keeps
+            // each heading with the section it introduces.
+            let level = (tag.as_bytes()[1] - b'1') as usize;
+            style.font_size *= [2.0, 1.6, 1.35, 1.18, 1.06, 1.0][level];
+            style.font_weight = 700.0;
+            style.margin[0] = Length::Em(0.6);
+            style.margin[2] = Length::Em(0.4);
+        }
+        "ul" | "ol" | "menu" => {
+            // Markers hang in this padding, outside the item text.
+            style.padding[start] = Length::Px(40.0);
+            if !parent.is_some_and(|parent| {
+                matches!(parent.name.local.as_str(), "li" | "ul" | "ol" | "menu")
+            }) {
+                style.margin[2] = Length::Px(12.0);
+            }
+        }
+        "dd" => style.margin[start] = Length::Px(40.0),
+        "blockquote" | "figure" => {
+            style.margin[1] = Length::Px(40.0);
+            style.margin[3] = Length::Px(40.0);
+        }
+        "center" => style.text_align = TextAlign::Center,
+        "table" => {
+            style.display = Display::Table;
+            if quirks {
+                // Legacy pages expect tables not to inherit text alignment or
+                // fonts, as the HTML quirks-mode stylesheet specifies.
+                let initial = ComputedStyle::default();
+                style.text_align = initial.text_align;
+                style.font_size = initial.font_size;
+                style.font_weight = initial.font_weight;
+                style.italic = initial.italic;
+                style.line_height = initial.line_height;
+                style.white_space = initial.white_space;
+            }
+            // Spacing between and around cells, as HTML `cellspacing` sets it.
+            let spacing = element
+                .attribute("cellspacing")
+                .and_then(attribute_length)
+                .filter(|spacing| matches!(spacing, Length::Px(_)))
+                .unwrap_or(Length::Px(2.0));
+            style.row_gap = spacing;
+            style.column_gap = spacing;
+            if let Some(width) = table_border(element) {
+                style.border_solid = true;
+                style.border_width = width;
+                border_color = Some(Color(128, 128, 128, 255));
+            }
+            // Separate a table from what follows, as paragraphs are, except
+            // for layout tables nested in a cell.
+            if !parent.is_some_and(|p| matches!(p.name.local.as_str(), "td" | "th")) {
+                style.margin[2] = Length::Px(12.0);
+            }
+            // Browsers center a table inside `<center>` or an `align=center` parent.
+            if centered(element) || parent.is_some_and(|p| p.is_html_tag("center") || centered(p)) {
+                style.margin[1] = Length::Auto;
+                style.margin[3] = Length::Auto;
+            }
+        }
+        "tr" => style.display = Display::TableRow,
+        "td" | "th" => {
+            style.display = Display::TableCell;
+            let span = |name| {
+                element
+                    .attribute(name)
+                    .and_then(|value| value.trim().parse::<u16>().ok())
+                    .map_or(1, |value| value.clamp(1, 64) as u8)
+            };
+            style.column_span = span("colspan");
+            style.row_span = span("rowspan");
+            style.padding = match table
+                .and_then(|table| table.attribute("cellpadding"))
+                .and_then(attribute_length)
+            {
+                Some(Length::Px(padding)) => [Length::Px(padding); 4],
+                _ => [
+                    Length::Em(0.2),
+                    Length::Em(0.4),
+                    Length::Em(0.2),
+                    Length::Em(0.4),
+                ],
+            };
+            if table.and_then(table_border).is_some() {
+                style.border_solid = true;
+                style.border_width = Length::Px(1.0);
+                border_color = Some(Color(128, 128, 128, 255));
+            }
+            if element.attribute("nowrap").is_some() {
+                style.white_space = WhiteSpace::NoWrap;
+            }
+            if tag == "th" {
+                style.font_weight = 700.0;
+            }
+        }
+        "col" | "colgroup" => style.display = Display::None,
+        "b" | "strong" | "dt" => style.font_weight = 700.0,
+        "i" | "em" | "cite" | "dfn" | "var" | "address" => style.italic = true,
+        "u" | "ins" => style.underline = true,
+        "s" | "del" | "strike" => style.strike = true,
         "a" if element.attribute("href").is_some() => {
             style.color = Color(86, 105, 51, 255);
             style.underline = true;
         }
         "small" => style.font_size = (style.font_size * 0.85).max(1.0),
-        "code" | "kbd" | "samp" | "pre" => {
+        "sup" | "sub" => {
+            style.font_size = (style.font_size * 0.75).max(1.0);
+            style.vertical_align = if tag == "sup" {
+                VerticalAlign::Super
+            } else {
+                VerticalAlign::Sub
+            };
+        }
+        "mark" => {
+            style.background = Color(255, 232, 128, 255);
+            style.color = Color(38, 44, 32, 255);
+        }
+        "code" | "kbd" | "samp" | "tt" | "pre" => {
+            // Code inside a code block keeps the block's size.
+            if !style.monospace {
+                style.font_size = (style.font_size * 15.0 / 17.0).max(1.0);
+            }
             style.monospace = true;
-            style.font_size = 15.0;
             style.background = Color(239, 240, 233, 255);
             if tag == "pre" {
                 style.white_space = WhiteSpace::Pre;
+                style.padding = [
+                    Length::Em(0.7),
+                    Length::Em(0.9),
+                    Length::Em(0.7),
+                    Length::Em(0.9),
+                ];
+                style.border_radius = [Length::Px(6.0); 4];
             }
         }
+        "dialog" if element.attribute("open").is_none() => style.display = Display::None,
+        "datalist" => style.display = Display::None,
         _ => {}
     }
+    border_color
 }
 
 fn language_direction(language: &str) -> Option<Direction> {

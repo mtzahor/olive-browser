@@ -248,8 +248,8 @@ fn focus_keeps_plain_pages_lists_code_unicode_and_links_but_no_click_handlers() 
     );
     assert_eq!(texts(&page)[0], "Reading notes");
     assert!(texts(&page).contains(&"שלום café <script>"));
-    assert!(texts(&page).contains(&"3. First"));
-    assert!(texts(&page).contains(&"7. Next"));
+    let joined = texts(&page).join("|");
+    assert!(joined.contains("3.|First|7.|Next"), "{joined}");
     assert!(page.links.values().any(|href| href == "../next#part"));
     assert!(
         page.blocks
@@ -554,20 +554,56 @@ fn renders_predecoded_images_with_intrinsic_and_html_dimensions() {
 
 #[test]
 fn lists_keep_numbering_and_nested_order() {
-    let page = page(
+    let mut page = page(
         "<!doctype html><ol start=3><li>  three<ul><li> nested<ul><li>deeper</li></ul></li></ul></li><li value=8>eight</li><li>nine</li></ol>",
     );
     assert_eq!(
         texts(&page),
-        ["3. three", "• nested", "• deeper", "8. eight", "9. nine"]
+        [
+            "3.", "three", "◦", "nested", "▪", "deeper", "8.", "eight", "9.", "nine"
+        ]
     );
     assert_eq!(
         page.blocks
             .iter()
-            .map(|block| block.indent)
+            .map(|block| block.marker)
             .collect::<Vec<_>>(),
-        [0, 1, 2, 0, 0]
+        [
+            true, false, true, false, true, false, true, false, true, false
+        ]
     );
+    // Markers are decoration: search skips them, as in other browsers.
+    assert_eq!(page.find_query("3."), 0);
+    assert_eq!(page.find_query("nested"), 1);
+
+    let mut output = draw(&mut page, 600.0);
+    let text_rect = |wanted: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == wanted => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (three, nested, deeper) = (text_rect("three"), text_rect("nested"), text_rect("deeper"));
+    // Each nested list indents its items by the list's start padding.
+    assert_eq!(three.left(), 48.0);
+    assert_eq!(nested.left() - three.left(), 40.0);
+    assert_eq!(deeper.left() - nested.left(), 40.0);
+    // Markers hang in that padding, level with their item's first line.
+    for (marker, item) in [("3.", three), ("◦", nested), ("▪", deeper)] {
+        let marker = text_rect(marker);
+        assert!(marker.right() < item.left(), "{marker:?} overlaps {item:?}");
+        assert!(marker.left() > item.left() - 40.0);
+        assert_eq!(marker.top(), item.top());
+    }
+    // Items sit on consecutive lines instead of paragraph spacing.
+    assert_eq!(text_rect("nine").top() - text_rect("eight").bottom(), 0.0);
+    output.textures_delta.clear();
 }
 
 #[test]
@@ -864,4 +900,407 @@ fn find_uses_rendered_text_and_highlights_wrapped_unicode_matches() {
     assert_eq!(page.find_query("missing"), 0);
     assert_eq!(page.find_query(""), 0);
     assert_eq!(page.find_query("שלום"), 1);
+}
+
+/// The laid-out rectangle of the box whose background is `color`.
+fn box_with_background(page: &Page, color: Color) -> egui::Rect {
+    let index = page
+        .boxes
+        .iter()
+        .position(|style| style.background == color)
+        .unwrap_or_else(|| panic!("no box with background {color:?}"));
+    page.box_rects[index]
+}
+
+#[test]
+fn tables_share_column_widths_spans_and_row_heights() {
+    let mut page = page(
+        r#"<!doctype html><style>td { padding: 0 }</style>
+        <table cellspacing=4>
+          <tr><td style="background:rgb(1,0,0)">A</td><td style="background:rgb(2,0,0)">Short</td>
+              <td rowspan=2 style="background:rgb(3,0,0)">Spans two rows</td></tr>
+          <tr><td style="background:rgb(4,0,0)">A much longer first column</td>
+              <td style="background:rgb(5,0,0)">One<br>two<br>three</td></tr>
+          <tr><td colspan=2 style="background:rgb(6,0,0)">Both columns</td>
+              <td style="background:rgb(7,0,0)">C</td></tr>
+        </table>"#,
+    );
+    let mut output = draw(&mut page, 800.0);
+    let cell = |red| box_with_background(&page, Color(red, 0, 0, 255));
+    let (a, short, spanning) = (cell(1), cell(2), cell(3));
+    let (long, tall, both, c) = (cell(4), cell(5), cell(6), cell(7));
+    // Columns line up across rows and fit the widest content.
+    assert_eq!(a.left(), long.left());
+    assert_eq!(a.width(), long.width());
+    assert_eq!(short.left(), tall.left());
+    assert!(long.width() > 100.0);
+    assert_eq!(short.left() - long.right(), 4.0);
+    // A spanning cell covers both columns and the spacing between them.
+    assert_eq!(both.left(), a.left());
+    assert_eq!(both.right(), short.right());
+    assert_eq!(spanning.left(), c.left());
+    // Cells fill their row's height; the rowspan cell reaches the second row's end.
+    assert_eq!(long.height(), tall.height());
+    assert_eq!(a.height(), short.height());
+    assert_eq!(spanning.top(), a.top());
+    assert_eq!(spanning.bottom(), tall.bottom());
+    assert_eq!(both.top() - tall.bottom(), 4.0);
+    // Without a width, the table shrinks to its columns.
+    assert!(c.right() < 700.0);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn collapsed_tables_overlap_borders_and_rtl_tables_mirror_columns() {
+    let mut page = page(
+        r#"<!doctype html><style>
+        table { border-collapse: collapse; border: 2px solid black }
+        td { border: 1px solid black; padding: 0 }
+        </style>
+        <table><tr><td style="background:rgb(1,0,0)">one</td><td style="background:rgb(2,0,0)">two</td></tr>
+        <tr><td style="background:rgb(3,0,0)">three</td><td>four</td></tr></table>
+        <div dir=rtl><table style="width:300px"><tr><td style="background:rgb(4,0,0)">א</td>
+        <td style="background:rgb(5,0,0)">ב</td></tr></table></div>"#,
+    );
+    let mut output = draw(&mut page, 800.0);
+    let cell = |red| box_with_background(&page, Color(red, 0, 0, 255));
+    let table = page.box_rects[page
+        .boxes
+        .iter()
+        .position(|style| style.display == Display::Table)
+        .unwrap()];
+    // Neighboring borders share one line, and outer cells sit on the table's border.
+    assert_eq!(cell(2).left(), cell(1).right() - 1.0);
+    assert_eq!(cell(3).top(), cell(1).bottom() - 1.0);
+    assert_eq!(cell(1).left(), table.left());
+    assert_eq!(cell(1).top(), table.top());
+    // Right-to-left tables start at the right edge and run leftward.
+    let (first, second) = (cell(4), cell(5));
+    assert!(first.left() > second.left());
+    assert_eq!(first.right(), 800.0 - 8.0);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn soft_shadows_and_rounded_corners_follow_the_box_shape() {
+    let mut page = page(
+        r#"<!doctype html>
+        <div style="width:100px; height:50px; background:#fff; border-radius:50%;
+            box-shadow:0 4px 10px 2px rgba(0,0,0,.5)"></div>
+        <div style="width:80px; height:40px; border-radius:6px 6px 0 0; background:rgb(9,9,9)"></div>
+        <div style="width:60px; height:30px; box-shadow:0 0 8px black"></div>"#,
+    );
+    let mut output = draw(&mut page, 400.0);
+    let rects: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) => Some((shape.clip_rect, rect.clone())),
+            _ => None,
+        })
+        .collect();
+    // The opaque pill casts one blurred, offset shadow that follows its radius.
+    let pill = box_with_background(&page, Color(255, 255, 255, 255));
+    let shadow = &rects
+        .iter()
+        .find(|(_, rect)| rect.blur_width > 0.0 && rect.fill.a() > 100)
+        .unwrap()
+        .1;
+    assert_eq!(shadow.blur_width, 20.0);
+    assert_eq!(
+        shadow.rect,
+        pill.expand(2.0).translate(egui::vec2(0.0, 4.0))
+    );
+    assert_eq!(shadow.corner_radius, egui::CornerRadius::same(27));
+    let fill = |color| {
+        rects
+            .iter()
+            .find(|(_, rect)| rect.fill == color)
+            .unwrap()
+            .1
+            .corner_radius
+    };
+    assert_eq!(fill(Color32::WHITE), egui::CornerRadius::same(25));
+    assert_eq!(
+        fill(Color32::from_rgb(9, 9, 9)),
+        egui::CornerRadius {
+            nw: 6,
+            ne: 6,
+            sw: 0,
+            se: 0
+        }
+    );
+    // A see-through box keeps its shadow outside itself, in four clipped bands.
+    let clear = page.box_rects[page
+        .boxes
+        .iter()
+        .position(|style| style.width == Length::Px(60.0))
+        .unwrap()];
+    let bands: Vec<_> = rects
+        .iter()
+        .filter(|(_, rect)| rect.blur_width == 16.0)
+        .map(|(clip, _)| *clip)
+        .collect();
+    assert_eq!(bands.len(), 4);
+    assert!(bands.iter().all(|clip| !clip.contains(clear.center())));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn rounded_images_clip_the_picture_inside_their_frame() {
+    let document = parse(
+        "<!doctype html><img src='face.png' style='width:80px; height:80px; border-radius:50%; border:4px solid red'>",
+    )
+    .unwrap()
+    .document;
+    let image_id = document
+        .descendants(document.root())
+        .find(|&id| {
+            document
+                .node(id)
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| element.is_html_tag("img"))
+        })
+        .unwrap();
+    let mut images = HashMap::new();
+    images.insert(
+        image_id,
+        ImageAsset {
+            reference: "face.png".into(),
+            image: Arc::new(ColorImage::filled([8, 8], Color32::WHITE)),
+        },
+    );
+    let mut page = Page::new(
+        &document,
+        false,
+        &Stylesheet::from_document(&document),
+        &images,
+        DEFAULT_VIEWPORT,
+    );
+    let mut output = draw(&mut page, 400.0);
+    let picture = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect.clone()),
+            _ => None,
+        })
+        .expect("the image paints as a textured rectangle");
+    assert_eq!(picture.rect.size(), egui::vec2(80.0, 80.0));
+    // The frame is 88px across, so its 44px radius leaves 40px inside the border.
+    assert_eq!(picture.corner_radius, egui::CornerRadius::same(40));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn inline_runs_stay_together_and_rtl_flow_aligns_boxes_right() {
+    let mut page = page(
+        r#"<!doctype html><p>a <span style="position:relative; top:-2px">b</span>
+        <sup><a href='#n'>1</a></sup> c</p>
+        <div dir=rtl><div style="width:100px; background:rgb(7,7,7)">x</div></div>"#,
+    );
+    // Relative offsets do not split a paragraph into separate blocks.
+    assert_eq!(texts(&page), ["a b 1 c", "x"]);
+    let superscript = page.blocks[0]
+        .job
+        .sections
+        .iter()
+        .find(|section| {
+            page.blocks[0].job.text[section.byte_range.start.0..section.byte_range.end.0].trim()
+                == "1"
+        })
+        .unwrap();
+    assert_eq!(superscript.format.valign, egui::Align::TOP);
+    let mut output = draw(&mut page, 600.0);
+    let narrow = box_with_background(&page, Color(7, 7, 7, 255));
+    assert_eq!(narrow.right(), 600.0 - 8.0);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn default_rules_are_quiet_and_authored_rules_keep_their_own_paint() {
+    let mut page = page("<!doctype html><hr><hr style='border:1px solid rgb(200,0,0); height:0'>");
+    let mut output = draw(&mut page, 400.0);
+    let lines: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, [Color32::from_rgb(150, 156, 140)]);
+    assert!(output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Rect(rect) if rect.stroke.color == Color32::from_rgb(200, 0, 0)
+    )));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn large_tables_fall_back_to_inline_rows_before_the_display_limit() {
+    let rows: String = (0..1_200)
+        .map(|row| {
+            format!("<tr><td>r{row}a</td><td>r{row}b</td><td>r{row}c</td><td>r{row}d</td></tr>")
+        })
+        .collect();
+    let mut page = page(&format!("<!doctype html><table>{rows}</table><p>After</p>"));
+    assert!(!page.truncated);
+    assert!(page.boxes.len() <= MAX_BOXES && page.blocks.len() <= MAX_BLOCKS);
+    // Early rows keep real cells; later ones become one line per row.
+    assert!(texts(&page).contains(&"r0a"));
+    assert!(texts(&page).contains(&"r1199a r1199b r1199c r1199d"));
+    assert_eq!(texts(&page).last(), Some(&"After"));
+    let mut output = draw(&mut page, 800.0);
+    output.textures_delta.clear();
+    page.validate().unwrap();
+}
+
+#[test]
+fn floats_line_up_beside_each_other_and_shape_following_content() {
+    let mut page = page(
+        r#"<!doctype html><style>
+        body { margin: 0 } .bar { width: 600px } p { margin: 0 }
+        .logo { float: left; width: 100px; height: 40px; background: rgb(1,0,0) }
+        .a { float: right; background: rgb(2,0,0) } .b { float: right; background: rgb(3,0,0) }
+        .menu { float: left; background: rgb(4,0,0) } .clear { clear: both; background: rgb(5,0,0) }
+        .tile { float: left; width: 50%; padding-right: 20px; box-sizing: border-box; height: 30px }
+        </style>
+        <div class=bar><div class=logo></div>
+          <nav style="background:rgb(6,0,0)"><span class=a>Login</span><span class=b>Search</span>
+          <span class=menu>News Features</span></nav>
+          <p>Text beside the logo</p>
+          <div class=clear>Below</div>
+          <div class=tile style="background:rgb(7,0,0)"></div><div class=tile style="background:rgb(8,0,0)"></div>
+          <div class=tile style="background:rgb(9,0,0)"></div>
+        </div>"#,
+    );
+    let mut output = draw(&mut page, 800.0);
+    let fill = |red| box_with_background(&page, Color(red, 0, 0, 255));
+    let (logo, login, search, menu, nav) = (fill(1), fill(2), fill(3), fill(4), fill(6));
+    // A block after a float takes the room beside it.
+    assert_eq!(nav.left(), logo.right());
+    assert_eq!(nav.top(), logo.top());
+    // Right floats stack from the right edge in source order; left floats from the left.
+    assert_eq!(login.right(), 600.0);
+    assert_eq!(search.right(), login.left());
+    assert_eq!(menu.left(), nav.left());
+    assert_eq!(login.top(), nav.top());
+    // Floats shrink to fit their text.
+    assert!(menu.width() < 200.0 && login.width() < 80.0);
+    // Text beside the logo starts after it; `clear` moves below every float.
+    let beside = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Text beside the logo" => {
+                Some(text.pos)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(beside.x, logo.right());
+    assert!(fill(5).top() >= logo.bottom());
+    // Border-box halves sit side by side and the third wraps beneath them.
+    let (one, two, three) = (fill(7), fill(8), fill(9));
+    assert_eq!(two.left(), one.right());
+    assert_eq!(two.top(), one.top());
+    assert_eq!(three.left(), one.left());
+    assert_eq!(three.top(), one.bottom());
+    // The container grows to hold its floats.
+    let bar = page.box_rects[page
+        .boxes
+        .iter()
+        .position(|style| style.width == Length::Px(600.0))
+        .unwrap()];
+    assert!(bar.bottom() >= three.bottom());
+    output.textures_delta.clear();
+}
+
+#[test]
+fn hidden_overflow_clips_contents_but_not_the_box_itself() {
+    let mut page = page(
+        r#"<!doctype html><a href='#main' style="position:absolute; width:1px; height:1px; overflow:hidden">Skip to content</a>
+        <div style="width:200px; height:40px; overflow:hidden; background:rgb(1,2,3)"><p>Clipped</p><p>Clipped</p><p>Clipped</p></div>
+        <div style="width:200px; overflow:auto"><p>Scrollable</p></div>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    let clip_of = |wanted: &str| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == wanted => Some(shape.clip_rect),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let skip = clip_of("Skip to content");
+    assert!(
+        skip.iter()
+            .all(|clip| clip.width() <= 1.0 && clip.height() <= 1.0)
+    );
+    let frame = box_with_background(&page, Color(1, 2, 3, 255));
+    assert!(clip_of("Clipped").iter().all(|clip| *clip == frame));
+    // `overflow: auto` keeps content visible, as Olive has no inner scrolling.
+    assert!(
+        clip_of("Scrollable")
+            .iter()
+            .all(|clip| clip.width() > 200.0)
+    );
+    // The clipping box's own background still paints with the page clip.
+    assert!(output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(1, 2, 3) && shape.clip_rect.contains_rect(frame)
+    )));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn empty_relative_frames_take_the_height_of_an_absolute_picture() {
+    let document = parse(
+        "<!doctype html><figure style='position:relative; width:200px; margin:0'>         <a href='/story' style='position:absolute; top:0; left:0; width:100%'><img src='thumb.png' style='width:100%'></a></figure>         <p>Headline</p>",
+    )
+    .unwrap()
+    .document;
+    let image_id = document
+        .descendants(document.root())
+        .find(|&id| {
+            document
+                .node(id)
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| element.is_html_tag("img"))
+        })
+        .unwrap();
+    let images = HashMap::from([(
+        image_id,
+        ImageAsset {
+            reference: "thumb.png".into(),
+            image: Arc::new(ColorImage::filled([40, 20], Color32::WHITE)),
+        },
+    )]);
+    let mut page = Page::new(
+        &document,
+        false,
+        &Stylesheet::from_document(&document),
+        &images,
+        DEFAULT_VIEWPORT,
+    );
+    let mut output = draw(&mut page, 600.0);
+    let figure = page.box_rects[page
+        .boxes
+        .iter()
+        .position(|style| style.width == Length::Px(200.0))
+        .unwrap()];
+    assert_eq!(figure.height(), 100.0);
+    let headline = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Headline" => Some(text.pos.y),
+            _ => None,
+        })
+        .unwrap();
+    assert!(headline >= figure.bottom());
+    output.textures_delta.clear();
 }

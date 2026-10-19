@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.6.0 — Rendering polish
+
+- Lay out HTML tables with columns shared across rows and sized from their
+  content, `colspan` and `rowspan`, cell backgrounds that fill the row,
+  right-to-left column order, CSS `border-collapse` and `border-spacing`, and the
+  legacy `bgcolor`, `width`, `align`, `border`, `cellpadding` and `cellspacing`
+  attributes. Quirks-mode tables no longer inherit alignment or fonts. Near the
+  display limit, further cells fall back to one line per row.
+- Soften box shadows with real blur, keep them outside boxes that are not opaque,
+  and paint them under images too.
+- Support per-corner and percentage `border-radius`, including the longhands, and
+  clip images to rounded corners.
+- Give unstyled pages browser-like defaults: an 8px page margin instead of the
+  browser's extra top inset, headings sized relative to their text with more space
+  above than below, tight list items with markers hanging outside the text
+  (disc, circle and square by depth), padded code blocks, raised superscripts,
+  softer rules, and `center`, `mark` and other common elements. Code inside
+  headings now scales with them, and closed `dialog` elements are hidden.
+- Keep inline elements with `position: relative` in their paragraph instead of
+  splitting it, right-align narrow boxes and images in right-to-left flow, and
+  accept `pt`, `pc`, `in`, `cm`, `mm` and `Q` lengths.
+- Lay out CSS floats: shrink-to-fit floats line up beside each other from the
+  left and right edges, following text, pictures and blocks take the room beside
+  them, containers grow to hold them, and `clear` moves content below them. Runs
+  of floats no longer become flex rows.
+- Clip contents of `overflow: hidden` and `clip` boxes, so visually hidden skip
+  links and fixed-height panels no longer spill out. Scrolling overflow stays
+  visible.
+- Keep selector lists that include pseudo-elements such as `*::before`, so the
+  common `box-sizing: border-box` reset and similar rules apply.
+- Load stylesheets and images inside `noscript` when scripting is off, as
+  browsers do, so pages that insert their CSS with scripts keep their fallback.
+- Size flex items, floats and table columns from the structure of their content,
+  summing items laid out side by side and ignoring absolutely positioned boxes,
+  and let an empty positioned frame take the height of its absolute picture.
+- Measure flex and table content without disturbing cached right-to-left lines.
+- Library: `ComputedStyle::border_radius` is now one length per corner, and
+  `ComputedStyle` gains `vertical_align`, `column_span`, `row_span`,
+  `border_collapse`, `clear` and `overflow_hidden`. `Display` adds `Table`,
+  `TableRow` and `TableCell`, and `css::Clear` is new.
+
 ## 1.5.0 — Codebase cleanup
 
 - Add a `serde` feature that derives Serde support for node IDs and the CSS,

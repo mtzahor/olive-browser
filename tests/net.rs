@@ -639,6 +639,26 @@ mod page_resources {
     }
 
     #[test]
+    fn noscript_fallback_stylesheets_load_only_without_scripting() {
+        let markup = "<noscript><link rel=stylesheet href=fallback.css></noscript>";
+        let (location, server) = server(vec![response(
+            "200 OK",
+            "Content-Type: text/css\r\n",
+            b"p{color:red}",
+        )]);
+        let doc = olive_html::parse(markup).unwrap().document;
+        let loader = DocumentLoader::new().unwrap();
+        let resources = PageResources::load(&loader, &location, &doc, false);
+        assert_eq!(resources.report.attempted, 1);
+        assert_eq!(resources.styles.len(), 1);
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("GET /fallback.css "));
+        // With scripting, the fallback is inert, as browsers treat it.
+        let resources = PageResources::load(&loader, &location, &doc, true);
+        assert_eq!(resources.report.attempted, 0);
+    }
+
+    #[test]
     fn page_load_collects_images_when_scripts_are_disabled() {
         let (location, server) = server(vec![response(
             "200 OK",

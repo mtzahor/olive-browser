@@ -1,6 +1,6 @@
 //! Paint a laid-out `Page` and turn pointer input into page actions.
 use super::bidi::layout_bidi;
-use super::layout::{BoxLayout, image_placement};
+use super::layout::{BoxLayout, image_placement, outside, shadow_shape};
 use super::*;
 
 impl Page {
@@ -34,6 +34,8 @@ impl Page {
         // This UI shares the page's painter and clip, but text placement must not
         // advance the caller's layout until the complete page size is known.
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
+        // Paint clips of the open `overflow: hidden` boxes, outermost first.
+        let mut clips = vec![ui.clip_rect()];
         for (command_index, command) in self.commands.iter().enumerate() {
             match *command {
                 Command::Anchor(index) => {
@@ -58,20 +60,85 @@ impl Page {
                         placement,
                         &self.commands,
                         &self.boxes,
-                        &mut self.blocks,
+                        &self.blocks,
                         &self.images,
                         command_index,
                         &mut layout_measure_steps,
                     );
                     right = right.max(layout.left + layout.outer_width);
+                    let mut layout = layout;
+                    if let Some(clip) = layout.overflow_clip(self.root_font) {
+                        let clip = clip.intersect(*clips.last().unwrap());
+                        clips.push(clip);
+                        ui.set_clip_rect(clip);
+                        text_ui.set_clip_rect(clip);
+                        layout.clipped = true;
+                    }
                     stack.push(layout);
                 }
                 Command::Close => {
-                    let layout = stack.pop().unwrap();
-                    let rect = layout.finish(ui, self.root_font);
+                    let mut layout = stack.pop().unwrap();
+                    // A box's own background and border are not clipped by it.
+                    if layout.clipped {
+                        clips.pop();
+                        let clip = *clips.last().unwrap();
+                        ui.set_clip_rect(clip);
+                        text_ui.set_clip_rect(clip);
+                    }
+                    let root = self.root_font;
+                    let rect = layout.finish(ui, root);
                     self.box_rects[layout.index] = rect;
+                    // Table cells fill the height of their row; cells spanning
+                    // rows wait for the last one, or for the end of the table.
+                    let row_bottom = layout.content_top + layout.flex_height;
+                    let mut spanning = Vec::new();
+                    for (cell, cell_rect) in std::mem::take(&mut layout.row_cells) {
+                        if cell.style.row_span > 1 {
+                            let rows = cell.style.row_span - 1;
+                            spanning.push((cell, cell_rect, rows));
+                        } else {
+                            cell.stretch_cell(ui, cell_rect, row_bottom, root, &mut self.box_rects);
+                        }
+                    }
+                    let table_bottom = layout.last_row_bottom;
+                    for (cell, cell_rect, _) in std::mem::take(&mut layout.spanning) {
+                        cell.stretch_cell(ui, cell_rect, table_bottom, root, &mut self.box_rects);
+                    }
                     let parent = stack.last_mut().unwrap();
+                    parent.contains_image |= layout.contains_image;
+                    if layout.out_of_flow && layout.contains_image {
+                        parent.absolute_image_bottom =
+                            parent.absolute_image_bottom.max(rect.bottom());
+                    }
+                    if layout.table_row {
+                        let mut covering = Vec::new();
+                        for (cell, cell_rect, rows) in std::mem::take(&mut parent.spanning) {
+                            if rows > 1 {
+                                covering.push((cell, cell_rect, rows - 1));
+                            } else {
+                                cell.stretch_cell(
+                                    ui,
+                                    cell_rect,
+                                    row_bottom,
+                                    root,
+                                    &mut self.box_rects,
+                                );
+                            }
+                        }
+                        covering.extend(spanning);
+                        parent.spanning = covering;
+                        parent.last_row_bottom = row_bottom;
+                    }
                     if layout.out_of_flow {
+                        continue;
+                    }
+                    if layout.floating != FloatSide::None {
+                        let [top, right, bottom, left] = layout.margins;
+                        let margin_box = egui::Rect::from_min_max(
+                            rect.min - egui::vec2(left, top),
+                            rect.max + egui::vec2(right, bottom),
+                        );
+                        parent.add_float(margin_box, layout.floating);
                         continue;
                     }
                     if parent.flex_row {
@@ -92,20 +159,30 @@ impl Page {
                     } else {
                         parent.cursor = layout.flow_top + rect.height() + layout.margin_bottom;
                     }
+                    if parent.table_row {
+                        parent.row_cells.push((layout, rect));
+                    }
                 }
                 Command::Text(index) => {
                     let parent = stack.last_mut().unwrap();
                     let block = &mut self.blocks[index];
-                    let indent = (block.indent.min(12) as f32 * 22.0).min(parent.width * 0.4);
-                    let width = (parent.width - indent).max(1.0);
-                    let x = parent.content_left + indent;
+                    // Lines beside floats take the room left between them.
+                    let (inset_left, inset_right) = parent.float_insets(parent.cursor);
+                    let width = (parent.width - inset_left - inset_right).max(1.0);
+                    let x = parent.content_left + inset_left;
                     if block.rule {
-                        ui.painter().hline(
-                            x..=x + width,
-                            parent.cursor + 1.0,
-                            Stroke::new(1.0, color(block.style.color)),
-                        );
-                        parent.cursor += 2.0;
+                        // An authored border or background already paints the rule's box.
+                        if !block.style.border_solid && block.style.background.3 == 0 {
+                            ui.painter().hline(
+                                x..=x + width,
+                                parent.cursor + 0.5,
+                                Stroke::new(
+                                    1.0,
+                                    paint_color(block.style.color, block.style.opacity),
+                                ),
+                            );
+                            parent.cursor += 1.0;
+                        }
                         continue;
                     }
                     let scale = ui.ctx().pixels_per_point();
@@ -120,6 +197,29 @@ impl Page {
                         block.layout = Some((width, scale, galley));
                     }
                     let galley = block.layout.as_ref().unwrap().2.clone();
+                    if block.marker {
+                        // Hang the marker outside the item's start edge, level with
+                        // its first line, without taking space from the item text.
+                        let gap = block.style.font_size * 0.45;
+                        let left = if block.style.direction == Direction::Rtl {
+                            x + width + gap
+                        } else {
+                            x - gap - galley.size().x
+                        };
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(left, parent.cursor),
+                            galley.size(),
+                        );
+                        let origin = match galley.job.halign {
+                            egui::Align::Min => rect.left_top(),
+                            egui::Align::Center => rect.center_top(),
+                            egui::Align::Max => rect.right_top(),
+                        };
+                        ui.painter()
+                            .galley(origin, galley, color(block.style.color));
+                        right = right.max(rect.right());
+                        continue;
+                    }
                     let offset = match galley.job.halign {
                         egui::Align::Min => 0.0,
                         egui::Align::Center => (width - galley.size().x).max(0.0) / 2.0,
@@ -233,6 +333,12 @@ impl Page {
                     let outer = placement.outer;
                     let content = placement.content;
                     let texture = textures.texture(ui.ctx(), image);
+                    // Pictures may be transparent, so keep the shadow outside them.
+                    if let Some(shadow) = shadow_shape(&image.style, outer, self.root_font) {
+                        for clip in outside(outer) {
+                            ui.painter().with_clip_rect(clip).add(shadow.clone());
+                        }
+                    }
                     if image.style.background.3 > 0 {
                         ui.painter().rect_filled(
                             outer,
@@ -240,11 +346,26 @@ impl Page {
                             paint_color(image.style.background, image.style.opacity),
                         );
                     }
-                    ui.painter().image(
-                        texture.id(),
-                        content,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE.gamma_multiply(image.style.opacity),
+                    // Rounded corners clip the picture itself, inset by any border
+                    // and padding so the frame keeps an even width.
+                    let inset = (placement.border
+                        + (content.left() - outer.left() - placement.border).max(0.0))
+                    .min(127.0) as u8;
+                    ui.painter().add(
+                        egui::epaint::RectShape::filled(
+                            content,
+                            egui::CornerRadius {
+                                nw: placement.radius.nw.saturating_sub(inset),
+                                ne: placement.radius.ne.saturating_sub(inset),
+                                sw: placement.radius.sw.saturating_sub(inset),
+                                se: placement.radius.se.saturating_sub(inset),
+                            },
+                            Color32::WHITE.gamma_multiply(image.style.opacity),
+                        )
+                        .with_texture(
+                            texture.id(),
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        ),
                     );
                     if placement.border > 0.0 {
                         ui.painter().rect_stroke(
@@ -297,10 +418,12 @@ impl Page {
                         }
                     }
                     parent.cursor = outer.bottom() + placement.margin_bottom;
+                    parent.contains_image = true;
                     right = right.max(outer.right());
                 }
             }
         }
+        ui.set_clip_rect(clips[0]);
         let bottom = stack[0].cursor.max(start.y);
         ui.allocate_space(egui::vec2(right - start.x, bottom - start.y));
         if self.forms.limited {

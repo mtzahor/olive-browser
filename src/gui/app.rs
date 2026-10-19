@@ -1272,19 +1272,23 @@ impl Tab {
                 rect.max.x -= inset;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     let mut overflow = egui::Vec2::ZERO;
+                    // Pages bring their own spacing through the `body` margin, as in
+                    // other browsers; the reading column keeps a generous frame.
                     egui::Frame::new()
                         .inner_margin(egui::Margin {
                             left: margin.min(100.0) as i8,
                             right: margin.min(100.0) as i8,
-                            top: 34,
-                            bottom: 40,
+                            top: if focus { 34 } else { 0 },
+                            bottom: if focus { 40 } else { 0 },
                         })
                         .show(ui, |ui| {
                             if page.is_empty() {
-                                ui.label(if resource_pending {
-                                    "Loading page resources…"
-                                } else {
-                                    "This document has no visible content."
+                                egui::Frame::new().inner_margin(8).show(ui, |ui| {
+                                    ui.label(if resource_pending {
+                                        "Loading page resources…"
+                                    } else {
+                                        "This document has no visible content."
+                                    });
                                 });
                             }
                             let page_scale = (self.zoom as f32 / 100.0).max(0.25);

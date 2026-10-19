@@ -31,7 +31,11 @@ denied projectwide, with narrow Linux and Windows exceptions for Landlock and
 Win32 worker setup.
 
 The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
-display limit. Each document loads and executes in a dedicated child process.
+display limit. Table cells are boxes, so once 70% of the text-block or box limit
+is used, further cells render inline, one line per row, instead of exhausting it.
+Flex, float and table content measurement share one 250,000-step budget per
+rendered frame, tables lay out at most 64 columns, and each container tracks at
+most 64 active floats. Each document loads and executes in a dedicated child process.
 On macOS, the GUI launches that process through `/usr/bin/sandbox-exec` with a
 Seatbelt profile denying `file-write*`. Linux workers apply a Landlock ruleset
 before starting any threads; it denies filesystem write operations and requires
