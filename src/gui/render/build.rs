@@ -65,7 +65,7 @@ impl Page {
         if let Some(content) = reading {
             initial.css.direction = content.direction;
             initial.css.font_size = focus::DEFAULT_FONT_SIZE;
-            initial.css.color = focus::Theme::Light.ink();
+            initial.css.color = Theme::Light.reading_ink();
             initial.css.line_height = crate::css::LineHeight::Number(1.65);
             if !content.has_heading && !builder.page.title.trim().is_empty() {
                 let mut heading = initial;

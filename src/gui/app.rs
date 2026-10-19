@@ -3,7 +3,7 @@ use crate::gui::{
     document::{ClickRequest, LoadedPage},
     downloads::Downloads,
     find::FindBar,
-    focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings, Theme as FocusTheme},
+    focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings},
     forms::{Activation, Kind},
     history::BrowsingHistory,
     history_ui::HistoryWindow,
@@ -82,12 +82,12 @@ impl Tab {
     fn focus_toolbar(&mut self, ui: &mut egui::Ui, busy: bool) {
         let previous_style = ui.style().clone();
         // Theme just the reading surface; the browser returns to its normal appearance on exit.
-        ui.style_mut().visuals = self.focus_settings.theme.visuals();
+        ui.style_mut().visuals = self.focus_settings.theme.reading_visuals();
         egui::Panel::top("focus_toolbar")
             .exact_size(64.0)
             .frame(
                 egui::Frame::new()
-                    .fill(self.focus_settings.theme.paper())
+                    .fill(self.focus_settings.theme.reading_paper())
                     .inner_margin(12),
             )
             .show(ui, |ui| {
@@ -143,8 +143,8 @@ impl Tab {
                                 }
                             }
                         }
-                        let mut appearance = IconButton::new(Icon::Appearance, "Appearance");
-                        appearance.button = appearance.button.selected(self.focus_panel);
+                        let appearance = IconButton::new(Icon::Appearance, "Appearance")
+                            .selected(self.focus_panel);
                         if ui
                             .add(appearance)
                             .on_hover_text("Show or hide reading settings")
@@ -159,7 +159,7 @@ impl Tab {
             egui::Panel::top("focus_appearance")
                 .frame(
                     egui::Frame::new()
-                        .fill(self.focus_settings.theme.paper())
+                        .fill(self.focus_settings.theme.reading_paper())
                         .inner_margin(egui::Margin::symmetric(20, 12)),
                 )
                 .show(ui, |ui| {
@@ -176,16 +176,8 @@ impl Tab {
                             .text("Font size")
                             .show_value(true),
                         );
-                        ui.selectable_value(
-                            &mut self.focus_settings.theme,
-                            FocusTheme::Light,
-                            "Light",
-                        );
-                        ui.selectable_value(
-                            &mut self.focus_settings.theme,
-                            FocusTheme::Dark,
-                            "Dark",
-                        );
+                        ui.selectable_value(&mut self.focus_settings.theme, Theme::Light, "Light");
+                        ui.selectable_value(&mut self.focus_settings.theme, Theme::Dark, "Dark");
                     });
                 });
         }
@@ -589,8 +581,9 @@ impl Tab {
 }
 
 fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
-    let mut button = IconButton::new(Icon::Folder, "Open HTML…").primary();
-    button.button = button.button.min_size(egui::vec2(152.0, 40.0));
+    let button = IconButton::new(Icon::Folder, "Open HTML…")
+        .primary()
+        .min_size(egui::vec2(152.0, 40.0));
     ui.add_enabled(enabled, button).clicked()
 }
 
@@ -785,7 +778,7 @@ impl Tab {
                             let marked = self.loaded.as_ref().is_some_and(|loaded| {
                                 shared.profile.is_bookmarked(loaded.location.as_str())
                             });
-                            let mut bookmark = IconButton::icon_only(
+                            let bookmark = IconButton::icon_only(
                                 Icon::Star,
                                 if marked {
                                     "Remove bookmark"
@@ -793,8 +786,8 @@ impl Tab {
                                     "Add bookmark"
                                 },
                             )
-                            .quiet();
-                            bookmark.button = bookmark.button.selected(marked);
+                            .quiet()
+                            .selected(marked);
                             toggle_bookmark |= ui
                                 .add_enabled(self.loaded.is_some(), bookmark)
                                 .on_hover_text(if marked {
@@ -1072,14 +1065,14 @@ impl Tab {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new().fill(
-                    if self.focus_mode { self.focus_settings.theme.paper() } else {
+                    if self.focus_mode { self.focus_settings.theme.reading_paper() } else {
                         self.loaded.as_ref().map(|loaded| loaded.page.background.unwrap_or(DOCUMENT_PAPER)).unwrap_or(palette.canvas)
                     },
                 ),
             )
             .show(ui, |ui| {
                 if self.focus_mode {
-                    ui.style_mut().visuals = self.focus_settings.theme.visuals();
+                    ui.style_mut().visuals = self.focus_settings.theme.reading_visuals();
                 }
                 if let Some(error) = &self.error {
                     egui::Frame::new()
@@ -1624,19 +1617,17 @@ impl OliveApp {
                                                     } else {
                                                         title
                                                     };
-                                                    let mut button = IconButton::new(
+                                                    let button = IconButton::new(
                                                         if tab.crashed || tab.error.is_some() {
                                                             Icon::Warning
                                                         } else {
                                                             Icon::Page
                                                         },
                                                         label,
-                                                    );
-                                                    button.button = button
-                                                        .button
-                                                        .frame(false)
-                                                        .truncate()
-                                                        .min_size(egui::vec2(140.0, 32.0));
+                                                    )
+                                                    .quiet()
+                                                    .truncate()
+                                                    .min_size(egui::vec2(140.0, 32.0));
                                                     let response = ui
                                                         .add_sized([180.0, 32.0], button)
                                                         .on_hover_text(format!(
@@ -2176,7 +2167,7 @@ mod tests {
         );
         app.focus_settings = FocusSettings {
             font_size: 25.0,
-            theme: FocusTheme::Dark,
+            theme: Theme::Dark,
         };
         app.toggle_focus(&mut shared);
         assert!(app.focus_mode && app.focus_panel);
@@ -2186,7 +2177,7 @@ mod tests {
         app.toggle_focus(&mut shared);
         assert!(app.focus_mode && app.focus_panel);
         assert_eq!(app.focus_settings.font_size, 25.0);
-        assert_eq!(app.focus_settings.theme, FocusTheme::Dark);
+        assert_eq!(app.focus_settings.theme, Theme::Dark);
         assert!(app.pending.is_none());
         assert_eq!(app.generation, 1);
         assert_eq!(shared.browsing_history.entries()[0].visits, 1);
@@ -2206,7 +2197,7 @@ mod tests {
             &ctx,
             prepare_page(remote_source("https://example.com/story")).unwrap(),
         );
-        for theme in [FocusTheme::Light, FocusTheme::Dark] {
+        for theme in [Theme::Light, Theme::Dark] {
             app.focus_settings.theme = theme;
             let mut output = ctx.run_ui(
                 egui::RawInput {

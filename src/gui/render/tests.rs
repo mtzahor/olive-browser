@@ -227,7 +227,7 @@ fn focus_extracts_article_and_removes_distractions_and_hidden_subtrees() {
     assert_eq!(body.job.sections[0].format.font_id.size, 20.0);
     assert_eq!(
         body.job.sections[0].format.color,
-        color(focus::Theme::Light.ink())
+        color(Theme::Light.reading_ink())
     );
 }
 
@@ -291,7 +291,7 @@ fn focus_appearance_reflows_and_recolors_all_text_without_changing_content() {
     let original = page.blocks[1].layout.as_ref().unwrap().2.size();
     page.set_reading_style(Settings {
         font_size: 28.0,
-        theme: focus::Theme::Dark,
+        theme: Theme::Dark,
     });
     assert!(page.blocks.iter().all(|block| block.layout.is_none()));
     draw(&mut page, 320.0).textures_delta.clear();
@@ -305,17 +305,17 @@ fn focus_appearance_reflows_and_recolors_all_text_without_changing_content() {
     assert!(
         formats
             .iter()
-            .any(|format| format.color == color(focus::Theme::Dark.link()))
+            .any(|format| format.color == color(Theme::Dark.reading_link()))
     );
     assert!(
         formats
             .iter()
-            .any(|format| format.background == color(focus::Theme::Dark.code()))
+            .any(|format| format.background == color(Theme::Dark.reading_code()))
     );
     assert!(
         page.boxes
             .iter()
-            .any(|style| style.background == focus::Theme::Dark.code())
+            .any(|style| style.background == Theme::Dark.reading_code())
     );
     assert_eq!(texts(&page), original_text);
     page.set_reading_style(Settings::default());
@@ -359,7 +359,7 @@ fn focus_retains_preloaded_article_images_and_original_presentation() {
     assert!(focus.images[0].action.link.is_some());
     assert!(focus.images[0].action.target.is_none());
     focus.set_reading_style(Settings {
-        theme: focus::Theme::Dark,
+        theme: Theme::Dark,
         ..Settings::default()
     });
     assert!(texts(&original).contains(&"Navigation"));

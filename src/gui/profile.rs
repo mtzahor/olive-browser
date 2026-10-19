@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(profile.data.settings.default_zoom, 125);
         assert_eq!(
             profile.data.settings.focus.theme,
-            crate::gui::focus::Theme::Dark
+            crate::gui::theme::Theme::Dark
         );
         profile.data.settings.browser_theme = crate::gui::theme::Theme::Dark;
         profile.save_if_changed();

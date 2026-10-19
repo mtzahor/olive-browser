@@ -1,5 +1,6 @@
 //! Inert CSS presentation of Olive's DOM. No HTML reparsing or resource loading.
 use crate::gui::focus::{self, Content, Settings};
+use crate::gui::theme::Theme;
 use crate::gui::{
     find::Matches,
     forms::{Activation, Forms, Kind},
@@ -390,12 +391,12 @@ impl Page {
         }
         let scale = settings.font_size / previous.font_size;
         let recolor = |value: Color| {
-            if value == previous.theme.link() {
-                settings.theme.link()
-            } else if value == previous.theme.code() {
-                settings.theme.code()
+            if value == previous.theme.reading_link() {
+                settings.theme.reading_link()
+            } else if value == previous.theme.reading_code() {
+                settings.theme.reading_code()
             } else if value.3 > 0 {
-                settings.theme.ink()
+                settings.theme.reading_ink()
             } else {
                 value
             }

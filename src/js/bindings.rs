@@ -736,10 +736,6 @@ fn tag_name(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<Js
     Ok(JsString::from(name.as_str()).into())
 }
 
-pub(super) fn restore_document(context: &Context, document: Document) {
-    host(context).borrow_mut().document = Some(document);
-}
-
 pub(super) fn with_document<T>(context: &Context, read: impl FnOnce(&Document) -> T) -> T {
     read(host(context).borrow().doc())
 }

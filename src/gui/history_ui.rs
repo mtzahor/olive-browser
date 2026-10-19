@@ -148,15 +148,13 @@ impl HistoryWindow {
                                         let text_width = (ui.available_width() - 56.0).max(140.0);
                                         ui.vertical(|ui| {
                                             ui.set_width(text_width);
-                                            let mut open_button = IconButton::new(
+                                            let open_button = IconButton::new(
                                                 Icon::Page,
                                                 RichText::new(entry.display_title()).strong(),
-                                            );
-                                            open_button.button = open_button
-                                                .button
-                                                .frame(false)
-                                                .truncate()
-                                                .min_size(egui::vec2(text_width, 22.0));
+                                            )
+                                            .quiet()
+                                            .truncate()
+                                            .min_size(egui::vec2(text_width, 22.0));
                                             if ui
                                                 .add_enabled(!busy, open_button)
                                                 .on_hover_text(format!("Open {}", entry.url))
