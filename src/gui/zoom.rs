@@ -17,7 +17,7 @@ pub fn show<R>(
     let scale = f32::from(percent) / 100.0;
     let transform = egui::emath::TSTransform::from_translation(rect.min.to_vec2())
         * egui::emath::TSTransform::from_scaling(scale);
-    let layer = egui::LayerId::new(ui.layer_id().order, ui.id().with(("page-zoom", id)));
+    let layer = egui::LayerId::new(ui.layer_id().order, ui.scope_id().with(("page-zoom", id)));
     ui.ctx().set_sublayer(ui.layer_id(), layer);
     ui.ctx().set_transform_layer(layer, transform);
     let mut child = ui.new_child(
