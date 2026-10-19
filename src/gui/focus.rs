@@ -226,7 +226,7 @@ impl Content {
 
 fn excluded_element(element: &Element, in_content: bool, scripting: bool) -> bool {
     let tag = element.name.local.as_str();
-    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
+    if !element.is_html()
         || element.attribute("hidden").is_some()
         || element
             .attribute("aria-hidden")

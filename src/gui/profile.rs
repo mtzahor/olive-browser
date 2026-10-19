@@ -1,12 +1,11 @@
 //! Versioned, bounded daily-driver state. Page content, credentials and form bodies
 //! never belong in this file. A damaged file is preserved until an explicit reset.
 use crate::gui::focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings};
+use crate::gui::storage;
 use crate::net::{Location, Url};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -218,18 +217,9 @@ fn canonical_url(url: &str) -> Result<String, String> {
     )
 }
 fn read(path: &Path) -> Result<Data, String> {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Data::default()),
-        Err(error) => return Err(error.to_string()),
+    let Some(bytes) = storage::read_bounded(path, MAX_FILE_BYTES, "profile")? else {
+        return Ok(Data::default());
     };
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("profile exceeds the 16 MiB limit".into());
-    }
     let mut data: Data = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if data.version != 1 {
         return Err("unsupported profile version".into());
@@ -268,22 +258,15 @@ fn read(path: &Path) -> Result<Data, String> {
     Ok(data)
 }
 fn write(path: &Path, data: &Data) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    serde_json::to_writer(&mut file, data).map_err(|e| e.to_string())?;
-    file.write_all(b"\n").map_err(|e| e.to_string())?;
-    file.as_file().sync_all().map_err(|e| e.to_string())?;
-    file.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    let mut json = serde_json::to_vec(data).map_err(|e| e.to_string())?;
+    json.push(b'\n');
+    storage::write_state(path, &json).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn bookmarks_settings_and_session_survive_restart() {
         let dir = tempfile::tempdir().unwrap();

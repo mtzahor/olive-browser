@@ -1,11 +1,11 @@
-use super::{ErrorKind, Runtime, ScriptError, ScriptOptions, bindings, truncate};
+use super::{ErrorKind, Runtime, ScriptError, ScriptOptions, bindings};
 #[cfg(feature = "net")]
 use crate::net::{CookieJar, CookieUpdate, Location};
-use crate::{Document, ExternalSource, NodeId, NodeKind};
+use crate::{Document, Element, ExternalSource, NodeId, NodeKind, text::truncate};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptDiagnostic {
     /// Script element, or `None` for runtime setup errors.
     pub node: Option<NodeId>,
@@ -15,7 +15,7 @@ pub struct ScriptDiagnostic {
     pub message: String,
 }
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScriptReport {
     pub attempted: usize,
     pub executed: usize,
@@ -37,7 +37,7 @@ impl ScriptReport {
                 node,
                 source: None,
                 kind: error.kind,
-                message: truncate(&error.message, options.max_output_bytes),
+                message: truncate(&error.message, options.max_output_bytes).to_owned(),
             });
         } else {
             self.omitted_diagnostics = self.omitted_diagnostics.saturating_add(1);
@@ -177,10 +177,7 @@ impl DocumentSession {
                 document
                     .node(id)
                     .and_then(|n| n.as_element())
-                    .is_some_and(|e| {
-                        e.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                            && e.name.local.as_str() == "script"
-                    })
+                    .is_some_and(|e| e.is_html_tag("script"))
                     && eligible_ancestry(&document, id)
             })
             .collect();
@@ -193,7 +190,7 @@ impl DocumentSession {
                     .attribute("src")
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("Inline script {}", index + 1));
-                (id, truncate(&label, 256))
+                (id, truncate(&label, 256).to_owned())
             })
             .collect();
         let mut runtime = match Runtime::new(options) {
@@ -353,7 +350,7 @@ impl DocumentSession {
         let source = self.with_document(|doc| {
             let e = doc.node(target)?.as_element()?;
             if !eligible_ancestry(doc, target)
-                || e.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
+                || !e.is_html()
                 || e.attribute("hidden").is_some()
                 || e.attribute("disabled").is_some()
             {
@@ -435,15 +432,8 @@ pub(crate) fn eligible_ancestry(doc: &Document, id: NodeId) -> bool {
             return true;
         }
         let node = doc.node(parent).unwrap();
-        if let Some(e) = node.as_element() {
-            if e.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
-                || matches!(
-                    e.name.local.as_str(),
-                    "template" | "noscript" | "iframe" | "object" | "embed"
-                )
-            {
-                return false;
-            }
+        if node.as_element().is_some_and(Element::is_inert_container) {
+            return false;
         }
         next = node.parent();
     }

@@ -13,7 +13,6 @@ use boa_engine::{
 use boa_gc::{Finalize, Trace};
 use std::{cell::RefCell, collections::HashMap};
 
-const HTML: &str = "http://www.w3.org/1999/xhtml";
 struct Host {
     document: Option<Document>,
     wrappers: HashMap<NodeId, JsObject>,
@@ -64,7 +63,7 @@ impl Host {
                     .doc()
                     .node(id)
                     .and_then(|n| n.as_element())
-                    .is_some_and(|e| e.name.ns.as_str() == HTML && predicate(e))
+                    .is_some_and(|e| e.is_html() && predicate(e))
         });
         self.spend(spent, 0, 0)?;
         Ok(found)
@@ -430,8 +429,7 @@ fn elements_by_tag(root: NodeId, args: &[JsValue], context: &mut Context) -> JsR
                 .node(id)
                 .and_then(|n| n.as_element())
                 .is_some_and(|e| {
-                    e.name.ns.as_str() == HTML
-                        && (tag == "*" || e.name.local.as_str().eq_ignore_ascii_case(&tag))
+                    e.is_html() && (tag == "*" || e.name.local.as_str().eq_ignore_ascii_case(&tag))
                 })
             {
                 ids.push(id);
@@ -518,7 +516,7 @@ fn set_cookie(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<
 }
 fn element(name: &str) -> NodeKind {
     NodeKind::Element(Element {
-        name: html5ever::QualName::new(None, HTML.into(), name.into()),
+        name: html5ever::QualName::new(None, html5ever::ns!(html), name.into()),
         attributes: Vec::new(),
         template_contents: None,
         had_duplicate_attributes: false,

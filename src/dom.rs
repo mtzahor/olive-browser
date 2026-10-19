@@ -1,10 +1,10 @@
-use html5ever::{Attribute, QualName, interface::QuirksMode};
+use html5ever::{Attribute, QualName, interface::QuirksMode, ns};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 
 /// An arena index. Only use an ID with the document that produced it.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeId(NonZeroUsize);
 
 impl NodeId {
@@ -36,6 +36,27 @@ impl Element {
             .iter()
             .find(|attr| attr.name.ns.is_empty() && attr.name.local.as_str() == name)
             .map(|attr| attr.value.as_ref())
+    }
+
+    /// Whether the element is in the HTML namespace.
+    pub fn is_html(&self) -> bool {
+        self.name.ns == ns!(html)
+    }
+
+    /// Whether this is the HTML element with the given lowercase local name.
+    pub fn is_html_tag(&self, local: &str) -> bool {
+        self.is_html() && self.name.local.as_str() == local
+    }
+
+    /// Foreign content, templates, `noscript` fallbacks and embedded documents.
+    /// Olive never runs scripts or loads resources found inside these subtrees.
+    #[cfg(feature = "js")]
+    pub(crate) fn is_inert_container(&self) -> bool {
+        !self.is_html()
+            || matches!(
+                self.name.local.as_str(),
+                "template" | "noscript" | "iframe" | "object" | "embed"
+            )
     }
 }
 
@@ -160,7 +181,7 @@ impl Document {
                 }
                 NodeKind::Element(element) => {
                     write!(writer, "<{}", element.name.local.escape_debug())?;
-                    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml" {
+                    if !element.is_html() {
                         write!(writer, " namespace={:?}", element.name.ns.as_str())?;
                     }
                     for attr in &element.attributes {

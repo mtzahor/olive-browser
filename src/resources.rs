@@ -41,13 +41,13 @@ pub struct ExternalImage {
 }
 
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResourceReport {
     pub attempted: usize,
     pub loaded: usize,
     pub diagnostics: Vec<String>,
     pub limited: bool,
-    #[cfg_attr(feature = "gui", serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub pending: bool,
 }
 
@@ -92,23 +92,16 @@ impl PageResources {
             let Some(element) = node.as_element() else {
                 continue;
             };
-            eligible[id.index()] = element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                && !matches!(
-                    element.name.local.as_str(),
-                    "template" | "noscript" | "iframe" | "object" | "embed"
-                );
+            eligible[id.index()] = !element.is_inert_container();
             let (kind, reference) =
                 if element.name.local.as_str() == "link" && applicable_style(element) {
                     (ResourceKind::Stylesheet, element.attribute("href"))
                 } else if scripting
-                    && element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_str() == "script"
+                    && element.is_html_tag("script")
                     && classic_type(element.attribute("type"), element.attribute("language"))
                 {
                     (ResourceKind::Script, element.attribute("src"))
-                } else if element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_str() == "img"
-                {
+                } else if element.is_html_tag("img") {
                     (ResourceKind::Image, element.attribute("src"))
                 } else {
                     continue;
@@ -239,11 +232,10 @@ impl PageResources {
                 Err(error) => {
                     // Bound both retained URLs and transport error chains.
                     let message = format!("{reference}: {error}");
-                    let mut end = message.len().min(1024);
-                    while !message.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    resources.report.diagnostics.push(message[..end].to_owned());
+                    resources
+                        .report
+                        .diagnostics
+                        .push(crate::text::truncate(&message, 1024).to_owned());
                 }
             }
         }

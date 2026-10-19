@@ -27,14 +27,14 @@ const MAX_COOKIE_UPDATES: usize = 256;
 /// A bounded, in-memory HTTP cookie jar with expiry. The browser never writes
 /// cookies to disk, including cookies with `Max-Age` or `Expires` attributes.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CookieJar {
     cookies: Vec<StoredCookie>,
     next_creation: u64,
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct StoredCookie {
     name: String,
     value: String,
@@ -49,7 +49,7 @@ struct StoredCookie {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 enum SameSite {
     Strict,
     Lax,
@@ -59,7 +59,7 @@ enum SameSite {
 /// A cookie mutation produced by a document or one of its resources. The UI
 /// applies these mutations to its shared jar after a worker completes.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CookieUpdate {
     pub location: Location,
     pub set_cookie: String,
@@ -502,13 +502,13 @@ pub struct LoadedResource {
 pub struct Location(Url);
 
 // Deserialize through the same validation used by normal navigation.
-#[cfg(feature = "gui")]
+#[cfg(feature = "serde")]
 impl serde::Serialize for Location {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
     }
 }
-#[cfg(feature = "gui")]
+#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Location {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <String as serde::Deserialize>::deserialize(deserializer)?;
@@ -641,9 +641,7 @@ impl Location {
             .descendants(document.root())
             .find_map(|id| {
                 let element = document.node(id)?.as_element()?;
-                if element.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                    && element.name.local.as_str() == "base"
-                {
+                if element.is_html_tag("base") {
                     element.attribute("href")
                 } else {
                     None
@@ -717,7 +715,7 @@ pub const MAX_FORM_BYTES: usize = 64 * 1024;
 
 /// A user-initiated, UTF-8 URL-encoded form navigation. Bodies are never history data.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FormRequest {
     pub location: Location,
     pub body: Option<String>,

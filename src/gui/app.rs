@@ -254,14 +254,16 @@ impl Tab {
         {
             Ok(request) => {
                 let requested = request.location.clone();
-                match Worker::spawn_form_with_cookies(
-                    request,
-                    ScriptPolicy::for_load(
-                        shared.profile.data.settings.javascript_by_default,
-                        true,
-                    ),
-                    shared.cookies.clone(),
-                    Some(loaded.location.clone()),
+                match Worker::spawn(
+                    Command::Submit {
+                        request,
+                        scripting: ScriptPolicy::for_load(
+                            shared.profile.data.settings.javascript_by_default,
+                            true,
+                        ),
+                        cookies: shared.cookies.clone(),
+                        initiator: Some(loaded.location.clone()),
+                    },
                     ctx,
                 ) {
                     Ok(worker) => {
@@ -384,14 +386,16 @@ impl Tab {
             .as_ref()
             .map(|loaded| loaded.location.clone())
             .or_else(|| self.opener.take());
-        match Worker::spawn_with_cookies(
-            location,
-            ScriptPolicy::for_load(
-                scripting,
-                shared.profile.data.settings.javascript_by_default,
-            ),
-            shared.cookies.clone(),
-            initiator,
+        match Worker::spawn(
+            Command::Load {
+                location,
+                scripting: ScriptPolicy::for_load(
+                    scripting,
+                    shared.profile.data.settings.javascript_by_default,
+                ),
+                cookies: shared.cookies.clone(),
+                initiator,
+            },
             ctx,
         ) {
             Ok(worker) => {
@@ -1181,7 +1185,7 @@ impl Tab {
                                             {
                                                 if !worker.busy() {
                                                     self.pending_form = form_activation.take();
-                                                    if let Err(error) = worker.send(Command::ClickWithCookies { click: ClickRequest { target, href: link.take() }, cookies: shared.cookies.clone() }) {
+                                                    if let Err(error) = worker.send(Command::Click { click: ClickRequest { target, href: link.take() }, cookies: shared.cookies.clone() }) {
                                                         self.error = Some(error);
                                                         self.pending_form = None;
                                                     }

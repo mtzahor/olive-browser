@@ -45,6 +45,7 @@ pub struct ExternalSource {
 mod dom;
 mod parser;
 mod sink;
+mod text;
 
 pub use dom::{Children, Descendants, Document, Element, Node, NodeId, NodeKind};
 pub use html5ever::interface::QuirksMode;

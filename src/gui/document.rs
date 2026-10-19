@@ -4,7 +4,7 @@ use crate::js::{DocumentSession, ScriptOptions, ScriptReport};
 use crate::{
     ExternalSource, NodeId, ParseOutput,
     css::{DEFAULT_VIEWPORT, Stylesheet},
-    net::CookieUpdate,
+    net::{CookieJar, CookieUpdate},
     net::{DocumentLoader, LoadedDocument, Location},
     resources::{PageResources, ResourceReport},
 };
@@ -52,6 +52,25 @@ pub struct PageUpdate {
     #[serde(default)]
     pub cookie_updates: Vec<CookieUpdate>,
 }
+impl LoadedPage {
+    /// Hand the whole page to the browser as a completed resource update.
+    pub fn into_update(self) -> PageUpdate {
+        PageUpdate {
+            default_allowed: false,
+            page: self.page,
+            reading: self.reading,
+            base: self.base,
+            scripts: self.scripts,
+            resources: self.resources,
+            session_available: false,
+            presentation_available: false,
+            alert: None,
+            link: None,
+            cookie_updates: self.cookie_updates,
+        }
+    }
+}
+
 pub struct PreparedPage {
     pub loaded: LoadedPage,
     pub session: Option<DocumentSession>,
@@ -62,36 +81,76 @@ pub struct PreparedPage {
     viewport: (f32, f32),
 }
 
+/// The normal and reading views of one document state.
+struct Presentation {
+    page: Page,
+    reading: Page,
+    base: Location,
+    sheet: Stylesheet,
+}
+
+fn present(
+    document: &crate::Document,
+    location: &Location,
+    styles: &HashMap<NodeId, ExternalSource>,
+    images: &HashMap<NodeId, ImageAsset>,
+    scripting_enabled: bool,
+    viewport: (f32, f32),
+) -> Presentation {
+    let sheet = Stylesheet::from_document_with_sources(document, styles);
+    let base = location.document_base(document);
+    let reading = Page::reading_with_base_at_viewport(
+        document,
+        scripting_enabled,
+        &sheet,
+        images,
+        Some(&base),
+        viewport,
+    );
+    let page = Page::with_stylesheet_and_images_at_viewport(
+        document,
+        scripting_enabled,
+        &sheet,
+        images,
+        viewport,
+    );
+    Presentation {
+        page,
+        reading,
+        base,
+        sheet,
+    }
+}
+
+fn corrections(parsed: &ParseOutput) -> usize {
+    parsed
+        .diagnostics
+        .len()
+        .saturating_add(parsed.omitted_diagnostics)
+}
+
 /// Build the first visible page from the parsed document before waiting on linked resources.
 pub fn prepare_page_preview(
     source: &LoadedDocument,
     scripting_enabled: bool,
 ) -> Result<(LoadedPage, ParseOutput), String> {
     let parsed = source.parse(scripting_enabled)?;
-    let corrections = parsed
-        .diagnostics
-        .len()
-        .saturating_add(parsed.omitted_diagnostics);
-    let document = &parsed.document;
-    let sheet = Stylesheet::from_document(document);
-    let base = source.location.document_base(document);
-    let reading = Page::reading_with_base(
-        document,
-        scripting_enabled,
-        &sheet,
+    let view = present(
+        &parsed.document,
+        &source.location,
         &HashMap::new(),
-        Some(&base),
+        &HashMap::new(),
+        scripting_enabled,
+        DEFAULT_VIEWPORT,
     );
-    let page =
-        Page::with_stylesheet_and_images(document, scripting_enabled, &sheet, &HashMap::new());
     Ok((
         LoadedPage {
             location: source.location.clone(),
-            base,
+            base: view.base,
             status: source.status,
-            page,
-            reading,
-            corrections,
+            page: view.page,
+            reading: view.reading,
+            corrections: corrections(&parsed),
             scripts: ScriptReport::default(),
             scripting_enabled,
             resources: ResourceReport {
@@ -120,10 +179,7 @@ pub fn prepare_page_with_parsed(
     scripting_enabled: bool,
     parsed: ParseOutput,
 ) -> Result<PreparedPage, String> {
-    let corrections = parsed
-        .diagnostics
-        .len()
-        .saturating_add(parsed.omitted_diagnostics);
+    let corrections = corrections(&parsed);
     let resources = PageResources::load(
         loader,
         &source.location,
@@ -132,7 +188,17 @@ pub fn prepare_page_with_parsed(
     );
     let mut resource_report = resources.report;
     let images = decode_images(&resources.images, &mut resource_report);
-    let (page, reading, base, scripts, session, document, stylesheet) = if scripting_enabled {
+    let render = |document: &crate::Document| {
+        present(
+            document,
+            &source.location,
+            &resources.styles,
+            &images,
+            scripting_enabled,
+            DEFAULT_VIEWPORT,
+        )
+    };
+    let (view, session, document) = if scripting_enabled {
         let session = DocumentSession::with_sources_and_cookies(
             parsed.document,
             ScriptOptions::browser(),
@@ -140,52 +206,14 @@ pub fn prepare_page_with_parsed(
             loader.cookies(),
             source.location.clone(),
         );
-        let (page, reading, base, sheet) = session.with_document(|document| {
-            let sheet = Stylesheet::from_document_with_sources(document, &resources.styles);
-            let reading = Page::reading_with_base(
-                document,
-                true,
-                &sheet,
-                &images,
-                Some(&source.location.document_base(document)),
-            );
-            (
-                Page::with_stylesheet_and_images(document, true, &sheet, &images),
-                reading,
-                source.location.document_base(document),
-                sheet,
-            )
-        });
-        (
-            page,
-            reading,
-            base,
-            session.report().clone(),
-            Some(session),
-            None,
-            sheet,
-        )
+        (session.with_document(render), Some(session), None)
     } else {
-        let document = parsed.document;
-        let sheet = Stylesheet::from_document_with_sources(&document, &resources.styles);
-        let reading = Page::reading_with_base(
-            &document,
-            false,
-            &sheet,
-            &images,
-            Some(&source.location.document_base(&document)),
-        );
-        let page = Page::with_stylesheet_and_images(&document, false, &sheet, &images);
-        (
-            page,
-            reading,
-            source.location.document_base(&document),
-            ScriptReport::default(),
-            None,
-            Some(document),
-            sheet,
-        )
+        (render(&parsed.document), None, Some(parsed.document))
     };
+    let scripts = session
+        .as_ref()
+        .map(|session| session.report().clone())
+        .unwrap_or_default();
     let mut cookie_updates = loader.take_cookie_updates();
     if let Some(session) = &session {
         for update in session.take_cookie_updates() {
@@ -195,10 +223,10 @@ pub fn prepare_page_with_parsed(
     Ok(PreparedPage {
         loaded: LoadedPage {
             location: source.location,
-            base,
+            base: view.base,
             status: source.status,
-            page,
-            reading,
+            page: view.page,
+            reading: view.reading,
             corrections,
             scripts,
             scripting_enabled,
@@ -209,7 +237,7 @@ pub fn prepare_page_with_parsed(
         document,
         styles: resources.styles,
         images,
-        stylesheet,
+        stylesheet: view.sheet,
         viewport: DEFAULT_VIEWPORT,
     })
 }
@@ -244,11 +272,9 @@ fn decode_images(
             }
             Err(error) => {
                 let message = format!("{}: {error}", source.reference);
-                let end = message
-                    .char_indices()
-                    .nth(1024)
-                    .map_or(message.len(), |(index, _)| index);
-                report.diagnostics.push(message[..end].to_owned());
+                report
+                    .diagnostics
+                    .push(crate::text::truncate(&message, 1024).to_owned());
             }
         }
     }
@@ -329,49 +355,55 @@ fn color_image(width: u32, height: u32, rgba: &[u8]) -> std::sync::Arc<egui::Col
 }
 
 impl PreparedPage {
-    pub fn presentation_available(&self) -> bool {
+    fn presentation_available(&self) -> bool {
         self.session.is_some() || self.stylesheet.needs_viewport_reflow()
     }
 
-    pub fn click(&mut self, click: ClickRequest) -> Option<PageUpdate> {
+    /// Move the prepared presentation into the update that completes resource
+    /// loading. The document and its metadata stay for later clicks and reflows.
+    pub fn take_update(&mut self) -> PageUpdate {
+        PageUpdate {
+            default_allowed: false,
+            page: std::mem::take(&mut self.loaded.page),
+            reading: std::mem::take(&mut self.loaded.reading),
+            base: self.loaded.base.clone(),
+            scripts: self.loaded.scripts.clone(),
+            resources: self.loaded.resources.clone(),
+            session_available: self.session.is_some(),
+            presentation_available: self.presentation_available(),
+            alert: None,
+            link: None,
+            cookie_updates: std::mem::take(&mut self.loaded.cookie_updates),
+        }
+    }
+
+    /// Run a click handler after refreshing the session with the browser's cookies.
+    pub fn click(&mut self, click: ClickRequest, cookies: CookieJar) -> Option<PageUpdate> {
         let session = self.session.as_mut()?;
+        session.replace_cookies(cookies);
         let allowed = session.click(click.target);
-        let viewport = self.viewport;
-        let (page, reading, base) = session.with_document(|document| {
-            let sheet = Stylesheet::from_document_with_sources(document, &self.styles);
-            let reading = Page::reading_with_base_at_viewport(
+        let view = session.with_document(|document| {
+            present(
                 document,
-                true,
-                &sheet,
+                &self.loaded.location,
+                &self.styles,
                 &self.images,
-                Some(&self.loaded.location.document_base(document)),
-                viewport,
-            );
-            (
-                Page::with_stylesheet_and_images_at_viewport(
-                    document,
-                    true,
-                    &sheet,
-                    &self.images,
-                    viewport,
-                ),
-                reading,
-                self.loaded.location.document_base(document),
+                true,
+                self.viewport,
             )
         });
-        let cookie_updates = session.take_cookie_updates();
         Some(PageUpdate {
             default_allowed: allowed,
-            page,
-            reading,
-            base,
+            page: view.page,
+            reading: view.reading,
+            base: view.base,
             scripts: session.report().clone(),
             resources: self.loaded.resources.clone(),
             session_available: true,
             presentation_available: true,
             alert: session.take_alerts().into_iter().next(),
             link: if allowed { click.href } else { None },
-            cookie_updates,
+            cookie_updates: session.take_cookie_updates(),
         })
     }
 
@@ -380,43 +412,28 @@ impl PreparedPage {
             viewport.0.clamp(1.0, 10_000.0),
             viewport.1.clamp(1.0, 10_000.0),
         );
-        let styles = &self.styles;
-        let images = &self.images;
-        let location = &self.loaded.location;
-        let scripting_enabled = self.loaded.scripting_enabled;
-        let make_pages = |document: &crate::Document| {
-            let sheet = Stylesheet::from_document_with_sources(document, styles);
-            let base = location.document_base(document);
-            let reading = Page::reading_with_base_at_viewport(
+        let render = |document: &crate::Document| {
+            present(
                 document,
-                scripting_enabled,
-                &sheet,
-                images,
-                Some(&base),
+                &self.loaded.location,
+                &self.styles,
+                &self.images,
+                self.loaded.scripting_enabled,
                 viewport,
-            );
-            let page = Page::with_stylesheet_and_images_at_viewport(
-                document,
-                scripting_enabled,
-                &sheet,
-                images,
-                viewport,
-            );
-            (page, reading, base, sheet)
+            )
         };
-        let (page, reading, base, sheet) = if let Some(session) = self.session.as_mut() {
-            session.with_document(make_pages)
-        } else {
-            make_pages(self.document.as_ref()?)
+        let view = match &self.session {
+            Some(session) => session.with_document(render),
+            None => render(self.document.as_ref()?),
         };
         self.viewport = viewport;
-        self.stylesheet = sheet;
-        self.loaded.base = base.clone();
+        self.stylesheet = view.sheet;
+        self.loaded.base = view.base.clone();
         Some(PageUpdate {
             default_allowed: false,
-            page,
-            reading,
-            base,
+            page: view.page,
+            reading: view.reading,
+            base: view.base,
             scripts: self.loaded.scripts.clone(),
             resources: self.loaded.resources.clone(),
             session_available: self.session.is_some(),

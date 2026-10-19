@@ -18,6 +18,7 @@ use complexity::check_complexity;
 pub(crate) mod document;
 pub use document::{DocumentSession, ScriptDiagnostic, ScriptReport, run_document};
 
+use crate::text::truncate;
 use boa_engine::{
     Context, JsError, JsNativeError, JsResult, JsString, JsValue, Source, context::HostHooks,
     job::IdleJobExecutor, module::IdleModuleLoader, realm::Realm, script::Script,
@@ -78,7 +79,7 @@ impl ScriptOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ErrorKind {
     Syntax,
     Runtime,
@@ -103,7 +104,7 @@ impl ScriptError {
     fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: truncate(&message.into(), 1024),
+            message: truncate(&message.into(), 1024).to_owned(),
         }
     }
     fn engine(error: JsError, kind: ErrorKind) -> Self {
@@ -127,7 +128,7 @@ struct BoundedMessage(String);
 impl fmt::Write for BoundedMessage {
     fn write_str(&mut self, text: &str) -> fmt::Result {
         let remaining = 1024usize.saturating_sub(self.0.len());
-        self.0.push_str(&truncate(text, remaining));
+        self.0.push_str(truncate(text, remaining));
         if text.len() > remaining {
             Err(fmt::Error)
         } else {
@@ -290,25 +291,18 @@ impl Runtime {
     }
 }
 
-pub(super) fn truncate(value: &str, limit: usize) -> String {
-    let mut end = value.len().min(limit);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
-}
 fn preview(value: &JsValue, limit: usize) -> String {
     if let Some(s) = value.as_string() {
         // Bound conversion before allocating a Rust copy of a potentially huge JS string.
         let units: Vec<u16> = s.iter().take(limit).collect();
-        truncate(&String::from_utf16_lossy(&units), limit)
+        truncate(&String::from_utf16_lossy(&units), limit).to_owned()
     } else if value.is_object() {
-        truncate("[object]", limit)
+        truncate("[object]", limit).to_owned()
     } else if value.is_symbol() {
-        truncate("[symbol]", limit)
+        truncate("[symbol]", limit).to_owned()
     } else if value.is_bigint() {
-        truncate("[bigint]", limit)
+        truncate("[bigint]", limit).to_owned()
     } else {
-        truncate(&value.display().to_string(), limit)
+        truncate(&value.display().to_string(), limit).to_owned()
     }
 }
