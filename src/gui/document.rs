@@ -53,6 +53,15 @@ pub struct PageUpdate {
     pub cookie_updates: Vec<CookieUpdate>,
 }
 impl LoadedPage {
+    /// Swap in a worker's newer presentation, keeping the user's form edits.
+    pub fn apply_update(&mut self, update: &mut PageUpdate) {
+        update.page.forms.preserve_edits(&self.page.forms);
+        self.page = std::mem::take(&mut update.page);
+        self.reading = std::mem::take(&mut update.reading);
+        self.base = update.base.clone();
+        self.scripts = std::mem::take(&mut update.scripts);
+    }
+
     /// Hand the whole page to the browser as a completed resource update.
     pub fn into_update(self) -> PageUpdate {
         PageUpdate {

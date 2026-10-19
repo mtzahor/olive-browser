@@ -11,6 +11,12 @@ pub struct FindBar {
     pub scroll: bool,
 }
 impl FindBar {
+    /// Show the bar with its query focused and the current match scrolled into view.
+    pub fn activate(&mut self) {
+        self.open = true;
+        self.focus = true;
+        self.scroll = true;
+    }
     pub fn show(&mut self, ui: &mut egui::Ui, count: usize) {
         egui::Panel::top("find-bar").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
