@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Rendering polish
+## 1.6.0 — Rendering polish
 
 - Lay out HTML tables with columns shared across rows and sized from their
   content, `colspan` and `rowspan`, cell backgrounds that fill the row,
