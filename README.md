@@ -303,6 +303,8 @@ cargo build --release --locked --features gui --bin olive-gui
 ```
 
 On macOS, `./scripts/build-macos-app.sh` creates a local `Olive Browser.app`.
+See [scripts/README.md](scripts/README.md) for the other maintenance scripts,
+including how to regenerate the app icon.
 
 ## Parser and command line tools
 
@@ -345,7 +347,8 @@ the supported CSS width/height properties specify another size; oversized images
 scale down to fit the content column.
 The GUI bundles Inter with Noto Sans Hebrew fallback for page text, code blocks,
 and browser controls, so Hebrew letters and vowel marks do not become missing-glyph
-rectangles. Mixed-direction text uses the Unicode Bidirectional Algorithm on each
+rectangles; `examples/fonts.html` shows the coverage. Mixed-direction text uses
+the Unicode Bidirectional Algorithm on each
 wrapped line, including numbers, bracket mirroring and combining marks. HTML `dir`
 and CSS `direction` control paragraph direction; `text-align: start/end` follows it.
 Find and link hit targets retain logical character mappings. Complex-script shaping,
