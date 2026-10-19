@@ -1,7 +1,8 @@
 //! Private, framed pipe protocol and independently supervised document processes.
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
 use crate::gui::document::{
-    ClickRequest, LoadedPage, PageUpdate, prepare_page_preview, prepare_page_with_parsed,
+    ClickRequest, LoadedPage, PageUpdate, PreparedPage, prepare_page_preview,
+    prepare_page_with_parsed,
 };
 use crate::net::{CookieJar, DocumentLoader, FormRequest, Location};
 use eframe::egui;
@@ -52,29 +53,26 @@ impl ScriptPolicy {
     }
 }
 
+/// Parent-to-worker messages. A worker performs exactly one `Load` or `Submit`,
+/// as its first command; later commands act on that document.
 #[derive(Serialize, Deserialize)]
 pub enum Command {
     Load {
         location: Location,
         scripting: ScriptPolicy,
-    },
-    LoadWithCookies {
-        location: Location,
-        scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
     },
-    Click(ClickRequest),
-    ClickWithCookies {
-        click: ClickRequest,
-        cookies: CookieJar,
-    },
-    Submit(FormRequest),
-    SubmitWithCookies {
+    Submit {
         request: FormRequest,
         scripting: ScriptPolicy,
         cookies: CookieJar,
         initiator: Option<Location>,
+    },
+    /// Carries the browser's current cookies, refreshed before the handler runs.
+    Click {
+        click: ClickRequest,
+        cookies: CookieJar,
     },
     Resize {
         width: f32,
@@ -101,60 +99,10 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn spawn_at(
-        executable: &Path,
-        location: Location,
-        scripting: bool,
-        ctx: &egui::Context,
-    ) -> Result<Self, String> {
-        Self::spawn_command_at(
-            executable,
-            Command::Load {
-                location,
-                scripting: ScriptPolicy::for_load(scripting, false),
-            },
-            ctx,
-        )
-    }
-
-    pub fn spawn_with_cookies(
-        location: Location,
-        scripting: ScriptPolicy,
-        cookies: CookieJar,
-        initiator: Option<Location>,
-        ctx: &egui::Context,
-    ) -> Result<Self, String> {
+    /// Start a tab process from this executable with its initial `Load` or `Submit`.
+    pub fn spawn(initial: Command, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_command_at(
-            &executable,
-            Command::LoadWithCookies {
-                location,
-                scripting,
-                cookies,
-                initiator,
-            },
-            ctx,
-        )
-    }
-
-    pub fn spawn_form_with_cookies(
-        request: FormRequest,
-        scripting: ScriptPolicy,
-        cookies: CookieJar,
-        initiator: Option<Location>,
-        ctx: &egui::Context,
-    ) -> Result<Self, String> {
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_command_at(
-            &executable,
-            Command::SubmitWithCookies {
-                request,
-                scripting,
-                cookies,
-                initiator,
-            },
-            ctx,
-        )
+        Self::spawn_command_at(&executable, initial, ctx)
     }
 
     pub fn spawn_command_at(
@@ -269,13 +217,8 @@ impl Worker {
             return Err("The tab is still working. Stop or reload it to continue.".into());
         }
         let timeout = match command {
-            Command::Load { .. }
-            | Command::LoadWithCookies { .. }
-            | Command::Submit(_)
-            | Command::SubmitWithCookies { .. } => LOAD_TIMEOUT,
-            Command::Click(_) | Command::ClickWithCookies { .. } | Command::Resize { .. } => {
-                CLICK_TIMEOUT
-            }
+            Command::Load { .. } | Command::Submit { .. } => LOAD_TIMEOUT,
+            Command::Click { .. } | Command::Resize { .. } => CLICK_TIMEOUT,
         };
         self.sender
             .as_ref()
@@ -440,136 +383,50 @@ pub fn run() -> io::Result<()> {
             }
         })?;
     let mut output = io::stdout().lock();
-    let mut prepared: Option<crate::gui::document::PreparedPage> = None;
+    let mut prepared: Option<PreparedPage> = None;
     for command in commands {
-        let (command, form, cookies, initiator) = match command {
-            Command::ClickWithCookies { click, cookies } => {
-                if let Some(session) = prepared.as_mut().and_then(|page| page.session.as_mut()) {
-                    session.replace_cookies(cookies);
-                }
-                (Command::Click(click), None, CookieJar::default(), None)
-            }
-            Command::Submit(request) => (
-                Command::Load {
-                    location: request.location.clone(),
-                    scripting: ScriptPolicy::Disabled,
-                },
-                Some(request),
-                CookieJar::default(),
-                None,
-            ),
-            Command::SubmitWithCookies {
-                request,
-                scripting,
-                cookies,
-                initiator,
-            } => (
-                Command::Load {
-                    location: request.location.clone(),
-                    scripting,
-                },
-                Some(request),
-                cookies,
-                initiator,
-            ),
-            Command::LoadWithCookies {
-                location,
-                scripting,
-                cookies,
-                initiator,
-            } => (
-                Command::Load {
-                    location,
-                    scripting,
-                },
-                None,
-                cookies,
-                initiator,
-            ),
-            command => (command, None, CookieJar::default(), None),
-        };
         let event = match command {
             Command::Load {
                 location,
                 scripting,
-            } => {
-                // Every full navigation gets a fresh process and document realm.
-                if prepared.is_some() {
-                    return Err(io::Error::other("Unexpected second load"));
-                }
-                let mut preview = None;
-                let result = (|| {
-                    let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
-                        .with_cookie_initiator(initiator);
-                    let source = if let Some(request) = form {
-                        loader.submit(request)?
-                    } else {
-                        loader.load(location.clone())?
-                    };
-                    let scripting = scripting.enabled_for(&location, &source.location);
-                    let (preview_page, parsed) = prepare_page_preview(&source, scripting)?;
-                    write_frame(
-                        &mut output,
-                        &InitialEvent::Loaded(&preview_page),
-                        MAX_EVENT_BYTES,
-                    )
-                    .map_err(|error| error.to_string())?;
-                    preview = Some(preview_page);
-                    prepare_page_with_parsed(source, &loader, scripting, parsed)
-                })();
-                match result {
-                    Ok(mut page) => {
-                        if let Some(session) = &mut page.session {
-                            session.take_alerts();
-                        }
-                        let presentation_available = page.presentation_available();
-                        let update = PageUpdate {
-                            default_allowed: false,
-                            page: std::mem::take(&mut page.loaded.page),
-                            reading: std::mem::take(&mut page.loaded.reading),
-                            base: page.loaded.base.clone(),
-                            scripts: page.loaded.scripts.clone(),
-                            resources: page.loaded.resources.clone(),
-                            session_available: page.session.is_some(),
-                            presentation_available,
-                            alert: None,
-                            link: None,
-                            cookie_updates: std::mem::take(&mut page.loaded.cookie_updates),
-                        };
-                        prepared = Some(page);
-                        Event::ResourcesUpdated(Box::new(update))
-                    }
-                    Err(error) => {
-                        if let Some(mut loaded) = preview {
-                            loaded.resources.pending = false;
-                            loaded.resources.diagnostics.push(error);
-                            Event::ResourcesUpdated(Box::new(PageUpdate {
-                                default_allowed: false,
-                                page: loaded.page,
-                                reading: loaded.reading,
-                                base: loaded.base,
-                                scripts: loaded.scripts,
-                                resources: loaded.resources,
-                                session_available: false,
-                                presentation_available: false,
-                                alert: None,
-                                link: None,
-                                cookie_updates: loaded.cookie_updates,
-                            }))
-                        } else {
-                            Event::Error(error)
-                        }
-                    }
+                cookies,
+                initiator,
+            } => navigate(
+                &mut output,
+                &mut prepared,
+                Navigation {
+                    location,
+                    form: None,
+                    scripting,
+                    cookies,
+                    initiator,
+                },
+            )?,
+            Command::Submit {
+                request,
+                scripting,
+                cookies,
+                initiator,
+            } => navigate(
+                &mut output,
+                &mut prepared,
+                Navigation {
+                    location: request.location.clone(),
+                    form: Some(request),
+                    scripting,
+                    cookies,
+                    initiator,
+                },
+            )?,
+            Command::Click { click, cookies } => {
+                match prepared
+                    .as_mut()
+                    .and_then(|page| page.click(click, cookies))
+                {
+                    Some(update) => Event::Updated(Box::new(update)),
+                    None => Event::Error("No live scripting session. Reload this tab.".into()),
                 }
             }
-            Command::LoadWithCookies { .. } | Command::ClickWithCookies { .. } => unreachable!(),
-            Command::Submit(_) | Command::SubmitWithCookies { .. } => {
-                return Err(io::Error::other("Unexpected form command"));
-            }
-            Command::Click(click) => match prepared.as_mut().and_then(|page| page.click(click)) {
-                Some(update) => Event::Updated(Box::new(update)),
-                None => Event::Error("No live scripting session. Reload this tab.".into()),
-            },
             Command::Resize { width, height } => {
                 match prepared
                     .as_mut()
@@ -585,6 +442,71 @@ pub fn run() -> io::Result<()> {
         write_frame(&mut output, &event, MAX_EVENT_BYTES)?;
     }
     Ok(())
+}
+
+/// A tab's single full navigation: an address load or a form submission.
+struct Navigation {
+    location: Location,
+    form: Option<FormRequest>,
+    scripting: ScriptPolicy,
+    cookies: CookieJar,
+    initiator: Option<Location>,
+}
+
+/// Fetch the document and stream its preview, then load resources and run scripts.
+/// Every full navigation gets a fresh process and document realm.
+fn navigate(
+    output: &mut impl Write,
+    prepared: &mut Option<PreparedPage>,
+    navigation: Navigation,
+) -> io::Result<Event> {
+    if prepared.is_some() {
+        return Err(io::Error::other("Unexpected second load"));
+    }
+    let Navigation {
+        location,
+        form,
+        scripting,
+        cookies,
+        initiator,
+    } = navigation;
+    let mut preview = None;
+    let result = (|| {
+        let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
+            .with_cookie_initiator(initiator);
+        let source = match form {
+            Some(request) => loader.submit(request)?,
+            None => loader.load(location.clone())?,
+        };
+        let scripting = scripting.enabled_for(&location, &source.location);
+        let (preview_page, parsed) = prepare_page_preview(&source, scripting)?;
+        write_frame(
+            output,
+            &InitialEvent::Loaded(&preview_page),
+            MAX_EVENT_BYTES,
+        )
+        .map_err(|error| error.to_string())?;
+        preview = Some(preview_page);
+        prepare_page_with_parsed(source, &loader, scripting, parsed)
+    })();
+    Ok(match result {
+        Ok(mut page) => {
+            if let Some(session) = &mut page.session {
+                session.take_alerts();
+            }
+            let update = page.take_update();
+            *prepared = Some(page);
+            Event::ResourcesUpdated(Box::new(update))
+        }
+        Err(error) => match preview {
+            Some(mut loaded) => {
+                loaded.resources.pending = false;
+                loaded.resources.diagnostics.push(error);
+                Event::ResourcesUpdated(Box::new(loaded.into_update()))
+            }
+            None => Event::Error(error),
+        },
+    })
 }
 
 #[cfg(target_os = "linux")]

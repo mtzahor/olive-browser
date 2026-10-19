@@ -6,7 +6,10 @@ use olive_html::gui::{
     document::{self, ClickRequest, LoadedPage},
     worker,
 };
-use olive_html::{NodeId, net::Location};
+use olive_html::{
+    NodeId,
+    net::{CookieJar, Location},
+};
 use std::{
     path::Path,
     process::{Child, Command as ProcessCommand, Stdio},
@@ -17,10 +20,14 @@ use worker::{Command, Event, ScriptPolicy, Worker};
 const HTML: &str = "<!doctype html><title>Before</title><script>let count=1; document.title='Loaded '+count; function increment(){count++; document.title='Clicked '+count; alert(count)}</script><button id=increment onclick='increment(); return false'>Increment</button><p>A readable article.</p>";
 
 fn spawn(path: &Path) -> Worker {
-    Worker::spawn_at(
+    Worker::spawn_command_at(
         Path::new(env!("CARGO_BIN_EXE_olive-gui")),
-        Location::from_path(path).unwrap(),
-        true,
+        Command::Load {
+            location: Location::from_path(path).unwrap(),
+            scripting: ScriptPolicy::Page,
+            cookies: CookieJar::default(),
+            initiator: None,
+        },
         &egui::Context::default(),
     )
     .unwrap()
@@ -96,10 +103,13 @@ fn loaded(worker: &mut Worker) {
 }
 fn click(worker: &mut Worker, count: usize) {
     worker
-        .send(Command::Click(ClickRequest {
-            target: target(),
-            href: Some("/must-not-navigate".into()),
-        }))
+        .send(Command::Click {
+            click: ClickRequest {
+                target: target(),
+                href: Some("/must-not-navigate".into()),
+            },
+            cookies: CookieJar::default(),
+        })
         .unwrap();
     match reply(worker).unwrap() {
         Event::Updated(update) => {
@@ -193,10 +203,13 @@ fn a_suspended_tab_cannot_block_other_tabs_or_closing_the_stalled_tab() {
             .success()
     );
     first
-        .send(Command::Click(ClickRequest {
-            target: target(),
-            href: None,
-        }))
+        .send(Command::Click {
+            click: ClickRequest {
+                target: target(),
+                href: None,
+            },
+            cookies: CookieJar::default(),
+        })
         .unwrap();
     assert!(first.poll().is_none());
     click(&mut second, 2);
@@ -238,6 +251,8 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_document() {
             location: Location::from_input(&format!("http://{}/", server.local_addr().unwrap()))
                 .unwrap(),
             scripting: ScriptPolicy::Disabled,
+            cookies: CookieJar::default(),
+            initiator: None,
         },
         32768,
     )
@@ -301,10 +316,13 @@ fn the_watchdog_terminates_a_hung_tab_without_resetting_other_tabs() {
             .unwrap()
             .success()
     );
-    hung.send(Command::Click(ClickRequest {
-        target: target(),
-        href: None,
-    }))
+    hung.send(Command::Click {
+        click: ClickRequest {
+            target: target(),
+            href: None,
+        },
+        cookies: CookieJar::default(),
+    })
     .unwrap();
     click(&mut healthy, 2);
     assert!(
@@ -319,7 +337,7 @@ fn the_watchdog_terminates_a_hung_tab_without_resetting_other_tabs() {
 
 #[test]
 fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
-    use olive_html::net::{CookieJar, FormRequest};
+    use olive_html::net::FormRequest;
     use std::io::{Read, Write};
     for form in [false, true] {
         for policy in [
@@ -357,7 +375,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
                 }
             });
             let command = if form {
-                Command::SubmitWithCookies {
+                Command::Submit {
                     request: FormRequest {
                         location: start,
                         body: Some(String::new()),
@@ -367,7 +385,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
                     initiator: None,
                 }
             } else {
-                Command::LoadWithCookies {
+                Command::Load {
                     location: start,
                     scripting: policy,
                     cookies: CookieJar::default(),
@@ -399,7 +417,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
 
 #[test]
 fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
-    use olive_html::net::{CookieJar, FormRequest};
+    use olive_html::net::FormRequest;
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let action = format!("http://{}/submit", listener.local_addr().unwrap());
@@ -457,7 +475,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     let initiator = Some(request.location.clone());
     let mut submitted = Worker::spawn_command_at(
         executable,
-        Command::SubmitWithCookies {
+        Command::Submit {
             request,
             scripting: ScriptPolicy::Disabled,
             cookies: cookies.clone(),
@@ -487,7 +505,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     );
     let mut reloaded = Worker::spawn_command_at(
         executable,
-        Command::LoadWithCookies {
+        Command::Load {
             location: loaded.location,
             scripting: ScriptPolicy::Disabled,
             cookies,
@@ -504,13 +522,18 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     );
     assert_eq!(requests[1], ("GET /submit HTTP/1.1".into(), Vec::new()));
     // The command wire payload preserves ordinary URL-encoded bytes, including Unicode.
-    let encoded = serde_json::to_vec(&Command::Submit(FormRequest {
-        location: Location::from_input(&action).unwrap(),
-        body: Some("q=%D7%A9".into()),
-    }))
+    let encoded = serde_json::to_vec(&Command::Submit {
+        request: FormRequest {
+            location: Location::from_input(&action).unwrap(),
+            body: Some("q=%D7%A9".into()),
+        },
+        scripting: ScriptPolicy::Disabled,
+        cookies: CookieJar::default(),
+        initiator: None,
+    })
     .unwrap();
     assert!(matches!(
         serde_json::from_slice::<Command>(&encoded).unwrap(),
-        Command::Submit(_)
+        Command::Submit { .. }
     ));
 }

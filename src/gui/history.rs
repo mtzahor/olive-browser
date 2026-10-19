@@ -1,11 +1,10 @@
 //! Saved, searchable browsing history, separate from the back/forward stack.
 
+use crate::gui::storage;
 use crate::net::{Location, Url};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs::{self, File},
-    io::{Read, Write},
     path::{Path, PathBuf},
 };
 use time::OffsetDateTime;
@@ -214,21 +213,9 @@ pub(crate) fn bounded_title(title: &str) -> String {
 }
 
 fn read_entries(path: &Path) -> Result<Vec<HistoryEntry>, String> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.to_string()),
+    let Some(bytes) = storage::read_bounded(path, MAX_FILE_BYTES, "history file")? else {
+        return Ok(Vec::new());
     };
-    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE_BYTES {
-        return Err("history file exceeds the 32 MiB limit".into());
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("history file exceeds the 32 MiB limit".into());
-    }
     let mut saved: HistoryFile = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if saved.version != FORMAT_VERSION {
         return Err("unsupported history format version".into());
@@ -260,56 +247,25 @@ fn read_entries(path: &Path) -> Result<Vec<HistoryEntry>, String> {
 }
 
 fn write_entries(path: &Path, entries: &[HistoryEntry]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    // A file in the same directory allows atomic replacement on all supported
-    // platforms. tempfile creates it with owner-only permissions on Unix.
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     #[derive(Serialize)]
     struct Saved<'a> {
         version: u32,
         entries: &'a [HistoryEntry],
     }
-    serde_json::to_writer(
-        &mut file,
-        &Saved {
-            version: FORMAT_VERSION,
-            entries,
-        },
-    )
+    let mut json = serde_json::to_vec(&Saved {
+        version: FORMAT_VERSION,
+        entries,
+    })
     .map_err(|e| e.to_string())?;
-    file.write_all(b"\n").map_err(|e| e.to_string())?;
-    file.as_file().sync_all().map_err(|e| e.to_string())?;
-    file.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    json.push(b'\n');
+    storage::write_state(path, &json).map_err(|e| e.to_string())
 }
 
 pub(crate) fn default_path() -> Result<PathBuf, String> {
-    let env_path = |name| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(path) = env_path("OLIVE_HISTORY_FILE") {
+    if let Some(path) = storage::env_path("OLIVE_HISTORY_FILE") {
         return Ok(path);
     }
-    if let Some(path) = env_path("OLIVE_PROFILE_DIR") {
-        return Ok(path.join("history.json"));
-    }
-    #[cfg(target_os = "macos")]
-    let directory =
-        env_path("HOME").map(|home| home.join("Library/Application Support/Olive Browser"));
-    #[cfg(target_os = "windows")]
-    let directory = env_path("LOCALAPPDATA").map(|data| data.join("Olive Browser"));
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let directory = env_path("XDG_DATA_HOME")
-        .filter(|path| path.is_absolute())
-        .or_else(|| env_path("HOME").map(|home| home.join(".local/share")))
-        .map(|data| data.join("olive-browser"));
-    directory
+    storage::profile_dir()
         .map(|directory| directory.join("history.json"))
         .ok_or_else(|| {
             "Could not find a history storage directory. History is kept for this session only."
@@ -320,6 +276,7 @@ pub(crate) fn default_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, File};
 
     fn location(path: &str) -> Location {
         Location::from_input(&format!("https://example.com/{path}")).unwrap()

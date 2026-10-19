@@ -416,6 +416,8 @@ fn main() -> Result<(), olive_html::ParseError> {
 
 Use `parse_utf8` or `parse_reader` for custom `ParseOptions`. Enable optional
 engines with `--features css` or `--features js`; the GUI enables both.
+`--features serde` derives Serde support for node IDs and the CSS, script,
+network and resource types.
 `olive_html::net::{Location, DocumentLoader}` provides explicit URL resolution
 and bounded HTTP(S)/file loading with `--features net`. `load` fetches only the
 requested document; `submit(FormRequest)` explicitly sends a bounded URL-encoded

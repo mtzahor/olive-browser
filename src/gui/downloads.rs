@@ -126,8 +126,7 @@ impl Downloads {
     }
 }
 fn default_directory() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
+    crate::gui::storage::home_dir()
         .map(|path| path.join("Downloads"))
         .unwrap_or_else(|| PathBuf::from("downloads"))
 }

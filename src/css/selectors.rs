@@ -312,7 +312,7 @@ impl Selector {
             let Some(element) = node.as_element() else {
                 continue;
             };
-            if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml" {
+            if !element.is_html() {
                 continue;
             }
             let quirks = doc.quirks_mode() == crate::QuirksMode::Quirks;

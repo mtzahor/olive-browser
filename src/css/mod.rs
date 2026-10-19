@@ -692,7 +692,7 @@ impl Stylesheet {
 
 /// Whether this HTML style/link applies to Olive's screen media subset.
 pub fn applicable_style(element: &Element) -> bool {
-    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
+    if !element.is_html()
         || !matches!(element.name.local.as_str(), "style" | "link")
         || element.attribute("disabled").is_some()
         || element

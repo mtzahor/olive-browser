@@ -163,7 +163,7 @@ fn export_with_limit(
             serializer.write_text(text)?;
         }
         if let Some(element) = node.as_element() {
-            if element.name.ns != ns!(html) {
+            if !element.is_html() {
                 continue;
             }
             let tag = tag.unwrap();
@@ -283,15 +283,7 @@ pub fn save(path: &std::path::Path, html: &str) -> io::Result<()> {
     if html.len() > MAX_EXPORT_BYTES {
         return Err(io::Error::other("Focus export exceeds the 8 MiB limit"));
     }
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(html.as_bytes())?;
-    temp.as_file().sync_all()?;
-    temp.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    crate::gui::storage::write_atomic(path, html.as_bytes())
 }
 
 #[cfg(test)]

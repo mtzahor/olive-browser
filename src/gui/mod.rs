@@ -17,6 +17,7 @@ pub mod icon;
 mod navigation;
 mod profile;
 mod render;
+mod storage;
 mod theme;
 mod ui_icons;
 pub mod worker;

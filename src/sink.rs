@@ -133,13 +133,9 @@ impl TreeSink for Sink {
     fn parse_error(&self, message: Cow<'static, str>) {
         let mut diagnostics = self.diagnostics.borrow_mut();
         if diagnostics.len() < self.max_diagnostics {
-            let mut end = message.len().min(512);
-            while !message.is_char_boundary(end) {
-                end -= 1;
-            }
             diagnostics.push(Diagnostic {
                 line: self.line.get(),
-                message: message[..end].to_owned(),
+                message: crate::text::truncate(&message, 512).to_owned(),
             });
         } else {
             self.omitted.set(self.omitted.get().saturating_add(1));

@@ -349,10 +349,9 @@ impl Page {
             open_boxes: 0,
         };
         if let Some(title) = doc.descendants(doc.root()).find(|&id| {
-            doc.node(id).and_then(|n| n.as_element()).is_some_and(|e| {
-                e.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                    && e.name.local.as_str() == "title"
-            })
+            doc.node(id)
+                .and_then(|n| n.as_element())
+                .is_some_and(|e| e.is_html_tag("title"))
         }) {
             builder.page.title = doc
                 .descendants(title)
@@ -425,7 +424,7 @@ impl Page {
                 }
                 NodeKind::Element(element) => {
                     let tag = element.name.local.as_str();
-                    if element.name.ns.as_str() != "http://www.w3.org/1999/xhtml"
+                    if !element.is_html()
                         || matches!(
                             tag,
                             "head"
@@ -477,9 +476,7 @@ impl Page {
                                             || css.float_side != FloatSide::None;
                                         all_right_floats &= css.float_side == FloatSide::Right;
                                     }
-                                    if child_element.name.ns.as_str()
-                                        == "http://www.w3.org/1999/xhtml"
-                                    {
+                                    if child_element.is_html() {
                                         prefetched_child_styles.insert(child, css);
                                     }
                                 }

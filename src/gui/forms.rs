@@ -96,9 +96,7 @@ struct Context {
     label: Option<NodeId>,
 }
 fn element(doc: &Document, id: NodeId) -> Option<&Element> {
-    doc.node(id)?
-        .as_element()
-        .filter(|e| e.name.ns.as_str() == "http://www.w3.org/1999/xhtml")
+    doc.node(id)?.as_element().filter(|e| e.is_html())
 }
 fn text(doc: &Document, id: NodeId, limit: usize) -> String {
     doc.descendants(id)

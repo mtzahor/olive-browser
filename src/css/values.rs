@@ -2,11 +2,11 @@ use cssparser::{Parser, Token};
 
 /// An sRGB color, with unpremultiplied alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoxShadow {
     pub offset_x: Length,
     pub offset_y: Length,
@@ -18,7 +18,7 @@ pub struct BoxShadow {
 
 /// A length retained until its containing block is known.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Length {
     Px(f32),
     Em(f32),
@@ -100,7 +100,7 @@ impl Length {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Display {
     Inline,
     Block,
@@ -110,7 +110,7 @@ pub enum Display {
     InlineBlock,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FloatSide {
     #[default]
     None,
@@ -118,21 +118,21 @@ pub enum FloatSide {
     Right,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlexDirection {
     #[default]
     Row,
     Column,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlexWrap {
     #[default]
     NoWrap,
     Wrap,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum JustifyContent {
     #[default]
     Start,
@@ -143,7 +143,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Position {
     #[default]
     Static,
@@ -151,7 +151,7 @@ pub enum Position {
     Absolute,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WhiteSpace {
     Normal,
     Pre,
@@ -159,7 +159,7 @@ pub enum WhiteSpace {
     NoWrap,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextAlign {
     Start,
     End,
@@ -168,7 +168,7 @@ pub enum TextAlign {
     Right,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Direction {
     #[default]
     Ltr,
@@ -176,7 +176,7 @@ pub enum Direction {
     Auto,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineHeight {
     Number(f32),
     Px(f32),
@@ -185,7 +185,7 @@ pub enum LineHeight {
 /// Computed text styles and the supported block box properties. Lengths in the
 /// box model are resolved by the renderer; inherited font sizes are absolute.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "gui", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComputedStyle {
     pub color: Color,
     pub background: Color,
@@ -731,12 +731,10 @@ fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
     Ok(Value::Color(rgba))
 }
 
-pub(super) fn parse_values(
-    name: &str,
-    input: &mut Parser<'_>,
-) -> Result<Vec<(Property, Value)>, Error> {
+/// The longhand properties set by a supported property name.
+fn longhands(name: &str) -> Option<&'static [Property]> {
     use Property as P;
-    let props: &[P] = match name {
+    Some(match name {
         "color" => &[P::Color],
         "background" | "background-color" => &[P::Background],
         "font-size" => &[P::FontSize],
@@ -795,8 +793,16 @@ pub(super) fn parse_values(
         "border-color" => &[P::BorderColor],
         "border-radius" => &[P::BorderRadius],
         "box-shadow" => &[P::BoxShadow],
-        _ => return Err(cssparser::ParseError::custom(())),
-    };
+        _ => return None,
+    })
+}
+
+pub(super) fn parse_values(
+    name: &str,
+    input: &mut Parser<'_>,
+) -> Result<Vec<(Property, Value)>, Error> {
+    use Property as P;
+    let props = longhands(name).ok_or_else(|| cssparser::ParseError::custom(()))?;
     if let Ok(wide) = input.try_parse(|p| -> Result<Value, Error> {
         match keyword(p)?.as_str() {
             "inherit" => Ok(Value::Inherit),
@@ -1165,65 +1171,7 @@ pub(super) fn parse_values(
 }
 
 pub(super) fn supports_property(name: &str) -> bool {
-    matches!(
-        name,
-        "color"
-            | "background"
-            | "background-color"
-            | "font-size"
-            | "font-weight"
-            | "font-style"
-            | "font-family"
-            | "text-decoration"
-            | "text-decoration-line"
-            | "line-height"
-            | "white-space"
-            | "text-align"
-            | "direction"
-            | "display"
-            | "float"
-            | "position"
-            | "top"
-            | "right"
-            | "bottom"
-            | "left"
-            | "grid-template-columns"
-            | "opacity"
-            | "flex-direction"
-            | "flex-wrap"
-            | "justify-content"
-            | "flex-grow"
-            | "flex-shrink"
-            | "flex-basis"
-            | "flex"
-            | "gap"
-            | "column-gap"
-            | "row-gap"
-            | "list-style"
-            | "list-style-type"
-            | "margin"
-            | "margin-top"
-            | "margin-right"
-            | "margin-bottom"
-            | "margin-left"
-            | "padding"
-            | "padding-top"
-            | "padding-right"
-            | "padding-bottom"
-            | "padding-left"
-            | "width"
-            | "min-width"
-            | "max-width"
-            | "height"
-            | "min-height"
-            | "box-sizing"
-            | "border"
-            | "border-width"
-            | "border-style"
-            | "border-color"
-            | "border-radius"
-            | "box-shadow"
-    )
+    longhands(name).is_some()
 }
 fn border_width(input: &mut Parser<'_>) -> Result<Length, Error> {
     input
