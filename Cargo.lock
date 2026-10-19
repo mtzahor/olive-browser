@@ -2794,6 +2794,7 @@ dependencies = [
  "cookie",
  "cssparser",
  "eframe",
+ "egui",
  "encoding_rs",
  "epaint 0.36.2",
  "flate2",

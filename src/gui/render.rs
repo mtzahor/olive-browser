@@ -6,8 +6,8 @@ use crate::{
 };
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
-    self, Color32, ColorImage, FontFamily, FontId, Stroke, TextureHandle, TextureOptions,
-    WidgetInfo, WidgetType,
+    self, Color32, ColorImage, FontFamily, FontId, Role, Stroke, TextureHandle, TextureOptions,
+    WidgetInfo,
     text::{LayoutJob, TextFormat},
 };
 use olive_html::{
@@ -954,7 +954,7 @@ impl Page {
                     );
                     if !block.visual_actions.is_empty() {
                         response.widget_info(|| {
-                            WidgetInfo::labeled(WidgetType::Link, ui.is_enabled(), &block.job.text)
+                            WidgetInfo::labeled(Role::Link, ui.is_enabled(), &block.job.text)
                         });
                     }
                     if response.hovered() {
@@ -1077,7 +1077,7 @@ impl Page {
                     if image.action != Action::default() {
                         let label = image.alt.as_deref().unwrap_or("Image link");
                         response.widget_info(|| {
-                            WidgetInfo::labeled(WidgetType::Link, ui.is_enabled(), label)
+                            WidgetInfo::labeled(Role::Link, ui.is_enabled(), label)
                         });
                     }
                     if response.hovered() {

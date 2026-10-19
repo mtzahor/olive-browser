@@ -45,21 +45,19 @@ mod tests {
         for family in old_fonts.families.values_mut() {
             family.retain(|name| name != "Noto Sans Hebrew");
         }
-        // Inspect the actual face charmaps: egui 0.36's has_glyph reports false
-        // for ordinary characters owned by its replacement-character face.
-        let mut before = Fonts::new(Default::default(), old_fonts);
+        // Inspect the installed font character maps rather than just the primary face.
+        let mut before_fonts = Fonts::new(Default::default(), old_fonts);
+        let mut before = before_fonts.with_pixels_per_point(1.0);
         assert!(
             !before
-                .fonts
-                .font(&FontFamily::Proportional)
-                .characters()
+                .characters(&FontFamily::Proportional)
                 .contains_key(&'ש')
         );
 
-        let mut after = Fonts::new(Default::default(), definitions());
+        let mut after_fonts = Fonts::new(Default::default(), definitions());
+        let mut after = after_fonts.with_pixels_per_point(1.0);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
-            let mut font = after.fonts.font(&family);
-            let characters = font.characters();
+            let characters = after.characters(&family);
             for text in [HEBREW, "Yahoo Privacy / Cookie 123 — café Ελληνικά Русский"]
             {
                 let missing: Vec<_> = text
