@@ -1,12 +1,12 @@
 //! Bounded, document-local reading extraction and presentation preferences.
-use eframe::egui::{self, Color32};
-use olive_html::{
+use crate::{
     Document, Element, NodeId, NodeKind,
     css::{
         Color, ComputedStyle, Direction, Display, Length, LineHeight, StyleBudget, Stylesheet,
         WhiteSpace,
     },
 };
+use eframe::egui::{self, Color32};
 use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_FONT_SIZE: f32 = 20.0;
@@ -327,9 +327,9 @@ pub fn style(element: &Element, parent: ComputedStyle) -> ComputedStyle {
     };
     if let Some(direction) = element.attribute("dir") {
         style.direction = match direction.to_ascii_lowercase().as_str() {
-            "rtl" => olive_html::css::Direction::Rtl,
-            "ltr" => olive_html::css::Direction::Ltr,
-            "auto" => olive_html::css::Direction::Auto,
+            "rtl" => crate::css::Direction::Rtl,
+            "ltr" => crate::css::Direction::Ltr,
+            "auto" => crate::css::Direction::Auto,
             _ => style.direction,
         };
     }

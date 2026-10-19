@@ -1,9 +1,9 @@
-use crate::{
+use crate::gui::{
     history::{BrowsingHistory, MAX_ENTRIES},
     ui_icons::{Icon, IconButton},
 };
+use crate::net::Location;
 use eframe::egui::{self, RichText};
-use olive_html::net::Location;
 
 #[derive(Default)]
 pub struct HistoryWindow {

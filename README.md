@@ -235,7 +235,7 @@ fetch. Failed resources leave the document readable and appear under
 external scripts, but images still load.
 
 Resource loading shares a 30-second deadline and 256-attempt limit per document,
-with a five-second cap per resource request. Stylesheets load first, then images,
+with a two-second cap per resource request. Stylesheets load first, then images,
 then optional scripts, preserving document order within each kind. This keeps
 early scripts or decorative images from exhausting the budget before CSS loads,
 with at most 8 MiB of retained external CSS, 32 MiB of external JavaScript, and

@@ -299,7 +299,7 @@ impl<'a> IconButton<'a> {
 impl Widget for IconButton<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
         if self.primary {
-            let palette = crate::theme::Theme::from_visuals(ui.visuals()).palette();
+            let palette = crate::gui::theme::Theme::from_visuals(ui.visuals()).palette();
             self.color = Some(palette.on_accent);
             // Set the text via a local style so callers keep their size and other options.
             return ui

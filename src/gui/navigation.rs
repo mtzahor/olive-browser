@@ -1,4 +1,4 @@
-use olive_html::net::Location;
+use crate::net::Location;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Navigation {

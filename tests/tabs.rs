@@ -1,25 +1,11 @@
 #![cfg(feature = "gui")]
-// Exercise the real packaged executable and the same controller used by the GUI.
-// These private GUI modules are shared here so lifecycle tests can inspect worker PIDs.
-#![allow(dead_code)]
-#[path = "../src/gui/document.rs"]
-mod document;
-#[path = "../src/gui/find.rs"]
-mod find;
-#[path = "../src/gui/focus.rs"]
-mod focus;
-#[path = "../src/gui/focus_export.rs"]
-mod focus_export;
-#[path = "../src/gui/fonts.rs"]
-mod fonts;
-#[path = "../src/gui/forms.rs"]
-mod forms;
-#[path = "../src/gui/render.rs"]
-mod render;
-#[path = "../src/gui/worker.rs"]
-mod worker;
-use document::{ClickRequest, LoadedPage};
+// Exercise the real packaged executable and the same controller used by the GUI,
+// so lifecycle tests can inspect worker PIDs.
 use eframe::egui;
+use olive_html::gui::{
+    document::{self, ClickRequest, LoadedPage},
+    worker,
+};
 use olive_html::{NodeId, net::Location};
 use std::{
     path::Path,

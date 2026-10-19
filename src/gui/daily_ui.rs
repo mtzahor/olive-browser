@@ -1,4 +1,4 @@
-use crate::{
+use crate::gui::{
     downloads::{Downloads, fraction},
     profile::Profile,
     theme::Theme,
@@ -129,7 +129,7 @@ impl DailyWindows {
                     ui.add(
                         egui::Slider::new(
                             &mut profile.data.settings.default_zoom,
-                            crate::profile::MIN_ZOOM..=crate::profile::MAX_ZOOM,
+                            crate::gui::profile::MIN_ZOOM..=crate::gui::profile::MAX_ZOOM,
                         )
                         .suffix("%")
                         .text("Default page zoom"),
@@ -149,7 +149,7 @@ impl DailyWindows {
                         ui.add(
                             egui::Slider::new(
                                 &mut profile.data.settings.focus.font_size,
-                                crate::focus::MIN_FONT_SIZE..=crate::focus::MAX_FONT_SIZE,
+                                crate::gui::focus::MIN_FONT_SIZE..=crate::gui::focus::MAX_FONT_SIZE,
                             )
                             .suffix(" px"),
                         );
@@ -158,12 +158,12 @@ impl DailyWindows {
                         ui.label("Reading theme");
                         ui.selectable_value(
                             &mut profile.data.settings.focus.theme,
-                            crate::focus::Theme::Light,
+                            crate::gui::focus::Theme::Light,
                             "Light",
                         );
                         ui.selectable_value(
                             &mut profile.data.settings.focus.theme,
-                            crate::focus::Theme::Dark,
+                            crate::gui::focus::Theme::Dark,
                             "Dark",
                         );
                     });

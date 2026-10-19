@@ -1,4 +1,4 @@
-use crate::{
+use crate::gui::{
     daily_ui::DailyWindows,
     document::{ClickRequest, LoadedPage},
     downloads::Downloads,
@@ -9,15 +9,15 @@ use crate::{
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
-    profile::{MAX_ZOOM, MIN_ZOOM, Profile, SavedTab, Session},
+    profile::{MAX_TABS, MAX_ZOOM, MIN_ZOOM, Profile, SavedTab, Session},
     render::ImageTextureCache,
     theme::{DOCUMENT_PAPER, Theme},
     ui_icons::{self, Icon, IconButton},
     worker::{Command, Event, ScriptPolicy, Worker},
     zoom,
 };
+use crate::net::{CookieJar, Location};
 use eframe::egui::{self, RichText};
-use olive_html::net::{CookieJar, Location};
 use std::{ffi::OsString, path::PathBuf};
 
 struct PendingPage {
@@ -129,7 +129,7 @@ impl Tab {
                                 .set_file_name("olive-reading.html")
                                 .save_file()
                             {
-                                match crate::focus_export::save(&path, html.unwrap()) {
+                                match crate::gui::focus_export::save(&path, html.unwrap()) {
                                     Ok(()) => {
                                         self.alert = Some(format!(
                                             "Focus view exported to {}",
@@ -757,7 +757,7 @@ impl Tab {
                         let mut output = egui::TextEdit::singleline(&mut self.address)
                             .id(egui::Id::unique(("address", self.id)))
                             .hint_text("Enter a URL or file path")
-                            .char_limit(olive_html::net::MAX_URL_BYTES)
+                            .char_limit(crate::net::MAX_URL_BYTES)
                             .desired_width(address_width - 20.0)
                             .margin(egui::vec2(10.0, 9.0))
                             .show(ui);
@@ -1381,8 +1381,6 @@ impl Tab {
     }
 }
 
-const MAX_TABS: usize = 32;
-
 pub struct OliveApp {
     shared: Shared,
     tabs: Vec<Tab>,
@@ -1407,7 +1405,7 @@ enum DevToolsTab {
 impl OliveApp {
     pub fn new(cc: &eframe::CreationContext<'_>, source: Option<OsString>) -> Self {
         let ctx = &cc.egui_ctx;
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         let icon = ctx.load_texture(
             "olive-browser-icon",
             egui::ColorImage::from(icon::data()),
@@ -1525,8 +1523,9 @@ impl OliveApp {
 
     fn new_tab(&mut self, location: Option<Location>, ctx: &egui::Context) {
         if self.tabs.len() >= MAX_TABS {
-            self.tabs[self.active].error =
-                Some("Close a tab before opening another (32 tab limit).".into());
+            self.tabs[self.active].error = Some(format!(
+                "Close a tab before opening another ({MAX_TABS} tab limit)."
+            ));
             return;
         }
         let mut tab = Tab::new(self.next_id);
@@ -1698,7 +1697,9 @@ impl OliveApp {
                             IconButton::icon_only(Icon::Plus, "New tab").quiet(),
                         )
                         .on_hover_text("New tab (Cmd/Ctrl+T)")
-                        .on_disabled_hover_text("Close a tab to open another (32 tab limit)")
+                        .on_disabled_hover_text(format!(
+                            "Close a tab to open another ({MAX_TABS} tab limit)"
+                        ))
                         .clicked();
                 });
             });
@@ -1957,8 +1958,8 @@ impl eframe::App for OliveApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::prepare_page_with_loader;
-    use olive_html::net::{DocumentLoader, LoadedDocument};
+    use crate::gui::document::prepare_page_with_loader;
+    use crate::net::{DocumentLoader, LoadedDocument};
 
     fn prepare_page(source: LoadedDocument) -> Result<LoadedPage, String> {
         let scripting = !source.location.is_remote();
@@ -2082,7 +2083,7 @@ mod tests {
             for width in [480.0, 800.0, 1000.0] {
                 for blank in [true, false] {
                     let ctx = egui::Context::default();
-                    ctx.set_fonts(crate::fonts::definitions());
+                    ctx.set_fonts(crate::gui::fonts::definitions());
                     ctx.enable_accesskit();
                     theme.apply(&ctx);
                     let (mut tab, mut shared) = app_for_test(
@@ -2196,7 +2197,7 @@ mod tests {
     #[test]
     fn focus_controls_fit_the_minimum_window_width_in_both_themes() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         let (mut app, _shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/story")).unwrap(),
@@ -2441,7 +2442,7 @@ mod tests {
     #[test]
     fn theme_changes_refresh_text_in_all_tabs_and_reading_views_without_reload() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         Theme::Light.apply(&ctx);
         let source = || {
             let mut source = remote_source("https://example.com/story");
@@ -2699,7 +2700,7 @@ mod tests {
     #[test]
     fn tab_strip_and_page_fit_a_small_window_and_scroll_state_is_tab_local() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::fonts::definitions());
+        ctx.set_fonts(crate::gui::fonts::definitions());
         let (first, shared) = app_for_test(
             &ctx,
             prepare_page(remote_source("https://example.com/first")).unwrap(),

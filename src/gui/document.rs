@@ -1,19 +1,19 @@
 //! Document work runs in a tab child process, never in the browser UI.
-use crate::render::{ImageAsset, Page};
-use eframe::egui;
-use image::{ImageReader, Limits};
-use olive_html::js::{DocumentSession, ScriptOptions, ScriptReport};
-use olive_html::{
+use crate::gui::render::{ImageAsset, Page};
+use crate::js::{DocumentSession, ScriptOptions, ScriptReport};
+use crate::{
     ExternalSource, NodeId, ParseOutput,
-    css::Stylesheet,
+    css::{DEFAULT_VIEWPORT, Stylesheet},
     net::CookieUpdate,
     net::{DocumentLoader, LoadedDocument, Location},
     resources::{PageResources, ResourceReport},
 };
+use eframe::egui;
+use image::{ImageReader, Limits};
 use std::{collections::HashMap, io::Cursor};
-const MAX_IMAGE_DIMENSION: u32 = 4_096;
+pub(crate) const MAX_IMAGE_DIMENSION: u32 = 4_096;
 const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PAGE_IMAGE_PIXELS: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_PAGE_IMAGE_PIXELS: u64 = 8 * 1024 * 1024;
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct LoadedPage {
     pub location: Location,
@@ -55,7 +55,7 @@ pub struct PageUpdate {
 pub struct PreparedPage {
     pub loaded: LoadedPage,
     pub session: Option<DocumentSession>,
-    document: Option<olive_html::Document>,
+    document: Option<crate::Document>,
     pub styles: HashMap<NodeId, ExternalSource>,
     pub images: HashMap<NodeId, ImageAsset>,
     stylesheet: Stylesheet,
@@ -83,7 +83,7 @@ pub fn prepare_page_preview(
         Some(&base),
     );
     let page =
-        Page::with_stylesheet_and_images(document, scripting_enabled, sheet, &HashMap::new());
+        Page::with_stylesheet_and_images(document, scripting_enabled, &sheet, &HashMap::new());
     Ok((
         LoadedPage {
             location: source.location.clone(),
@@ -150,7 +150,7 @@ pub fn prepare_page_with_parsed(
                 Some(&source.location.document_base(document)),
             );
             (
-                Page::with_stylesheet_and_images(document, true, sheet.clone(), &images),
+                Page::with_stylesheet_and_images(document, true, &sheet, &images),
                 reading,
                 source.location.document_base(document),
                 sheet,
@@ -175,7 +175,7 @@ pub fn prepare_page_with_parsed(
             &images,
             Some(&source.location.document_base(&document)),
         );
-        let page = Page::with_stylesheet_and_images(&document, false, sheet.clone(), &images);
+        let page = Page::with_stylesheet_and_images(&document, false, &sheet, &images);
         (
             page,
             reading,
@@ -210,12 +210,12 @@ pub fn prepare_page_with_parsed(
         styles: resources.styles,
         images,
         stylesheet,
-        viewport: (1024.0, 768.0),
+        viewport: DEFAULT_VIEWPORT,
     })
 }
 
 fn decode_images(
-    sources: &HashMap<NodeId, olive_html::resources::ExternalImage>,
+    sources: &HashMap<NodeId, crate::resources::ExternalImage>,
     report: &mut ResourceReport,
 ) -> HashMap<NodeId, ImageAsset> {
     let mut decoded = HashMap::new();
@@ -351,7 +351,7 @@ impl PreparedPage {
                 Page::with_stylesheet_and_images_at_viewport(
                     document,
                     true,
-                    sheet,
+                    &sheet,
                     &self.images,
                     viewport,
                 ),
@@ -384,7 +384,7 @@ impl PreparedPage {
         let images = &self.images;
         let location = &self.loaded.location;
         let scripting_enabled = self.loaded.scripting_enabled;
-        let make_pages = |document: &olive_html::Document| {
+        let make_pages = |document: &crate::Document| {
             let sheet = Stylesheet::from_document_with_sources(document, styles);
             let base = location.document_base(document);
             let reading = Page::reading_with_base_at_viewport(
@@ -398,7 +398,7 @@ impl PreparedPage {
             let page = Page::with_stylesheet_and_images_at_viewport(
                 document,
                 scripting_enabled,
-                sheet.clone(),
+                &sheet,
                 images,
                 viewport,
             );

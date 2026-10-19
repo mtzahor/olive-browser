@@ -1,10 +1,10 @@
 //! Private, framed pipe protocol and independently supervised document processes.
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
-use crate::document::{
+use crate::gui::document::{
     ClickRequest, LoadedPage, PageUpdate, prepare_page_preview, prepare_page_with_parsed,
 };
+use crate::net::{CookieJar, DocumentLoader, FormRequest, Location};
 use eframe::egui;
-use olive_html::net::{CookieJar, DocumentLoader, FormRequest, Location};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{self, Read, Write},
@@ -101,13 +101,6 @@ pub struct Worker {
 }
 
 impl Worker {
-    #[allow(dead_code)]
-    pub fn spawn(location: Location, scripting: bool, ctx: &egui::Context) -> Result<Self, String> {
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_at(&executable, location, scripting, ctx)
-    }
-
-    #[allow(dead_code)]
     pub fn spawn_at(
         executable: &Path,
         location: Location,
@@ -142,12 +135,6 @@ impl Worker {
             },
             ctx,
         )
-    }
-
-    #[allow(dead_code)]
-    pub fn spawn_form(request: FormRequest, ctx: &egui::Context) -> Result<Self, String> {
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_command_at(&executable, Command::Submit(request), ctx)
     }
 
     pub fn spawn_form_with_cookies(
@@ -453,7 +440,7 @@ pub fn run() -> io::Result<()> {
             }
         })?;
     let mut output = io::stdout().lock();
-    let mut prepared: Option<crate::document::PreparedPage> = None;
+    let mut prepared: Option<crate::gui::document::PreparedPage> = None;
     for command in commands {
         let (command, form, cookies, initiator) = match command {
             Command::ClickWithCookies { click, cookies } => {
@@ -660,6 +647,7 @@ pub fn write_frame(
 
 // Compact image transfer, with dimensions and byte lengths checked before upload.
 pub mod wire_image {
+    use crate::gui::document::{MAX_IMAGE_DIMENSION, MAX_PAGE_IMAGE_PIXELS};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use eframe::egui::{Color32, ColorImage};
     use image::ImageEncoder;
@@ -696,8 +684,8 @@ pub mod wire_image {
             .checked_mul(size[1])
             .ok_or_else(|| serde::de::Error::custom("Invalid image dimensions"))?;
         if size.contains(&0)
-            || size.iter().any(|&v| v > 4096)
-            || pixels > 8 * 1024 * 1024
+            || size.iter().any(|&v| v > MAX_IMAGE_DIMENSION as usize)
+            || pixels as u64 > MAX_PAGE_IMAGE_PIXELS
             || encoded.len() > MAX_ENCODED_IMAGE_BYTES
         {
             return Err(serde::de::Error::custom("Tab image exceeds pixel budget"));

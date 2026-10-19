@@ -39,7 +39,8 @@ pub enum Length {
 impl Length {
     /// Resolve against the containing width, element font, and root font.
     pub fn resolve(self, basis: f32, font: f32, root: f32) -> f32 {
-        self.resolve_with_viewport(basis, font, root, 1024.0, 768.0)
+        let (width, height) = super::DEFAULT_VIEWPORT;
+        self.resolve_with_viewport(basis, font, root, width, height)
     }
     pub fn resolve_with_viewport(
         self,
