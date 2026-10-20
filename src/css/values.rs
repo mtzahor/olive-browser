@@ -38,6 +38,14 @@ pub enum Length {
 }
 impl Length {
     /// Resolve against the containing width, element font, and root font.
+    /// Whether the length depends on its containing block's size.
+    pub fn has_percent(self) -> bool {
+        match self {
+            Self::Percent(_) => true,
+            Self::Calc { percent, .. } => percent != 0.0,
+            _ => false,
+        }
+    }
     pub fn resolve(self, basis: f32, font: f32, root: f32) -> f32 {
         let (width, height) = super::DEFAULT_VIEWPORT;
         self.resolve_with_viewport(basis, font, root, width, height)
@@ -138,6 +146,14 @@ pub enum FlexDirection {
     #[default]
     Row,
     Column,
+    RowReverse,
+    ColumnReverse,
+}
+impl FlexDirection {
+    /// Whether items run along a line (`row` or `row-reverse`).
+    pub fn is_row(self) -> bool {
+        matches!(self, Self::Row | Self::RowReverse)
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -164,6 +180,16 @@ pub enum Position {
     Static,
     Relative,
     Absolute,
+    /// Laid out like `absolute` against the page's first screen.
+    Fixed,
+    /// Laid out in normal flow, since Olive does not reposition on scroll.
+    Sticky,
+}
+impl Position {
+    /// Whether the box leaves normal flow (`absolute` or `fixed`).
+    pub fn out_of_flow(self) -> bool {
+        matches!(self, Self::Absolute | Self::Fixed)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -200,6 +226,16 @@ pub enum VerticalAlign {
     Super,
     Sub,
 }
+/// Case changes from CSS `text-transform`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TextTransform {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineHeight {
@@ -225,6 +261,7 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub direction: Direction,
     pub vertical_align: VerticalAlign,
+    pub text_transform: TextTransform,
     pub display: Display,
     pub float_side: FloatSide,
     pub clear: Clear,
@@ -239,6 +276,8 @@ pub struct ComputedStyle {
     pub position: Position,
     /// Top, right, bottom, left offsets. `auto` means no offset.
     pub inset: [Length; 4],
+    /// Paint order among positioned boxes; `None` is `auto`.
+    pub z_index: Option<i32>,
     /// Equal fractional grid tracks; clamped to twelve columns.
     pub grid_columns: u8,
     pub opacity: f32,
@@ -261,9 +300,12 @@ pub struct ComputedStyle {
     pub height: Length,
     pub min_height: Length,
     pub border_box: bool,
-    pub border_width: Length,
-    pub border_color: Color,
-    pub border_solid: bool,
+    /// Top, right, bottom, left.
+    pub border_width: [Length; 4],
+    /// Top, right, bottom, left.
+    pub border_color: [Color; 4],
+    /// Top, right, bottom, left: whether each side has a visible style.
+    pub border_solid: [bool; 4],
     /// Top-left, top-right, bottom-right, bottom-left.
     pub border_radius: [Length; 4],
     pub box_shadow: Option<BoxShadow>,
@@ -284,6 +326,7 @@ impl Default for ComputedStyle {
             text_align: TextAlign::Start,
             direction: Direction::Ltr,
             vertical_align: VerticalAlign::Baseline,
+            text_transform: TextTransform::None,
             display: Display::Inline,
             float_side: FloatSide::None,
             clear: Clear::None,
@@ -297,6 +340,7 @@ impl Default for ComputedStyle {
             column_gap: Length::Px(0.0),
             position: Position::Static,
             inset: [Length::Auto; 4],
+            z_index: None,
             grid_columns: 1,
             opacity: 1.0,
             list_marker: true,
@@ -312,9 +356,9 @@ impl Default for ComputedStyle {
             height: Length::Auto,
             min_height: Length::Px(0.0),
             border_box: false,
-            border_width: Length::Px(3.0),
-            border_color: Color(38, 44, 32, 255),
-            border_solid: false,
+            border_width: [Length::Px(3.0); 4],
+            border_color: [Color(38, 44, 32, 255); 4],
+            border_solid: [false; 4],
             border_radius: [Length::Px(0.0); 4],
             box_shadow: None,
         }
@@ -336,9 +380,10 @@ impl ComputedStyle {
             text_align: parent.text_align,
             direction: parent.direction,
             vertical_align: parent.vertical_align,
+            text_transform: parent.text_transform,
             list_marker: parent.list_marker,
             border_collapse: parent.border_collapse,
-            border_color: parent.color,
+            border_color: [parent.color; 4],
             ..Self::default()
         }
     }
@@ -348,6 +393,31 @@ impl ComputedStyle {
             LineHeight::Px(px) => px,
         }
         .clamp(1.0, 1024.0)
+    }
+    /// Used border widths (top, right, bottom, left) in pixels. A side
+    /// without a visible style has none.
+    pub fn border_widths(&self, root_font: f32) -> [f32; 4] {
+        std::array::from_fn(|side| {
+            if self.border_solid[side] {
+                self.border_width[side]
+                    .resolve(0.0, self.font_size, root_font)
+                    .max(0.0)
+            } else {
+                0.0
+            }
+        })
+    }
+    /// Whether any side has a visible border.
+    pub fn has_border(&self) -> bool {
+        self.border_solid.contains(&true)
+    }
+    /// Give every side the same border.
+    pub fn set_border(&mut self, width: Length, color: Option<Color>) {
+        self.border_solid = [true; 4];
+        self.border_width = [width; 4];
+        if let Some(color) = color {
+            self.border_color = [color; 4];
+        }
     }
 }
 
@@ -379,9 +449,18 @@ pub(super) enum Property {
     Height,
     MinHeight,
     BoxSizing,
-    BorderWidth,
-    BorderColor,
-    BorderStyle,
+    BorderTopWidth,
+    BorderRightWidth,
+    BorderBottomWidth,
+    BorderLeftWidth,
+    BorderTopColor,
+    BorderRightColor,
+    BorderBottomColor,
+    BorderLeftColor,
+    BorderTopStyle,
+    BorderRightStyle,
+    BorderBottomStyle,
+    BorderLeftStyle,
     BorderTopLeftRadius,
     BorderTopRightRadius,
     BorderBottomRightRadius,
@@ -409,8 +488,10 @@ pub(super) enum Property {
     Clear,
     OverflowX,
     OverflowY,
+    TextTransform,
+    ZIndex,
 }
-pub(super) const PROPERTIES: [Property; 55] = [
+pub(super) const PROPERTIES: [Property; 66] = [
     Property::FontSize,
     Property::Color,
     Property::Background,
@@ -436,9 +517,18 @@ pub(super) const PROPERTIES: [Property; 55] = [
     Property::Height,
     Property::MinHeight,
     Property::BoxSizing,
-    Property::BorderWidth,
-    Property::BorderColor,
-    Property::BorderStyle,
+    Property::BorderTopWidth,
+    Property::BorderRightWidth,
+    Property::BorderBottomWidth,
+    Property::BorderLeftWidth,
+    Property::BorderTopColor,
+    Property::BorderRightColor,
+    Property::BorderBottomColor,
+    Property::BorderLeftColor,
+    Property::BorderTopStyle,
+    Property::BorderRightStyle,
+    Property::BorderBottomStyle,
+    Property::BorderLeftStyle,
     Property::BorderTopLeftRadius,
     Property::BorderTopRightRadius,
     Property::BorderBottomRightRadius,
@@ -466,6 +556,8 @@ pub(super) const PROPERTIES: [Property; 55] = [
     Property::Clear,
     Property::OverflowX,
     Property::OverflowY,
+    Property::TextTransform,
+    Property::ZIndex,
 ];
 impl Property {
     pub(super) fn inherited(self) -> bool {
@@ -482,6 +574,7 @@ impl Property {
                 | Self::Direction
                 | Self::ListMarker
                 | Self::BorderCollapse
+                | Self::TextTransform
         )
     }
 }
@@ -506,6 +599,8 @@ pub(super) enum Value {
     GridColumns(u8),
     BoxShadow(Option<BoxShadow>),
     ListMarker(bool),
+    TextTransform(TextTransform),
+    ZIndex(Option<i32>),
     Inherit,
     Initial,
     Unset,
@@ -821,8 +916,87 @@ fn color(input: &mut Parser<'_>) -> Result<Value, Error> {
     Ok(Value::Color(rgba))
 }
 
+const BORDER_WIDTHS: [Property; 4] = [
+    Property::BorderTopWidth,
+    Property::BorderRightWidth,
+    Property::BorderBottomWidth,
+    Property::BorderLeftWidth,
+];
+const BORDER_STYLES: [Property; 4] = [
+    Property::BorderTopStyle,
+    Property::BorderRightStyle,
+    Property::BorderBottomStyle,
+    Property::BorderLeftStyle,
+];
+const BORDER_COLORS: [Property; 4] = [
+    Property::BorderTopColor,
+    Property::BorderRightColor,
+    Property::BorderBottomColor,
+    Property::BorderLeftColor,
+];
+const BORDER: [Property; 12] = [
+    Property::BorderTopWidth,
+    Property::BorderRightWidth,
+    Property::BorderBottomWidth,
+    Property::BorderLeftWidth,
+    Property::BorderTopStyle,
+    Property::BorderRightStyle,
+    Property::BorderBottomStyle,
+    Property::BorderLeftStyle,
+    Property::BorderTopColor,
+    Property::BorderRightColor,
+    Property::BorderBottomColor,
+    Property::BorderLeftColor,
+];
+const BORDER_SIDES: [[Property; 3]; 4] = [
+    [
+        Property::BorderTopWidth,
+        Property::BorderTopStyle,
+        Property::BorderTopColor,
+    ],
+    [
+        Property::BorderRightWidth,
+        Property::BorderRightStyle,
+        Property::BorderRightColor,
+    ],
+    [
+        Property::BorderBottomWidth,
+        Property::BorderBottomStyle,
+        Property::BorderBottomColor,
+    ],
+    [
+        Property::BorderLeftWidth,
+        Property::BorderLeftStyle,
+        Property::BorderLeftColor,
+    ],
+];
+
+/// The side (top, right, bottom, left) a `border-*` property name targets.
+fn border_side(name: &str) -> Option<usize> {
+    ["top", "right", "bottom", "left"]
+        .iter()
+        .position(|side| name == *side)
+}
+
 /// The longhand properties set by a supported property name.
 fn longhands(name: &str) -> Option<&'static [Property]> {
+    if let Some(rest) = name.strip_prefix("border-") {
+        let (side, part) = rest.split_once('-').unwrap_or((rest, ""));
+        if let Some(side) = border_side(side) {
+            return match part {
+                "" => Some(&BORDER_SIDES[side][..]),
+                "width" => Some(std::slice::from_ref(&BORDER_WIDTHS[side])),
+                "style" => Some(std::slice::from_ref(&BORDER_STYLES[side])),
+                "color" => Some(std::slice::from_ref(&BORDER_COLORS[side])),
+                _ => None,
+            }
+            .or_else(|| longhand(name));
+        }
+    }
+    longhand(name)
+}
+
+fn longhand(name: &str) -> Option<&'static [Property]> {
     use Property as P;
     Some(match name {
         "color" => &[P::Color],
@@ -831,6 +1005,15 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "font-weight" => &[P::FontWeight],
         "font-style" => &[P::Italic],
         "font-family" => &[P::Family],
+        "font" => &[
+            P::Italic,
+            P::FontWeight,
+            P::FontSize,
+            P::LineHeight,
+            P::Family,
+        ],
+        "text-transform" => &[P::TextTransform],
+        "z-index" => &[P::ZIndex],
         "text-decoration" | "text-decoration-line" => &[P::Decoration],
         "line-height" => &[P::LineHeight],
         "white-space" => &[P::WhiteSpace],
@@ -851,6 +1034,7 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "opacity" => &[P::Opacity],
         "flex-direction" => &[P::FlexDirection],
         "flex-wrap" => &[P::FlexWrap],
+        "flex-flow" => &[P::FlexDirection, P::FlexWrap],
         "justify-content" => &[P::JustifyContent],
         "flex-grow" => &[P::FlexGrow],
         "flex-shrink" => &[P::FlexShrink],
@@ -884,10 +1068,10 @@ fn longhands(name: &str) -> Option<&'static [Property]> {
         "height" => &[P::Height],
         "min-height" => &[P::MinHeight],
         "box-sizing" => &[P::BoxSizing],
-        "border" => &[P::BorderWidth, P::BorderStyle, P::BorderColor],
-        "border-width" => &[P::BorderWidth],
-        "border-style" => &[P::BorderStyle],
-        "border-color" => &[P::BorderColor],
+        "border" => &BORDER,
+        "border-width" => &BORDER_WIDTHS,
+        "border-style" => &BORDER_STYLES,
+        "border-color" => &BORDER_COLORS,
         "border-radius" => &[
             P::BorderTopLeftRadius,
             P::BorderTopRightRadius,
@@ -1021,7 +1205,7 @@ pub(super) fn parse_values(
             (P::FlexBasis, Value::Length(basis)),
         ]);
     }
-    if name == "border" {
+    if props.len() == 12 || (props.len() == 3 && name.starts_with("border-")) {
         let mut width = None;
         let mut solid = None;
         let mut ink = None;
@@ -1049,13 +1233,78 @@ pub(super) fn parse_values(
         if width.is_none() && solid.is_none() && ink.is_none() {
             return Err(cssparser::ParseError::custom(()));
         }
+        let width = Value::Length(width.unwrap_or(Length::Px(3.0)));
+        let solid = Value::Bool(solid.unwrap_or(false));
+        let ink = ink.unwrap_or(Value::CurrentColor);
+        return Ok(props
+            .iter()
+            .map(|&property| {
+                let value = if BORDER_WIDTHS.contains(&property) {
+                    width
+                } else if BORDER_STYLES.contains(&property) {
+                    solid
+                } else {
+                    ink
+                };
+                (property, value)
+            })
+            .collect());
+    }
+    if props.len() == 4
+        && [BORDER_WIDTHS, BORDER_STYLES, BORDER_COLORS]
+            .iter()
+            .any(|sides| props == sides)
+    {
+        // One to four sides, in the same order as `margin`.
+        let mut values = vec![single(props[0], input)?];
+        while values.len() < 4 {
+            match input.try_parse(|input| single(props[0], input)) {
+                Ok(value) => values.push(value),
+                Err(_) => break,
+            }
+        }
+        let sides = match values.as_slice() {
+            [a] => [*a; 4],
+            [a, b] => [*a, *b, *a, *b],
+            [a, b, c] => [*a, *b, *c, *b],
+            [a, b, c, d] => [*a, *b, *c, *d],
+            _ => unreachable!(),
+        };
+        return Ok(props.iter().copied().zip(sides).collect());
+    }
+    if name == "font" {
+        return font(input);
+    }
+    if name == "flex-flow" {
+        let mut direction = None;
+        let mut wrap = None;
+        for _ in 0..2 {
+            if direction.is_none() {
+                if let Ok(value) = input.try_parse(|input| single(P::FlexDirection, input)) {
+                    direction = Some(value);
+                    continue;
+                }
+            }
+            if wrap.is_none() {
+                if let Ok(value) = input.try_parse(|input| single(P::FlexWrap, input)) {
+                    wrap = Some(value);
+                    continue;
+                }
+            }
+            break;
+        }
+        if direction.is_none() && wrap.is_none() {
+            return Err(cssparser::ParseError::custom(()));
+        }
         return Ok(vec![
             (
-                P::BorderWidth,
-                Value::Length(width.unwrap_or(Length::Px(3.0))),
+                P::FlexDirection,
+                direction.unwrap_or(Value::FlexDirection(FlexDirection::Row)),
             ),
-            (P::BorderStyle, Value::Bool(solid.unwrap_or(false))),
-            (P::BorderColor, ink.unwrap_or(Value::CurrentColor)),
+            (
+                P::FlexWrap,
+                wrap.unwrap_or(Value::FlexWrap(FlexWrap::NoWrap)),
+            ),
         ]);
     }
     if name == "box-shadow" {
@@ -1103,8 +1352,75 @@ pub(super) fn parse_values(
         return Ok(vec![(P::BoxShadow, Value::BoxShadow(Some(shadow)))]);
     }
     let p = props[0];
-    let value = match p {
-        P::Color | P::Background | P::BorderColor => color(input)?,
+    Ok(vec![(p, single(p, input)?)])
+}
+
+/// The `font` shorthand: optional style, variant, weight and stretch keywords,
+/// then a size, an optional line height after `/`, and the family list.
+/// Longhands it leaves out return to their initial values.
+fn font(input: &mut Parser<'_>) -> Result<Vec<(Property, Value)>, Error> {
+    use Property as P;
+    let mut italic = None;
+    let mut weight = None;
+    for _ in 0..4 {
+        if input
+            .try_parse(|input| input.expect_ident_matching("normal"))
+            .is_ok()
+        {
+            continue;
+        }
+        if italic.is_none() {
+            if let Ok(value) = input.try_parse(|input| single(P::Italic, input)) {
+                italic = Some(value);
+                continue;
+            }
+        }
+        if weight.is_none() {
+            if let Ok(value) = input.try_parse(|input| single(P::FontWeight, input)) {
+                weight = Some(value);
+                continue;
+            }
+        }
+        // Small caps and font stretching have no effect on the bundled faces.
+        if input
+            .try_parse(|input| match keyword(input)?.as_str() {
+                "small-caps" | "ultra-condensed" | "extra-condensed" | "condensed"
+                | "semi-condensed" | "semi-expanded" | "expanded" | "extra-expanded"
+                | "ultra-expanded" => Ok(()),
+                _ => Err(cssparser::ParseError::custom(())),
+            })
+            .is_ok()
+        {
+            continue;
+        }
+        break;
+    }
+    let size = single(P::FontSize, input)?;
+    let line_height = if input.try_parse(|input| input.expect_delim('/')).is_ok() {
+        single(P::LineHeight, input)?
+    } else {
+        Value::Number(1.45)
+    };
+    let family = single(P::Family, input)?;
+    Ok(vec![
+        (P::Italic, italic.unwrap_or(Value::Bool(false))),
+        (P::FontWeight, weight.unwrap_or(Value::Number(400.0))),
+        (P::FontSize, size),
+        (P::LineHeight, line_height),
+        (P::Family, family),
+    ])
+}
+
+/// One value of a longhand property.
+fn single(p: Property, input: &mut Parser<'_>) -> Result<Value, Error> {
+    use Property as P;
+    Ok(match p {
+        P::Color
+        | P::Background
+        | P::BorderTopColor
+        | P::BorderRightColor
+        | P::BorderBottomColor
+        | P::BorderLeftColor => color(input)?,
         P::FontSize => {
             let size = input
                 .try_parse(|p| length(p, false, false, true))
@@ -1128,7 +1444,8 @@ pub(super) fn parse_values(
             let weight = input.try_parse(|p| p.expect_number()).or_else(|_| {
                 match keyword(input)?.as_str() {
                     "normal" => Ok(400.0),
-                    "bold" => Ok(700.0),
+                    "bold" | "bolder" => Ok(700.0),
+                    "lighter" => Ok(300.0),
                     _ => Err(cssparser::ParseError::custom(())),
                 }
             })?;
@@ -1246,6 +1563,8 @@ pub(super) fn parse_values(
             "static" => Position::Static,
             "relative" => Position::Relative,
             "absolute" => Position::Absolute,
+            "fixed" => Position::Fixed,
+            "sticky" | "-webkit-sticky" => Position::Sticky,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::Top | P::Right | P::Bottom | P::Left => Value::Length(length(input, true, true, true)?),
@@ -1260,11 +1579,13 @@ pub(super) fn parse_values(
         P::FlexDirection => Value::FlexDirection(match keyword(input)?.as_str() {
             "row" => FlexDirection::Row,
             "column" => FlexDirection::Column,
+            "row-reverse" => FlexDirection::RowReverse,
+            "column-reverse" => FlexDirection::ColumnReverse,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::FlexWrap => Value::FlexWrap(match keyword(input)?.as_str() {
             "nowrap" => FlexWrap::NoWrap,
-            "wrap" => FlexWrap::Wrap,
+            "wrap" | "wrap-reverse" => FlexWrap::Wrap,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
         P::JustifyContent => Value::JustifyContent(match keyword(input)?.as_str() {
@@ -1290,8 +1611,29 @@ pub(super) fn parse_values(
             "disc" | "circle" | "square" | "decimal" => true,
             _ => return Err(cssparser::ParseError::custom(())),
         }),
-        P::BorderWidth => Value::Length(border_width(input)?),
-        P::BorderStyle => Value::Bool(border_style(input)?),
+        P::BorderTopWidth | P::BorderRightWidth | P::BorderBottomWidth | P::BorderLeftWidth => {
+            Value::Length(border_width(input)?)
+        }
+        P::BorderTopStyle | P::BorderRightStyle | P::BorderBottomStyle | P::BorderLeftStyle => {
+            Value::Bool(border_style(input)?)
+        }
+        P::ZIndex => Value::ZIndex(
+            if input
+                .try_parse(|input| input.expect_ident_matching("auto"))
+                .is_ok()
+            {
+                None
+            } else {
+                Some(input.expect_integer()?)
+            },
+        ),
+        P::TextTransform => Value::TextTransform(match keyword(input)?.as_str() {
+            "none" => TextTransform::None,
+            "uppercase" => TextTransform::Uppercase,
+            "lowercase" => TextTransform::Lowercase,
+            "capitalize" => TextTransform::Capitalize,
+            _ => return Err(cssparser::ParseError::custom(())),
+        }),
         P::BorderTopLeftRadius
         | P::BorderTopRightRadius
         | P::BorderBottomRightRadius
@@ -1317,12 +1659,7 @@ pub(super) fn parse_values(
             if p == P::MaxWidth && input.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
                 Value::Length(Length::Auto)
             } else {
-                Value::Length(length(
-                    input,
-                    true,
-                    false,
-                    !matches!(p, P::Height | P::MinHeight),
-                )?)
+                Value::Length(length(input, true, false, true)?)
             }
         }
         P::MarginTop | P::MarginRight | P::MarginBottom | P::MarginLeft => {
@@ -1331,8 +1668,7 @@ pub(super) fn parse_values(
         P::PaddingTop | P::PaddingRight | P::PaddingBottom | P::PaddingLeft => {
             Value::Length(length(input, false, false, true)?)
         }
-    };
-    Ok(vec![(p, value)])
+    })
 }
 
 pub(super) fn supports_property(name: &str) -> bool {
@@ -1424,9 +1760,25 @@ pub(super) fn apply(
             P::Height => style.height = source.height,
             P::MinHeight => style.min_height = source.min_height,
             P::BoxSizing => style.border_box = source.border_box,
-            P::BorderWidth => style.border_width = source.border_width,
-            P::BorderColor => style.border_color = source.border_color,
-            P::BorderStyle => style.border_solid = source.border_solid,
+            P::BorderTopWidth | P::BorderRightWidth | P::BorderBottomWidth | P::BorderLeftWidth => {
+                let i = prop as usize - P::BorderTopWidth as usize;
+                style.border_width[i] = source.border_width[i];
+            }
+            P::BorderTopColor | P::BorderRightColor | P::BorderBottomColor | P::BorderLeftColor => {
+                let i = prop as usize - P::BorderTopColor as usize;
+                // The initial border color is the element's own text color.
+                style.border_color[i] = if value == Value::Inherit {
+                    source.border_color[i]
+                } else {
+                    style.color
+                };
+            }
+            P::BorderTopStyle | P::BorderRightStyle | P::BorderBottomStyle | P::BorderLeftStyle => {
+                let i = prop as usize - P::BorderTopStyle as usize;
+                style.border_solid[i] = source.border_solid[i];
+            }
+            P::TextTransform => style.text_transform = source.text_transform,
+            P::ZIndex => style.z_index = source.z_index,
             P::BorderTopLeftRadius
             | P::BorderTopRightRadius
             | P::BorderBottomRightRadius
@@ -1486,8 +1838,14 @@ pub(super) fn apply(
         (P::Color, Value::CurrentColor) => style.color = parent.color,
         (P::Background, Value::Color(v)) => style.background = v,
         (P::Background, Value::CurrentColor) => style.background = style.color,
-        (P::BorderColor, Value::Color(v)) => style.border_color = v,
-        (P::BorderColor, Value::CurrentColor) => style.border_color = style.color,
+        (
+            P::BorderTopColor | P::BorderRightColor | P::BorderBottomColor | P::BorderLeftColor,
+            Value::Color(v),
+        ) => style.border_color[prop as usize - P::BorderTopColor as usize] = v,
+        (
+            P::BorderTopColor | P::BorderRightColor | P::BorderBottomColor | P::BorderLeftColor,
+            Value::CurrentColor,
+        ) => style.border_color[prop as usize - P::BorderTopColor as usize] = style.color,
         (P::FontWeight, Value::Number(v)) => style.font_weight = v,
         (P::Italic, Value::Bool(v)) => style.italic = v,
         (P::Family, Value::Bool(v)) => style.monospace = v,
@@ -1538,7 +1896,10 @@ pub(super) fn apply(
         (P::Height, Value::Length(v)) => style.height = v,
         (P::MinHeight, Value::Length(v)) => style.min_height = v,
         (P::BoxSizing, Value::Bool(v)) => style.border_box = v,
-        (P::BorderWidth, Value::Length(v)) => style.border_width = v,
+        (
+            P::BorderTopWidth | P::BorderRightWidth | P::BorderBottomWidth | P::BorderLeftWidth,
+            Value::Length(v),
+        ) => style.border_width[prop as usize - P::BorderTopWidth as usize] = v,
         (
             P::BorderTopLeftRadius
             | P::BorderTopRightRadius
@@ -1554,7 +1915,12 @@ pub(super) fn apply(
                 shadow
             });
         }
-        (P::BorderStyle, Value::Bool(v)) => style.border_solid = v,
+        (
+            P::BorderTopStyle | P::BorderRightStyle | P::BorderBottomStyle | P::BorderLeftStyle,
+            Value::Bool(v),
+        ) => style.border_solid[prop as usize - P::BorderTopStyle as usize] = v,
+        (P::TextTransform, Value::TextTransform(v)) => style.text_transform = v,
+        (P::ZIndex, Value::ZIndex(v)) => style.z_index = v,
         (P::BorderCollapse, Value::Bool(v)) => style.border_collapse = v,
         (P::OverflowX | P::OverflowY, Value::Bool(v)) => {
             style.overflow_hidden[prop as usize - P::OverflowX as usize] = v

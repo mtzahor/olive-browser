@@ -4,7 +4,6 @@ use super::*;
 pub(super) struct ImagePlacement {
     pub(super) outer: egui::Rect,
     pub(super) content: egui::Rect,
-    pub(super) border: f32,
     pub(super) radius: egui::CornerRadius,
     pub(super) margin_bottom: f32,
 }
@@ -44,13 +43,9 @@ pub(super) fn image_placement(
     let resolve = |value: Length| value.resolve(parent.width, style.font_size, root);
     let margin = style.margin.map(resolve);
     let padding = style.padding.map(resolve);
-    let border = if style.border_solid {
-        resolve(style.border_width).max(0.0)
-    } else {
-        0.0
-    };
-    let horizontal_sides = padding[1] + padding[3] + border * 2.0;
-    let vertical_sides = padding[0] + padding[2] + border * 2.0;
+    let border = style.border_widths(root);
+    let horizontal_sides = padding[1] + padding[3] + border[1] + border[3];
+    let vertical_sides = padding[0] + padding[2] + border[0] + border[2];
     // Pictures beside floats take the room left between them.
     let (inset_left, inset_right) = parent.float_insets(parent.cursor);
     let room = (parent.width - inset_left - inset_right).max(1.0);
@@ -69,19 +64,25 @@ pub(super) fn image_placement(
             .max(1.0),
         )
     };
-    let height_value = if style.height == Length::Auto {
-        image.html_height
-    } else {
-        Some(
-            (resolve(style.height)
+    // Percentage heights follow the parent's definite height, if it has one.
+    let used_height = |length: Length| match length {
+        Length::Auto => None,
+        length if length.has_percent() => parent
+            .definite_height
+            .map(|basis| length.resolve(basis, style.font_size, root)),
+        length => Some(length.resolve(0.0, style.font_size, root)),
+    };
+    let height_value = used_height(style.height)
+        .map(|height| {
+            (height
                 - if style.border_box {
                     vertical_sides
                 } else {
                     0.0
                 })
-            .max(1.0),
-        )
-    };
+            .max(1.0)
+        })
+        .or(image.html_height);
     let mut content_width = width_value.unwrap_or(intrinsic.x).max(1.0);
     let mut content_height = height_value.unwrap_or(intrinsic.y).max(1.0);
     if width_value.is_some() && height_value.is_none() {
@@ -109,7 +110,7 @@ pub(super) fn image_placement(
             content_height *= scale;
         }
     }
-    let min_height = resolve(style.min_height)
+    let min_height = used_height(style.min_height).unwrap_or(0.0)
         - if style.border_box {
             vertical_sides
         } else {
@@ -136,9 +137,9 @@ pub(super) fn image_placement(
     };
     let left = parent.content_left + inset_left + margin[3] + alignment;
     let top = parent.cursor + margin[0];
-    let content_top = top + border + padding[0];
+    let content_top = top + border[0] + padding[0];
     let content = egui::Rect::from_min_size(
-        egui::pos2(left + border + padding[3], content_top),
+        egui::pos2(left + border[3] + padding[3], content_top),
         egui::vec2(content_width, content_height),
     );
     let outer = egui::Rect::from_min_size(
@@ -148,10 +149,97 @@ pub(super) fn image_placement(
     ImagePlacement {
         outer,
         content,
-        border,
         radius: corner_radii(&style, outer, root).into(),
         margin_bottom: margin[2],
     }
+}
+
+/// The stroke of a border whose sides all match, or `None` for uneven sides.
+fn uniform_border(style: &ComputedStyle, root: f32) -> Option<Stroke> {
+    let widths = style.border_widths(root);
+    let colors = style
+        .border_color
+        .map(|ink| paint_color(ink, style.opacity));
+    if widths.iter().all(|&width| width == 0.0) {
+        Some(Stroke::NONE)
+    } else if widths.iter().all(|&width| width == widths[0])
+        && colors.iter().all(|&ink| ink == colors[0])
+    {
+        Some(Stroke::new(widths[0], colors[0]))
+    } else {
+        None
+    }
+}
+
+/// A border inside `rect`: one rounded stroke when every side matches, or a
+/// band per side with mitred corners. Corners of uneven borders stay square.
+pub(super) fn border_shape(
+    style: &ComputedStyle,
+    rect: egui::Rect,
+    radius: egui::epaint::CornerRadiusF32,
+    root: f32,
+) -> Option<egui::Shape> {
+    if let Some(stroke) = uniform_border(style, root) {
+        return (!stroke.is_empty()).then(|| {
+            egui::epaint::RectShape::stroke(rect, radius, stroke, egui::StrokeKind::Inside).into()
+        });
+    }
+    let widths = style.border_widths(root);
+    let colors = style
+        .border_color
+        .map(|ink| paint_color(ink, style.opacity));
+    let [top, right, bottom, left] = widths;
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(
+            (rect.left() + left).min(rect.right()),
+            (rect.top() + top).min(rect.bottom()),
+        ),
+        egui::pos2(
+            (rect.right() - right)
+                .max(rect.left() + left)
+                .min(rect.right()),
+            (rect.bottom() - bottom)
+                .max(rect.top() + top)
+                .min(rect.bottom()),
+        ),
+    );
+    let bands = [
+        [
+            rect.left_top(),
+            rect.right_top(),
+            inner.right_top(),
+            inner.left_top(),
+        ],
+        [
+            rect.right_top(),
+            rect.right_bottom(),
+            inner.right_bottom(),
+            inner.right_top(),
+        ],
+        [
+            rect.right_bottom(),
+            rect.left_bottom(),
+            inner.left_bottom(),
+            inner.right_bottom(),
+        ],
+        [
+            rect.left_bottom(),
+            rect.left_top(),
+            inner.left_top(),
+            inner.left_bottom(),
+        ],
+    ];
+    Some(egui::Shape::Vec(
+        bands
+            .into_iter()
+            .zip(widths)
+            .zip(colors)
+            .filter(|((_, width), _)| *width > 0.0)
+            .map(|((points, _), ink)| {
+                egui::Shape::convex_polygon(points.to_vec(), ink, Stroke::NONE)
+            })
+            .collect(),
+    ))
 }
 
 /// The plane around `rect` in four non-overlapping bands. CSS never paints a
@@ -220,7 +308,8 @@ pub(super) struct BoxLayout {
     pub(super) flow_top: f32,
     pub(super) content_top: f32,
     pub(super) padding_bottom: f32,
-    pub(super) border: f32,
+    /// Top, right, bottom, left.
+    pub(super) border: [f32; 4],
     pub(super) margin_bottom: f32,
     pub(super) flex_row: bool,
     pub(super) flex_column: bool,
@@ -268,6 +357,29 @@ pub(super) struct BoxLayout {
     pub(super) absolute_image_bottom: f32,
     /// This box narrowed the paint clip for its contents (`overflow: hidden`).
     pub(super) clipped: bool,
+    /// The content height when `height` makes it definite; children's
+    /// percentage heights resolve against it.
+    pub(super) definite_height: Option<f32>,
+    /// Where absolutely positioned descendants are placed.
+    pub(super) containing: Containing,
+    /// This box is placed by its bottom edge, using its height from the
+    /// previous frame.
+    pub(super) anchored_bottom: bool,
+    /// The least content height that `height` and `min-height` ask for.
+    pub(super) min_height: f32,
+}
+
+/// The padding box that absolutely positioned descendants are placed in: the
+/// nearest positioned ancestor's, or the page's first screen.
+#[derive(Clone, Copy)]
+pub(super) struct Containing {
+    /// The box, whose previous size stands in for a height not yet known.
+    pub(super) index: Option<usize>,
+    pub(super) left: f32,
+    pub(super) top: f32,
+    pub(super) width: f32,
+    /// The height when known before the box's content is laid out.
+    pub(super) height: Option<f32>,
 }
 
 /// Floats a container remembers at once; older ones stop shaping later content.
@@ -277,6 +389,8 @@ const MAX_ACTIVE_FLOATS: usize = 64;
 pub(super) struct FlexPlacement {
     pub(super) width: f32,
     pub(super) x: f32,
+    /// Offset below the top of the item's line; only wrapped columns use it.
+    pub(super) y: f32,
     pub(super) break_before: bool,
 }
 
@@ -343,8 +457,7 @@ pub(super) fn content_widths(
         fn new(style: ComputedStyle, skip: bool) -> Self {
             Self {
                 style,
-                row: (style.display == Display::Flex
-                    && style.flex_direction == crate::css::FlexDirection::Row)
+                row: (style.display == Display::Flex && style.flex_direction.is_row())
                     || style.display == Display::TableRow,
                 skip,
                 items: 0,
@@ -404,12 +517,8 @@ pub(super) fn content_widths(
             Length::Auto => 0.0,
             value => value.resolve(0.0, style.font_size, 0.0),
         };
-        let border = if style.border_solid {
-            resolve(style.border_width).max(0.0) * 2.0
-        } else {
-            0.0
-        };
-        let sides = resolve(style.padding[1]) + resolve(style.padding[3]) + border;
+        let border = style.border_widths(0.0);
+        let sides = resolve(style.padding[1]) + resolve(style.padding[3]) + border[1] + border[3];
         let (mut min, mut max) = frame.content();
         let fixed = |length: Length| match length {
             Length::Px(width) => Some(width - if style.border_box { sides } else { 0.0 }),
@@ -444,10 +553,7 @@ pub(super) fn content_widths(
         match *command {
             Command::Open(index) => {
                 let child = boxes[index];
-                stack.push(Frame::new(
-                    child,
-                    skip || child.position == Position::Absolute,
-                ));
+                stack.push(Frame::new(child, skip || child.position.out_of_flow()));
             }
             Command::Close => {
                 let frame = stack.pop().unwrap();
@@ -568,7 +674,9 @@ pub(super) fn table_layout(
         specified: bool,
     }
     let mut cells = Vec::new();
-    let mut cell_border: f32 = 0.0;
+    // The widest horizontal and vertical cell borders, which collapse into
+    // the space between columns and rows.
+    let mut cell_border = [0.0f32; 2];
     let mut rows = 0;
     let mut row_open = false;
     // Rows each column stays covered by an earlier cell's `rowspan`.
@@ -582,7 +690,7 @@ pub(super) fn table_layout(
         match commands[index] {
             Command::Open(box_index) => {
                 let child = boxes[box_index];
-                let in_flow = child.position != Position::Absolute;
+                let in_flow = !child.position.out_of_flow();
                 if depth == 0 && in_flow && child.display == Display::TableRow {
                     if rows > 0 {
                         for count in &mut covered {
@@ -594,13 +702,13 @@ pub(super) fn table_layout(
                     next_column = 0;
                 } else if depth == 1 && row_open && in_flow && child.display == Display::TableCell {
                     let resolve = |value: Length| value.resolve(room, child.font_size, root);
-                    let border = if child.border_solid {
-                        resolve(child.border_width).max(0.0) * 2.0
-                    } else {
-                        0.0
-                    };
-                    cell_border = cell_border.max(border / 2.0);
-                    let sides = resolve(child.padding[1]) + resolve(child.padding[3]) + border;
+                    let border = child.border_widths(root);
+                    cell_border[0] = cell_border[0].max(border[1]).max(border[3]);
+                    cell_border[1] = cell_border[1].max(border[0]).max(border[2]);
+                    let sides = resolve(child.padding[1])
+                        + resolve(child.padding[3])
+                        + border[1]
+                        + border[3];
                     let (min, mut max, end) =
                         content_widths(commands, boxes, index, blocks, images, ui, remaining_steps);
                     let Some(end) = end else {
@@ -653,13 +761,14 @@ pub(super) fn table_layout(
     }
 
     let spacing = |gap: Length| gap.resolve(0.0, style.font_size, root).max(0.0);
-    let table_border = if style.border_solid {
-        spacing(style.border_width)
-    } else {
-        0.0
-    };
+    let table_border = style.border_widths(root);
     let (gap, edge, row_gap, row_edge) = if style.border_collapse {
-        (-cell_border, -table_border, -cell_border, -table_border)
+        (
+            -cell_border[0],
+            -table_border[1].max(table_border[3]),
+            -cell_border[1],
+            -table_border[0].max(table_border[2]),
+        )
     } else {
         let (column, row) = (spacing(style.column_gap), spacing(style.row_gap));
         (column, column, row, row)
@@ -745,7 +854,7 @@ pub(super) fn table_layout(
         placements[cell.row].push(FlexPlacement {
             width: (outer - cell.sides).max(1.0),
             x: if rtl { width - left - outer } else { left },
-            break_before: false,
+            ..Default::default()
         });
     }
     TableLayout {
@@ -825,7 +934,7 @@ pub(super) fn flex_layouts(
             Command::Text(_) if depth == 0 => has_anonymous_text = true,
             Command::Open(index) if depth == 0 => {
                 let child = boxes[index];
-                if child.position != Position::Absolute {
+                if !child.position.out_of_flow() {
                     let resolve =
                         |length: Length| length.resolve(available_width, child.font_size, root);
                     let margin_left = if child.margin[3] == Length::Auto {
@@ -839,11 +948,8 @@ pub(super) fn flex_layouts(
                         resolve(child.margin[1])
                     };
                     let padding = resolve(child.padding[1]) + resolve(child.padding[3]);
-                    let border = if child.border_solid {
-                        resolve(child.border_width).max(0.0) * 2.0
-                    } else {
-                        0.0
-                    };
+                    let border = child.border_widths(root);
+                    let border = border[1] + border[3];
                     let explicit_width = if child.width == Length::Auto {
                         None
                     } else {
@@ -973,11 +1079,19 @@ pub(super) fn flex_layouts(
             }
             _ => {}
         }
+        let reverse = style.flex_direction == crate::css::FlexDirection::RowReverse;
         let mut x = start;
         for ((item, width), item_index) in row.iter().zip(widths).zip(0..) {
+            // `row-reverse` runs the same line from the right edge.
+            let outer_left = if reverse {
+                available_width - x - width - item.extra
+            } else {
+                x
+            };
             placements.push(FlexPlacement {
                 width,
-                x: x + item.margin_left,
+                x: outer_left + item.margin_left,
+                y: 0.0,
                 break_before: row_index > 0 && item_index == 0,
             });
             x += width + item.extra + distributed_gap;
@@ -987,6 +1101,148 @@ pub(super) fn flex_layouts(
         items: placements,
         has_anonymous_text,
     }
+}
+
+/// Item placements for `flex-flow: column wrap` in a container of fixed
+/// height whose items all have fixed heights, so columns can be filled before
+/// the items are laid out. Other column containers stack their items.
+// These borrowed inputs are one render pass's shared measurement context.
+#[allow(clippy::too_many_arguments)]
+fn flex_column_wrap(
+    commands: &[Command],
+    boxes: &[ComputedStyle],
+    blocks: &[Block],
+    images: &[RenderedImage],
+    ui: &egui::Ui,
+    open_index: usize,
+    style: ComputedStyle,
+    available_width: f32,
+    root: f32,
+    remaining_steps: &mut usize,
+) -> Option<Vec<FlexPlacement>> {
+    let Length::Px(height) = style.height else {
+        return None;
+    };
+    if style.flex_wrap != FlexWrap::Wrap {
+        return None;
+    }
+    let border = style.border_widths(root);
+    let resolve = |length: Length| length.resolve(available_width, style.font_size, root);
+    let height = if style.border_box {
+        height - resolve(style.padding[0]) - resolve(style.padding[2]) - border[0] - border[2]
+    } else {
+        height
+    }
+    .max(0.0);
+    // Each item's width, outer width and outer height.
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    for (command_index, command) in commands.iter().enumerate().skip(open_index + 1) {
+        *remaining_steps = remaining_steps.checked_sub(1)?;
+        match *command {
+            Command::Text(_) | Command::Image(_) | Command::Control(..) if depth == 0 => {
+                return None;
+            }
+            Command::Open(index) if depth == 0 => {
+                depth += 1;
+                let child = boxes[index];
+                if child.position.out_of_flow() {
+                    continue;
+                }
+                let Length::Px(child_height) = child.height else {
+                    return None;
+                };
+                let resolve = |length: Length| match length {
+                    Length::Auto => 0.0,
+                    length => length.resolve(available_width, child.font_size, root),
+                };
+                let border = child.border_widths(root);
+                let horizontal =
+                    resolve(child.padding[1]) + resolve(child.padding[3]) + border[1] + border[3];
+                let vertical =
+                    resolve(child.padding[0]) + resolve(child.padding[2]) + border[0] + border[2];
+                let width = match child.width {
+                    Length::Auto => intrinsic_width(
+                        commands,
+                        boxes,
+                        command_index,
+                        blocks,
+                        images,
+                        ui,
+                        remaining_steps,
+                    ),
+                    width => resolve(width) - if child.border_box { horizontal } else { 0.0 },
+                }
+                .max(1.0);
+                let outer_height = if child.border_box {
+                    child_height
+                } else {
+                    child_height + vertical
+                } + resolve(child.margin[0])
+                    + resolve(child.margin[2]);
+                let outer_width =
+                    width + horizontal + resolve(child.margin[1]) + resolve(child.margin[3]);
+                items.push((
+                    width,
+                    outer_width,
+                    outer_height.max(0.0),
+                    resolve(child.margin[3]),
+                ));
+            }
+            Command::Open(_) => depth += 1,
+            Command::Close if depth == 0 => break,
+            Command::Close => depth -= 1,
+            _ => {}
+        }
+    }
+    // Fill each column down to the container's height, then start another.
+    let gap = style
+        .column_gap
+        .resolve(0.0, style.font_size, root)
+        .max(0.0);
+    let row_gap = style.row_gap.resolve(0.0, style.font_size, root).max(0.0);
+    let mut columns: Vec<Vec<usize>> = Vec::new();
+    let mut used = 0.0;
+    for (index, &(_, _, outer_height, _)) in items.iter().enumerate() {
+        match columns.last_mut() {
+            Some(column) if used + row_gap + outer_height <= height + 0.5 => {
+                column.push(index);
+                used += row_gap + outer_height;
+            }
+            _ => {
+                columns.push(vec![index]);
+                used = outer_height;
+            }
+        }
+    }
+    let mut placements = vec![FlexPlacement::default(); items.len()];
+    let mut x = 0.0;
+    for column in columns {
+        let column_width = column
+            .iter()
+            .map(|&index| items[index].1)
+            .fold(0.0, f32::max);
+        let column_height = column.iter().map(|&index| items[index].2).sum::<f32>()
+            + row_gap * column.len().saturating_sub(1) as f32;
+        let mut y = match style.justify_content {
+            JustifyContent::Center => (height - column_height) / 2.0,
+            JustifyContent::End => height - column_height,
+            _ => 0.0,
+        }
+        .max(0.0);
+        for index in column {
+            let (width, _, outer_height, margin_left) = items[index];
+            placements[index] = FlexPlacement {
+                width,
+                x: x + margin_left,
+                y,
+                break_before: false,
+            };
+            y += outer_height + row_gap;
+        }
+        x += column_width + gap;
+    }
+    Some(placements)
 }
 
 impl BoxLayout {
@@ -1003,7 +1259,7 @@ impl BoxLayout {
             flow_top: start.y,
             content_top: start.y,
             padding_bottom: 0.0,
-            border: 0.0,
+            border: [0.0; 4],
             margin_bottom: 0.0,
             flex_row: false,
             flex_column: false,
@@ -1040,6 +1296,16 @@ impl BoxLayout {
             contains_image: false,
             absolute_image_bottom: f32::NEG_INFINITY,
             clipped: false,
+            definite_height: None,
+            containing: Containing {
+                index: None,
+                left: start.x,
+                top: start.y,
+                width,
+                height: None,
+            },
+            anchored_bottom: false,
+            min_height: 0.0,
         }
     }
 
@@ -1062,7 +1328,7 @@ impl BoxLayout {
                 let outer = if self.style.border_box {
                     height
                 } else {
-                    height + (self.content_top - self.top) + self.padding_bottom + self.border
+                    height + (self.content_top - self.top) + self.padding_bottom + self.border[2]
                 };
                 egui::Rangef::new(self.top, self.top + outer)
             }
@@ -1152,7 +1418,7 @@ impl BoxLayout {
     }
 
     pub(super) fn child_placement(&mut self, child: ComputedStyle) -> Option<ChildPlacement> {
-        if child.position == Position::Absolute {
+        if child.position.out_of_flow() {
             return None;
         }
         if self.style.display == Display::Table && child.display == Display::TableRow {
@@ -1208,6 +1474,8 @@ impl BoxLayout {
         root: f32,
         ui: &egui::Ui,
         placement: Option<ChildPlacement>,
+        viewport: egui::Rect,
+        previous: &[egui::Rect],
         commands: &[Command],
         boxes: &[ComputedStyle],
         blocks: &[Block],
@@ -1215,20 +1483,26 @@ impl BoxLayout {
         command_index: usize,
         remaining_steps: &mut usize,
     ) -> Self {
-        let basis = parent.width;
+        // Fixed boxes are placed against the page's first screen instead of
+        // their parent. Olive does not keep them in view while scrolling.
+        let fixed = style.position == Position::Fixed;
+        let (container_left, container_top, container_width) = if fixed {
+            (viewport.left(), viewport.top(), viewport.width())
+        } else if style.position == Position::Absolute {
+            let containing = parent.containing;
+            (containing.left, containing.top, containing.width)
+        } else {
+            (parent.content_left, parent.content_top, parent.width)
+        };
+        let basis = container_width;
         let resolve = |v: Length| v.resolve(basis, style.font_size, root);
         let margin = style.margin.map(resolve);
         let padding = style.padding.map(resolve);
-        let border = if style.border_solid {
-            resolve(style.border_width)
-        } else {
-            0.0
-        };
-        let sides = padding[1] + padding[3] + border * 2.0;
+        let border = style.border_widths(root);
+        let sides = padding[1] + padding[3] + border[1] + border[3];
         // Normal-flow boxes clear earlier floats when asked, and otherwise take
         // the room beside any floats at their top.
-        let in_flow =
-            placement.is_none() && style.position != Position::Absolute && parent.flows_floats();
+        let in_flow = placement.is_none() && !style.position.out_of_flow() && parent.flows_floats();
         if in_flow && style.clear != Clear::None {
             parent.clear(style.clear);
         }
@@ -1242,8 +1516,18 @@ impl BoxLayout {
         } else {
             (0.0, 0.0)
         };
+        // An absolutely positioned box has the room its insets leave.
+        let (inset_left, inset_right) = if style.position.out_of_flow() {
+            let inset = |side: usize| match style.inset[side] {
+                Length::Auto => 0.0,
+                length => resolve(length),
+            };
+            (inset(3), inset(1))
+        } else {
+            (inset_left, inset_right)
+        };
         let available =
-            (parent.width - inset_left - inset_right - margin[1] - margin[3] - sides).max(1.0);
+            (container_width - inset_left - inset_right - margin[1] - margin[3] - sides).max(1.0);
         let assigned = match placement {
             Some(ChildPlacement::Flex(item)) => Some(item.width),
             Some(ChildPlacement::Grid { width, .. }) if style.width == Length::Auto => {
@@ -1254,7 +1538,13 @@ impl BoxLayout {
         let width = if let Some(assigned) = assigned {
             assigned.min(available)
         } else if style.width == Length::Auto {
-            if style.position == Position::Absolute {
+            if style.position.out_of_flow()
+                && style.inset[1] != Length::Auto
+                && style.inset[3] != Length::Auto
+            {
+                // Pinned to both sides, it spans the room between them.
+                available
+            } else if style.position.out_of_flow() {
                 intrinsic_width(
                     commands,
                     boxes,
@@ -1325,7 +1615,9 @@ impl BoxLayout {
                 0.0
             };
         let flow_top = match placement {
-            Some(ChildPlacement::Flex(_)) => parent.content_top + parent.flex_y + margin[0],
+            Some(ChildPlacement::Flex(item)) => {
+                parent.content_top + parent.flex_y + item.y + margin[0]
+            }
             Some(ChildPlacement::Grid { y, .. }) => parent.content_top + y + margin[0],
             Some(ChildPlacement::TableRow(row)) => {
                 parent.cursor
@@ -1359,12 +1651,12 @@ impl BoxLayout {
             }
             _ => None,
         };
-        let absolute = style.position == Position::Absolute;
+        let absolute = style.position.out_of_flow();
         let left = if absolute {
             if style.inset[3] != Length::Auto {
-                parent.content_left + resolve(style.inset[3])
+                container_left + resolve(style.inset[3])
             } else if style.inset[1] != Length::Auto {
-                parent.content_left + parent.width - resolve(style.inset[1]) - width - sides
+                container_left + container_width - resolve(style.inset[1]) - width - sides
             } else {
                 parent.content_left
             }
@@ -1380,9 +1672,30 @@ impl BoxLayout {
         } else {
             normal_left
         };
+        // A box placed by its bottom edge needs its own height and that of its
+        // containing block. Heights not known in advance come from the
+        // previous frame, so the box settles on the frame after it first shows.
+        let containing_height = if fixed {
+            Some(viewport.height())
+        } else {
+            parent.containing.height.or_else(|| {
+                let index = parent.containing.index?;
+                let rect = previous.get(index).filter(|rect| rect.is_finite())?;
+                let border = boxes[index].border_widths(root);
+                Some(rect.height() - border[0] - border[2])
+            })
+        };
+        let anchored_bottom =
+            absolute && style.inset[2] != Length::Auto && containing_height.is_some();
         let top = if absolute {
             if style.inset[0] != Length::Auto {
-                parent.content_top + resolve(style.inset[0])
+                container_top + resolve(style.inset[0])
+            } else if let (true, Some(containing_height)) = (anchored_bottom, containing_height) {
+                let height = previous
+                    .get(index)
+                    .filter(|rect| rect.is_finite())
+                    .map_or(0.0, |rect| rect.height());
+                container_top + containing_height - resolve(style.inset[2]) - margin[2] - height
             } else if style.inset[2] != Length::Auto {
                 parent.cursor - resolve(style.inset[2])
             } else {
@@ -1400,13 +1713,72 @@ impl BoxLayout {
         } else {
             normal_top
         };
-        let content_top = top + border + padding[0];
+        let content_top = top + border[0] + padding[0];
+        // Percentage heights need a containing block whose height is known
+        // before its content is laid out.
+        let height_basis = if fixed {
+            Some(viewport.height())
+        } else if absolute {
+            parent.containing.height
+        } else {
+            parent.definite_height
+        };
+        let vertical_sides = padding[0] + padding[2] + border[0] + border[2];
+        let used_height = |length: Length| {
+            let height = match length {
+                Length::Auto => None,
+                length if length.has_percent() => {
+                    height_basis.map(|basis| length.resolve(basis, style.font_size, root))
+                }
+                length => Some(length.resolve(0.0, style.font_size, root)),
+            }?;
+            Some(
+                if style.border_box {
+                    height - vertical_sides
+                } else {
+                    height
+                }
+                .max(0.0),
+            )
+        };
+        // Pinned to the top and bottom of a containing block of known
+        // height, a box spans the height between them.
+        let definite_height = used_height(style.height).or_else(|| {
+            if !absolute || style.inset[0] == Length::Auto || style.inset[2] == Length::Auto {
+                return None;
+            }
+            let room = containing_height?
+                - resolve(style.inset[0])
+                - resolve(style.inset[2])
+                - margin[0]
+                - margin[2]
+                - vertical_sides;
+            Some(room.max(0.0))
+        });
         let grid = style.display == Display::Grid
             && !has_direct_text(commands, command_index, remaining_steps);
-        let row_flex = style.display == Display::Flex
-            && style.flex_direction == crate::css::FlexDirection::Row;
+        let row_flex = style.display == Display::Flex && style.flex_direction.is_row();
         let mut has_anonymous_text = false;
-        let flex_items = if row_flex {
+        let column_wrap = (style.display == Display::Flex && !row_flex)
+            .then(|| {
+                flex_column_wrap(
+                    commands,
+                    boxes,
+                    blocks,
+                    images,
+                    ui,
+                    command_index,
+                    style,
+                    width,
+                    root,
+                    remaining_steps,
+                )
+            })
+            .flatten();
+        let row_flex = row_flex || column_wrap.is_some();
+        let flex_items = if let Some(items) = column_wrap {
+            items
+        } else if row_flex {
             let layout = flex_layouts(
                 commands,
                 boxes,
@@ -1430,7 +1802,7 @@ impl BoxLayout {
             left,
             top,
             outer_width: width + sides,
-            content_left: left + border + padding[3],
+            content_left: left + border[3] + padding[3],
             width,
             cursor: content_top,
             flow_top,
@@ -1442,8 +1814,7 @@ impl BoxLayout {
             flex_row: (row_flex && !has_anonymous_text)
                 || row_cells.as_ref().is_some_and(|cells| !cells.is_empty()),
             flex_column: style.display == Display::Flex
-                && (style.flex_direction == crate::css::FlexDirection::Column
-                    || has_anonymous_text),
+                && (!style.flex_direction.is_row() || has_anonymous_text),
             table_row: row_cells.is_some(),
             flex_items: row_cells.unwrap_or(flex_items),
             flex_child_index: 0,
@@ -1489,24 +1860,26 @@ impl BoxLayout {
             contains_image: false,
             absolute_image_bottom: f32::NEG_INFINITY,
             clipped: false,
+            definite_height,
+            containing: if style.position == Position::Static {
+                parent.containing
+            } else {
+                Containing {
+                    index: Some(index),
+                    left: left + border[3],
+                    top: top + border[0],
+                    width: width + padding[1] + padding[3],
+                    height: definite_height.map(|height| height + padding[0] + padding[2]),
+                }
+            },
+            anchored_bottom,
+            min_height: definite_height
+                .unwrap_or(0.0)
+                .max(used_height(style.min_height).unwrap_or(0.0)),
         }
     }
     pub(super) fn finish(&self, ui: &egui::Ui, root: f32) -> egui::Rect {
-        let min_height = self
-            .style
-            .height
-            .resolve(0.0, self.style.font_size, root)
-            .max(
-                self.style
-                    .min_height
-                    .resolve(0.0, self.style.font_size, root),
-            );
-        let min_height = if self.style.border_box {
-            (min_height - (self.content_top - self.top) - self.padding_bottom - self.border)
-                .max(0.0)
-        } else {
-            min_height
-        };
+        let min_height = self.min_height;
         // Table spacing also separates the last row from the table's edge.
         let cursor = self.cursor
             + if self.table_row_index > 0 {
@@ -1520,7 +1893,7 @@ impl BoxLayout {
         let empty = self.cursor <= self.content_top
             && self.flex_height == 0.0
             && self.grid_height == 0.0
-            && self.style.height == Length::Auto
+            && self.definite_height.is_none()
             && self.style.position == Position::Relative;
         let bottom = cursor
             .max(self.float_bottom)
@@ -1533,7 +1906,7 @@ impl BoxLayout {
             .max(self.content_top + self.flex_height)
             .max(self.content_top + self.grid_height)
             + self.padding_bottom
-            + self.border;
+            + self.border[2];
         // A fixed height normally grows to fit, so differing fonts never make
         // text overlap; with clipped overflow it keeps its specified height.
         let bottom = match self.overflow_clip(root) {
@@ -1578,19 +1951,24 @@ impl BoxLayout {
             }
         }
         if let Some(paint) = self.paint {
-            ui.painter().set(
-                paint,
-                egui::epaint::RectShape::new(
+            let fill = paint_color(self.style.background, self.style.opacity);
+            // Matching sides draw as the background's own stroke.
+            let shape = match uniform_border(&self.style, root) {
+                Some(stroke) => egui::epaint::RectShape::new(
                     rect,
                     radius,
-                    paint_color(self.style.background, self.style.opacity),
-                    Stroke::new(
-                        self.border,
-                        paint_color(self.style.border_color, self.style.opacity),
-                    ),
+                    fill,
+                    stroke,
                     egui::StrokeKind::Inside,
+                )
+                .into(),
+                None => egui::Shape::Vec(
+                    std::iter::once(egui::epaint::RectShape::filled(rect, radius, fill).into())
+                        .chain(border_shape(&self.style, rect, radius, root))
+                        .collect(),
                 ),
-            );
+            };
+            ui.painter().set(paint, shape);
         }
     }
 }

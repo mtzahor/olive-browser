@@ -13,7 +13,8 @@ use selectors::{Key, Selector};
 use std::collections::HashMap;
 pub use values::{
     BoxShadow, Clear, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, FloatSide,
-    JustifyContent, Length, LineHeight, Position, TextAlign, VerticalAlign, WhiteSpace,
+    JustifyContent, Length, LineHeight, Position, TextAlign, TextTransform, VerticalAlign,
+    WhiteSpace,
 };
 use values::{Declaration, PROPERTIES, Value};
 
@@ -639,7 +640,7 @@ impl Stylesheet {
                 root_font = style.font_size;
             }
             if property == values::Property::Color {
-                style.border_color = border_color.unwrap_or(style.color);
+                style.border_color = [border_color.unwrap_or(style.color); 4];
             }
         }
         // Resolve em/rem now so explicit inheritance preserves computed lengths.
@@ -682,7 +683,7 @@ impl Stylesheet {
         style.max_width = computed_length(style.max_width);
         style.height = computed_length(style.height);
         style.min_height = computed_length(style.min_height);
-        style.border_width = computed_length(style.border_width);
+        style.border_width = style.border_width.map(computed_length);
         style.border_radius = style.border_radius.map(computed_length);
         style.flex_basis = computed_length(style.flex_basis);
         style.row_gap = computed_length(style.row_gap);
@@ -1320,8 +1321,7 @@ fn user_agent(
             style.row_gap = spacing;
             style.column_gap = spacing;
             if let Some(width) = table_border(element) {
-                style.border_solid = true;
-                style.border_width = width;
+                style.set_border(width, None);
                 border_color = Some(Color(128, 128, 128, 255));
             }
             // Separate a table from what follows, as paragraphs are, except
@@ -1359,8 +1359,7 @@ fn user_agent(
                 ],
             };
             if table.and_then(table_border).is_some() {
-                style.border_solid = true;
-                style.border_width = Length::Px(1.0);
+                style.set_border(Length::Px(1.0), None);
                 border_color = Some(Color(128, 128, 128, 255));
             }
             if element.attribute("nowrap").is_some() {

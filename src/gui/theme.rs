@@ -1,8 +1,9 @@
 //! Light and dark appearance. The chrome palette lives here; Focus reading
 //! colors are in `focus`, and documents keep their own presentation.
 //!
-//! The palette follows an olive grove: a shaded tab strip under the canopy,
-//! sunlit toolbars, leaf-green actions and an olive-oil gold for saved pages.
+//! The browser frame is liquid glass over an olive grove: translucent panes
+//! float on a soft backdrop of sage and sunlight (see `glass`), with
+//! leaf-green actions and an olive-oil gold for saved pages.
 use eframe::egui::{self, Color32, Shadow, Stroke};
 
 pub const DOCUMENT_PAPER: Color32 = Color32::from_rgb(250, 250, 246);
@@ -34,6 +35,22 @@ pub struct Palette {
     pub error_bg: Color32,
     pub warning: Color32,
     pub warning_bg: Color32,
+    /// The ambient backdrop behind the glass: top left, top right, bottom
+    /// right and bottom left.
+    pub backdrop: [Color32; 4],
+    /// Light falling on the backdrop from above the tab strip.
+    pub glow: Color32,
+    /// Glass panes, and the brighter glass of the active tab and pressed controls.
+    pub glass: Color32,
+    pub glass_strong: Color32,
+    /// Light caught along a pane's edge, and the faint outline outside it.
+    pub rim: Color32,
+    pub hairline: Color32,
+    pub glass_shadow: Color32,
+    /// The specular sheen across the top of a pane.
+    pub sheen: Color32,
+    /// Recessed glass for fields, such as the address field.
+    pub well: Color32,
 }
 
 impl Theme {
@@ -71,6 +88,20 @@ impl Theme {
                 error_bg: Color32::from_rgb(255, 236, 229),
                 warning: Color32::from_rgb(137, 90, 16),
                 warning_bg: Color32::from_rgb(250, 239, 212),
+                backdrop: [
+                    Color32::from_rgb(214, 226, 196),
+                    Color32::from_rgb(239, 234, 210),
+                    Color32::from_rgb(229, 226, 202),
+                    Color32::from_rgb(203, 219, 190),
+                ],
+                glow: Color32::from_rgb(255, 253, 238),
+                glass: Color32::from_white_alpha(150),
+                glass_strong: Color32::from_white_alpha(222),
+                rim: Color32::from_white_alpha(235),
+                hairline: Color32::from_rgba_unmultiplied(48, 62, 28, 30),
+                glass_shadow: Color32::from_rgba_unmultiplied(40, 52, 22, 38),
+                sheen: Color32::from_white_alpha(150),
+                well: Color32::from_white_alpha(196),
             },
             Self::Dark => Palette {
                 canvas: Color32::from_rgb(24, 28, 23),
@@ -89,6 +120,20 @@ impl Theme {
                 error_bg: Color32::from_rgb(65, 36, 29),
                 warning: Color32::from_rgb(238, 193, 113),
                 warning_bg: Color32::from_rgb(58, 47, 26),
+                backdrop: [
+                    Color32::from_rgb(29, 36, 26),
+                    Color32::from_rgb(21, 25, 20),
+                    Color32::from_rgb(27, 30, 22),
+                    Color32::from_rgb(17, 22, 17),
+                ],
+                glow: Color32::from_rgb(50, 64, 37),
+                glass: Color32::from_white_alpha(18),
+                glass_strong: Color32::from_white_alpha(38),
+                rim: Color32::from_white_alpha(46),
+                hairline: Color32::from_black_alpha(110),
+                glass_shadow: Color32::from_black_alpha(120),
+                sheen: Color32::from_white_alpha(22),
+                well: Color32::from_black_alpha(70),
             },
         }
     }
@@ -102,29 +147,39 @@ impl Theme {
         v.override_text_color = None;
         v.weak_text_color = Some(p.muted);
         v.panel_fill = p.canvas;
-        v.window_fill = p.surface;
-        v.window_stroke = Stroke::new(1.0, p.border);
-        v.window_corner_radius = 14.into();
-        v.menu_corner_radius = 10.into();
+        // Windows and menus are frosted glass: the page shows faintly through.
+        v.window_fill = match self {
+            Self::Light => Color32::from_rgba_unmultiplied(252, 252, 246, 244),
+            Self::Dark => Color32::from_rgba_unmultiplied(34, 40, 31, 242),
+        };
+        v.window_stroke = Stroke::new(
+            1.0,
+            match self {
+                Self::Light => Color32::from_rgba_unmultiplied(48, 62, 28, 44),
+                Self::Dark => Color32::from_white_alpha(34),
+            },
+        );
+        v.window_corner_radius = 18.into();
+        v.menu_corner_radius = 14.into();
         // Shadows take the grove's green-brown rather than neutral gray.
         let shade = |alpha| match self {
             Self::Light => Color32::from_rgba_unmultiplied(40, 52, 22, alpha),
             Self::Dark => Color32::from_black_alpha(alpha.saturating_mul(3)),
         };
         v.window_shadow = Shadow {
-            offset: [0, 10],
-            blur: 30,
+            offset: [0, 16],
+            blur: 44,
             spread: 0,
-            color: shade(38),
+            color: shade(40),
         };
         v.popup_shadow = Shadow {
-            offset: [0, 5],
-            blur: 16,
+            offset: [0, 8],
+            blur: 26,
             spread: 0,
-            color: shade(30),
+            color: shade(34),
         };
         v.extreme_bg_color = p.canvas;
-        v.text_edit_bg_color = Some(p.surface);
+        v.text_edit_bg_color = Some(p.well);
         v.faint_bg_color = p.chrome;
         v.code_bg_color = p.chrome;
         v.hyperlink_color = p.accent;
@@ -133,19 +188,25 @@ impl Theme {
         v.text_cursor.stroke = Stroke::new(2.0, p.accent);
         v.warn_fg_color = p.warning;
         v.error_fg_color = p.error;
+        // Controls are glass too: brighter as the pointer reaches them, tinted
+        // with leaf green while pressed.
+        let hover = match self {
+            Self::Light => Color32::from_white_alpha(210),
+            Self::Dark => Color32::from_white_alpha(28),
+        };
         for (widget, fill, border) in [
             (&mut v.widgets.noninteractive, p.surface, p.border),
-            (&mut v.widgets.inactive, p.surface, p.border),
-            (&mut v.widgets.hovered, p.hover, p.accent),
+            (&mut v.widgets.inactive, p.glass_strong, p.hairline),
+            (&mut v.widgets.hovered, hover, p.hairline),
             (&mut v.widgets.active, p.selection, p.accent),
             // Also the title bar of the front window, which should stay quiet.
-            (&mut v.widgets.open, p.hover, p.accent),
+            (&mut v.widgets.open, hover, p.hairline),
         ] {
             widget.bg_fill = fill;
             widget.weak_bg_fill = fill;
             widget.bg_stroke = Stroke::new(1.0, border);
             widget.fg_stroke = Stroke::new(1.0, p.ink);
-            widget.corner_radius = 8.into();
+            widget.corner_radius = 10.into();
             widget.expansion = 0.0;
         }
         // Sliders and checkboxes need a solid track against the window surface.

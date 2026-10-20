@@ -124,14 +124,7 @@ impl Page {
                     if !element.is_html()
                         || matches!(
                             tag,
-                            "head"
-                                | "script"
-                                | "style"
-                                | "template"
-                                | "title"
-                                | "iframe"
-                                | "object"
-                                | "embed"
+                            "head" | "script" | "style" | "template" | "title" | "iframe" | "embed"
                         )
                         || (tag == "noscript" && scripting_enabled)
                     {
@@ -181,14 +174,26 @@ impl Page {
                             }
                         }
                         // Inline-block siblings share a horizontal run and wrap to
-                        // the next row when needed. Floats alone lay out as floats.
+                        // the next row when needed, unless white space may not
+                        // wrap. Floats alone lay out as floats.
                         if has_layout_children
                             && all_horizontal_items
                             && !all_floats
                             && !has_direct_text
                         {
                             style.css.display = Display::Flex;
-                            style.css.flex_wrap = FlexWrap::Wrap;
+                            if style.css.white_space == WhiteSpace::NoWrap {
+                                // The run overflows, as inline boxes do, rather
+                                // than squeezing its items.
+                                style.css.flex_wrap = FlexWrap::NoWrap;
+                                for child in doc.children(id) {
+                                    if let Some(css) = prefetched_child_styles.get_mut(&child) {
+                                        css.flex_shrink = 0.0;
+                                    }
+                                }
+                            } else {
+                                style.css.flex_wrap = FlexWrap::Wrap;
+                            }
                         }
                     }
                     if reading.is_none()
@@ -226,7 +231,7 @@ impl Page {
                     // Relative offsets do not apply to inline runs, so only absolute
                     // positioning and floats turn an inline element into a box.
                     let block = style.flex_parent
-                        || style.css.position == Position::Absolute
+                        || style.css.position.out_of_flow()
                         || style.css.float_side != FloatSide::None
                         || matches!(
                             style.css.display,
@@ -355,9 +360,8 @@ impl Page {
             }
             let children: Vec<_> = doc.children(id).collect();
             let mut child_style = style;
-            child_style.flex_parent = style.css.display == Display::Grid
-                || (style.css.display == Display::Flex
-                    && style.css.flex_direction == crate::css::FlexDirection::Row);
+            // Flex and grid items are blocks, stacked or placed side by side.
+            child_style.flex_parent = matches!(style.css.display, Display::Grid | Display::Flex);
             pending.extend(
                 children
                     .into_iter()
@@ -474,6 +478,7 @@ impl Builder {
         self.push(marker);
     }
     fn literal(&mut self, text: &str, style: Style) {
+        let text = self.transform(text, style.css.text_transform);
         let remaining = MAX_TEXT.saturating_sub(self.characters);
         let accepted: String = text.chars().take(remaining).collect();
         self.characters += accepted.chars().count();
@@ -504,6 +509,34 @@ impl Builder {
         self.current.job.append(&accepted, 0.0, style.format());
         self.pending_space = false;
     }
+    /// Apply CSS `text-transform`. Capitalized words start after white space,
+    /// including space that ends the text already in the block.
+    fn transform<'a>(&self, text: &'a str, transform: TextTransform) -> std::borrow::Cow<'a, str> {
+        match transform {
+            TextTransform::None => text.into(),
+            TextTransform::Uppercase => text.to_uppercase().into(),
+            TextTransform::Lowercase => text.to_lowercase().into(),
+            TextTransform::Capitalize => {
+                let mut word_start = self
+                    .current
+                    .job
+                    .text
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace);
+                let mut capitalized = String::with_capacity(text.len());
+                for c in text.chars() {
+                    if word_start && c.is_alphabetic() {
+                        capitalized.extend(c.to_uppercase());
+                    } else {
+                        capitalized.push(c);
+                    }
+                    word_start = c.is_whitespace();
+                }
+                capitalized.into()
+            }
+        }
+    }
     fn text(&mut self, text: &str, style: Style) {
         if matches!(style.css.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap) {
             self.literal(text, style);
@@ -515,6 +548,9 @@ impl Builder {
         for c in text.chars() {
             if matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000c}') {
                 self.pending_space = true;
+            } else if private_use(c) {
+                // Icon fonts draw these; without the site's font they are blank boxes.
+                continue;
             } else {
                 if count > remaining {
                     self.page.truncated = true;
@@ -539,6 +575,12 @@ impl Builder {
         }
         self.pending_space = trailing_space;
     }
+}
+
+/// Characters in the Unicode private use areas, which only icon and other
+/// custom web fonts define.
+fn private_use(c: char) -> bool {
+    matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{10ffff}')
 }
 
 pub(super) fn html_dimension(value: Option<&str>) -> Option<f32> {

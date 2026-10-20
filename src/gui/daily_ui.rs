@@ -1,6 +1,7 @@
 use crate::gui::{
     downloads::{Downloads, format_bytes, fraction},
-    new_tab::{host_label, monogram},
+    favicons::Favicons,
+    new_tab::{host_label, monogram, site_icon_badge},
     profile::Profile,
     theme::{Palette, Theme},
     ui_icons::{Icon, IconButton, quiet_text_button},
@@ -64,6 +65,7 @@ impl DailyWindows {
         ctx: &egui::Context,
         profile: &mut Profile,
         downloads: &mut Downloads,
+        favicons: &mut Favicons,
     ) -> Option<String> {
         let palette = profile.data.settings.browser_theme.palette();
         let mut open_url = None;
@@ -90,7 +92,16 @@ impl DailyWindows {
                             };
                             let (disc, _) = ui
                                 .allocate_exact_size(egui::vec2(32.0, 48.0), egui::Sense::hover());
-                            monogram(ui, disc.center(), 14.0, &host_label(&bookmark.url), title);
+                            match favicons.get(ctx, &bookmark.url) {
+                                Some(icon) => site_icon_badge(ui, disc.center(), 14.0, icon.id()),
+                                None => monogram(
+                                    ui,
+                                    disc.center(),
+                                    14.0,
+                                    &host_label(&bookmark.url),
+                                    title,
+                                ),
+                            }
                             let text_width = (ui.available_width() - 48.0).max(120.0);
                             ui.vertical(|ui| {
                                 ui.set_width(text_width);

@@ -1,10 +1,12 @@
 //! The new-tab page: an olive branch, the open-file action, bookmarks as
 //! tiles and the most recently visited pages.
 use crate::gui::{
+    favicons::Favicons,
+    glass::{self, Pane},
     history::{BrowsingHistory, HistoryEntry},
     profile::Bookmark,
     theme::{Palette, Theme},
-    ui_icons::{Icon, IconButton},
+    ui_icons::{Icon, IconButton, paint_site_icon},
 };
 use crate::net::Url;
 use eframe::egui::{
@@ -31,6 +33,7 @@ pub fn show(
     theme: Theme,
     bookmarks: &[Bookmark],
     history: &BrowsingHistory,
+    favicons: &mut Favicons,
 ) -> Choice {
     let palette = theme.palette();
     let mut choice = Choice::default();
@@ -99,14 +102,14 @@ pub fn show(
                 if !tiles.is_empty() {
                     ui.add_space(28.0);
                     section_heading(ui, palette, Icon::Star, "Bookmarks");
-                    bookmark_tiles(ui, palette, tiles, &mut choice);
+                    bookmark_tiles(ui, palette, tiles, favicons, &mut choice);
                 }
                 if !recent.is_empty() {
                     ui.add_space(if tiles.is_empty() { 28.0 } else { 18.0 });
                     section_heading(ui, palette, Icon::History, "Recently visited");
                     let now = time::OffsetDateTime::now_utc().unix_timestamp();
                     for entry in recent {
-                        recent_row(ui, palette, entry, now, &mut choice);
+                        recent_row(ui, palette, entry, now, favicons, &mut choice);
                     }
                 }
                 ui.add_space(32.0);
@@ -151,7 +154,13 @@ fn text_line(
     ui.painter().layout_job(job)
 }
 
-fn bookmark_tiles(ui: &mut Ui, palette: Palette, tiles: &[Bookmark], choice: &mut Choice) {
+fn bookmark_tiles(
+    ui: &mut Ui,
+    palette: Palette,
+    tiles: &[Bookmark],
+    favicons: &mut Favicons,
+    choice: &mut Choice,
+) {
     let width = ui.available_width();
     let per_row = (((width + TILE_GAP) / (160.0 + TILE_GAP)).floor() as usize).clamp(1, 4);
     let tile_width = (width - TILE_GAP * (per_row - 1) as f32) / per_row as f32;
@@ -169,32 +178,24 @@ fn bookmark_tiles(ui: &mut Ui, palette: Palette, tiles: &[Bookmark], choice: &mu
                 response.widget_info(|| WidgetInfo::labeled(Role::Link, true, title));
                 let response = response.on_hover_text(&bookmark.url);
                 let hovered = response.hovered() || response.has_focus();
-                ui.painter().rect(
+                // Glass tiles brighten under the pointer.
+                ui.painter().add(glass::pane(
+                    ui.ctx(),
                     rect,
-                    12,
+                    16,
+                    &palette,
                     if hovered {
-                        palette.hover
+                        Pane::Prominent
                     } else {
-                        palette.surface
+                        Pane::Regular
                     },
-                    Stroke::new(
-                        1.0,
-                        if hovered {
-                            palette.accent
-                        } else {
-                            palette.border
-                        },
-                    ),
-                    egui::StrokeKind::Inside,
-                );
+                ));
                 let host = host_label(&bookmark.url);
-                monogram(
-                    ui,
-                    pos2(rect.left() + 28.0, rect.center().y),
-                    15.0,
-                    &host,
-                    title,
-                );
+                let badge = pos2(rect.left() + 28.0, rect.center().y);
+                match favicons.get(ui.ctx(), &bookmark.url) {
+                    Some(icon) => site_icon_badge(ui, badge, 15.0, icon.id()),
+                    None => monogram(ui, badge, 15.0, &host, title),
+                }
                 let inner = tile_width - 64.0;
                 let title = text_line(ui, title, 14.0, palette.ink, inner);
                 ui.painter().galley(
@@ -215,17 +216,32 @@ fn bookmark_tiles(ui: &mut Ui, palette: Palette, tiles: &[Bookmark], choice: &mu
     }
 }
 
-fn recent_row(ui: &mut Ui, palette: Palette, entry: &HistoryEntry, now: i64, choice: &mut Choice) {
+fn recent_row(
+    ui: &mut Ui,
+    palette: Palette,
+    entry: &HistoryEntry,
+    now: i64,
+    favicons: &mut Favicons,
+    choice: &mut Choice,
+) {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Link, true, entry.display_title()));
     let response = response.on_hover_text(&entry.url);
     if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, 10, palette.hover);
+        ui.painter()
+            .add(glass::pane(ui.ctx(), rect, 14, &palette, Pane::Regular));
     }
     let remote = entry.url.starts_with("http:") || entry.url.starts_with("https:");
     let icon_rect =
         Rect::from_center_size(pos2(rect.left() + 22.0, rect.center().y), Vec2::splat(18.0));
-    (if remote { Icon::Globe } else { Icon::Page }).paint(ui.painter(), icon_rect, palette.muted);
+    match favicons.get(ui.ctx(), &entry.url) {
+        Some(icon) => paint_site_icon(ui.painter(), icon_rect, icon.id()),
+        None => (if remote { Icon::Globe } else { Icon::Page }).paint(
+            ui.painter(),
+            icon_rect,
+            palette.muted,
+        ),
+    }
     let when = text_line(
         ui,
         &relative_time(entry.last_visited, now),
@@ -334,6 +350,22 @@ pub(crate) fn monogram(ui: &Ui, center: Pos2, radius: f32, host: &str, title: &s
         initial,
         FontId::proportional(radius),
         Color32::WHITE,
+    );
+}
+
+/// A site icon on a quiet disc, in place of a [`monogram`].
+pub(crate) fn site_icon_badge(ui: &Ui, center: Pos2, radius: f32, icon: egui::TextureId) {
+    let visuals = ui.visuals();
+    ui.painter().circle(
+        center,
+        radius,
+        visuals.faint_bg_color,
+        visuals.widgets.noninteractive.bg_stroke,
+    );
+    paint_site_icon(
+        ui.painter(),
+        Rect::from_center_size(center, Vec2::splat(radius * 1.1)),
+        icon,
     );
 }
 

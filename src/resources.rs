@@ -20,6 +20,8 @@ pub const MAX_PAGE_CSS_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PAGE_SCRIPT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PAGE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest site icon file `PageResources::load_favicon` accepts.
+pub const MAX_FAVICON_BYTES: usize = 1024 * 1024;
 // Page resources are opportunistic: a stalled image or stylesheet must not
 // hold the whole document for several seconds before it can be displayed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -52,6 +54,53 @@ pub struct ResourceReport {
 }
 
 impl PageResources {
+    /// Where to look for the page's icon, in order: the best raster
+    /// `<link rel="icon">` (or Apple touch icon), then `/favicon.ico` for
+    /// websites. SVG icons are skipped.
+    pub fn favicon_addresses(location: &Location, document: &Document) -> Vec<Location> {
+        let base = location.document_base(document);
+        let declared = favicon_link(document).and_then(|href| base.resolve(href).ok());
+        let fallback = location
+            .is_remote()
+            .then(|| location.resolve("/favicon.ico").ok())
+            .flatten();
+        let mut addresses: Vec<Location> = declared.into_iter().collect();
+        if let Some(fallback) = fallback.filter(|fallback| !addresses.contains(fallback)) {
+            addresses.push(fallback);
+        }
+        addresses
+    }
+
+    /// Fetch the first of `addresses` that answers with an image. Failures are
+    /// silent and not part of the page's resource report.
+    pub fn load_favicon(
+        loader: &DocumentLoader,
+        location: &Location,
+        addresses: &[Location],
+        timeout: Duration,
+    ) -> Option<ExternalImage> {
+        let started = Instant::now();
+        for target in addresses {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            if let Ok(loaded) = loader.load_resource(
+                location,
+                target.clone(),
+                ResourceKind::Image,
+                remaining.min(REQUEST_TIMEOUT),
+                MAX_FAVICON_BYTES,
+            ) {
+                return Some(ExternalImage {
+                    reference: loaded.location.as_str().to_owned(),
+                    bytes: loaded.bytes,
+                });
+            }
+        }
+        None
+    }
+
     /// Snapshot supported links, scripts, and images using the final document URL and first
     /// base href. No imports, dynamic resources, modules, or recursive loads.
     /// Disabled scripting never requests script sources.
@@ -94,8 +143,10 @@ impl PageResources {
             };
             // Without scripting, `noscript` holds the page's real fallback
             // content, such as stylesheets that scripts would otherwise insert.
-            eligible[id.index()] =
-                !element.is_inert_container() || (!scripting && element.is_html_tag("noscript"));
+            // Olive never shows `object` data, so its fallback content shows instead.
+            eligible[id.index()] = !element.is_inert_container()
+                || (!scripting && element.is_html_tag("noscript"))
+                || element.is_html_tag("object");
             let (kind, reference) =
                 if element.name.local.as_str() == "link" && applicable_style(element) {
                     (ResourceKind::Stylesheet, element.attribute("href"))
@@ -244,6 +295,58 @@ impl PageResources {
         }
         resources
     }
+}
+
+/// The `href` of the icon link that suits a tab best: a raster icon nearest
+/// 32 pixels, or an Apple touch icon when the page declares nothing else.
+fn favicon_link(document: &Document) -> Option<&str> {
+    let mut best: Option<(i32, &str)> = None;
+    for id in document.descendants(document.root()) {
+        let Some(element) = document.node(id).and_then(|node| node.as_element()) else {
+            continue;
+        };
+        if !element.is_html_tag("link") {
+            continue;
+        }
+        let (Some(rel), Some(href)) = (element.attribute("rel"), element.attribute("href")) else {
+            continue;
+        };
+        let href = href.trim();
+        let rel = rel.to_ascii_lowercase();
+        let icon = rel.split_ascii_whitespace().any(|token| token == "icon");
+        let touch = rel
+            .split_ascii_whitespace()
+            .any(|token| token.starts_with("apple-touch-icon"));
+        let path = href.split(['?', '#']).next().unwrap_or_default();
+        let svg = element
+            .attribute("type")
+            .is_some_and(|kind| kind.to_ascii_lowercase().contains("svg"))
+            || path.to_ascii_lowercase().ends_with(".svg");
+        if href.is_empty() || svg || !(icon || touch) {
+            continue;
+        }
+        // How far the declared size nearest 32 pixels is from it, as in
+        // sizes="16x16 32x32".
+        let distance = element
+            .attribute("sizes")
+            .into_iter()
+            .flat_map(str::split_ascii_whitespace)
+            .filter_map(|size| {
+                let (width, _) = size.split_once(['x', 'X'])?;
+                width.parse::<i32>().ok()
+            })
+            .map(|size| (size - 32).abs().min(90))
+            .min();
+        let score = match (icon, distance) {
+            (true, Some(distance)) => 100 - distance,
+            (true, None) => 60,
+            (false, _) => 5,
+        };
+        if best.is_none_or(|(previous, _)| score > previous) {
+            best = Some((score, href));
+        }
+    }
+    best.map(|(_, href)| href)
 }
 
 /// Fetch page resources with one bounded pool. Fetching resource classes

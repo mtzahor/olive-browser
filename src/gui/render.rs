@@ -10,7 +10,7 @@ use crate::{
     css::Direction,
     css::{
         Clear, Color, ComputedStyle, Display, FlexWrap, FloatSide, JustifyContent, Length,
-        Position, StyleBudget, Stylesheet, TextAlign, VerticalAlign, WhiteSpace,
+        Position, StyleBudget, Stylesheet, TextAlign, TextTransform, VerticalAlign, WhiteSpace,
     },
 };
 use eframe::egui::epaint::text::VariationCoords;
@@ -25,6 +25,7 @@ mod bidi;
 mod build;
 mod layout;
 mod paint;
+mod stacking;
 #[cfg(test)]
 mod tests;
 
@@ -196,6 +197,9 @@ pub struct Page {
     commands: Vec<Command>,
     #[serde(skip)]
     box_rects: Vec<egui::Rect>,
+    /// Consecutive frames repainted to settle bottom-anchored boxes.
+    #[serde(skip)]
+    settle_frames: u8,
     root_font: f32,
     links: HashMap<NodeId, String>,
     anchors: Vec<String>,
@@ -449,7 +453,7 @@ impl Page {
             && !self
                 .boxes
                 .iter()
-                .any(|s| s.background.3 > 0 || s.border_solid || s.height != Length::Auto)
+                .any(|s| s.background.3 > 0 || s.has_border() || s.height != Length::Auto)
     }
     pub fn image_count(&self) -> usize {
         self.images.len()

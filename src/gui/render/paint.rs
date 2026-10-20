@@ -1,6 +1,7 @@
 //! Paint a laid-out `Page` and turn pointer input into page actions.
 use super::bidi::layout_bidi;
-use super::layout::{BoxLayout, image_placement, outside, shadow_shape};
+use super::layout::{BoxLayout, border_shape, image_placement, outside, shadow_shape};
+use super::stacking::Stacking;
 use super::*;
 
 impl Page {
@@ -14,7 +15,18 @@ impl Page {
         textures: &mut ImageTextureCache,
     ) -> Option<PageClick> {
         let mut clicked = None;
-        let mut match_offset = 0;
+        // Find numbers matches in document order, which deferred fixed boxes
+        // leave, so each block's first match number is counted up front.
+        let match_offsets: Vec<usize> = self
+            .find
+            .blocks
+            .iter()
+            .scan(0, |total, matches| {
+                let first = *total;
+                *total += matches.len();
+                Some(first)
+            })
+            .collect();
         let mut scroll_to = self.scroll_to.take();
         let start = ui.cursor().min;
         if scroll_to.as_deref() == Some("") || scroll_to.as_deref() == Some("top") {
@@ -27,7 +39,11 @@ impl Page {
             }
         }
         let width = ui.available_width().max(1.0);
+        let viewport = egui::Rect::from_min_size(start, egui::vec2(width, ui.clip_rect().height()));
+        // The page's first screen is the initial containing block.
         let mut stack = vec![BoxLayout::root(start, width)];
+        stack[0].definite_height = Some(viewport.height());
+        stack[0].containing.height = Some(viewport.height());
         self.box_rects.resize(self.boxes.len(), egui::Rect::NOTHING);
         let mut right = start.x + width;
         let mut layout_measure_steps = MAX_LAYOUT_MEASURE_STEPS;
@@ -36,8 +52,50 @@ impl Page {
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
         // Paint clips of the open `overflow: hidden` boxes, outermost first.
         let mut clips = vec![ui.clip_rect()];
-        for (command_index, command) in self.commands.iter().enumerate() {
-            match *command {
+        // Positioned boxes are reordered to paint above the rest once the
+        // page is drawn.
+        let mut stacking = Stacking::new(ui);
+        let mut unsettled = false;
+        // Fixed boxes are laid out after the rest of the page, from the spot
+        // where they occur, so ancestors' overflow clips do not apply.
+        let mut deferred: Vec<(usize, usize, egui::Pos2, f32)> = Vec::new();
+        let mut next_deferred = 0;
+        let mut in_deferred = false;
+        let mut position = 0;
+        let mut end = self.commands.len();
+        loop {
+            if position >= end {
+                if in_deferred {
+                    stack.pop();
+                }
+                let Some(&(first, last, origin, width)) = deferred.get(next_deferred) else {
+                    break;
+                };
+                next_deferred += 1;
+                stack.push(BoxLayout::root(origin, width));
+                in_deferred = true;
+                position = first;
+                end = last + 1;
+                continue;
+            }
+            let command_index = position;
+            position += 1;
+            let command = self.commands[command_index];
+            if let Command::Open(index) = command {
+                if !in_deferred && self.boxes[index].position == Position::Fixed {
+                    let close = matching_close(&self.commands, command_index);
+                    let parent = stack.last().unwrap();
+                    deferred.push((
+                        command_index,
+                        close,
+                        egui::pos2(parent.content_left, parent.cursor),
+                        parent.width,
+                    ));
+                    position = close + 1;
+                    continue;
+                }
+            }
+            match command {
                 Command::Anchor(index) => {
                     if scroll_to.as_deref() == Some(self.anchors[index].as_str()) {
                         let top = egui::pos2(start.x, stack.last().unwrap().cursor);
@@ -49,6 +107,7 @@ impl Page {
                     }
                 }
                 Command::Open(index) => {
+                    stacking.open(ui, &self.boxes[index], command_index);
                     let parent = stack.last_mut().unwrap();
                     let placement = parent.child_placement(self.boxes[index]);
                     let layout = BoxLayout::open(
@@ -58,6 +117,8 @@ impl Page {
                         self.root_font,
                         ui,
                         placement,
+                        viewport,
+                        &self.box_rects,
                         &self.commands,
                         &self.boxes,
                         &self.blocks,
@@ -66,6 +127,7 @@ impl Page {
                         &mut layout_measure_steps,
                     );
                     right = right.max(layout.left + layout.outer_width);
+                    stacking.opened(ui, &self.boxes[index]);
                     let mut layout = layout;
                     if let Some(clip) = layout.overflow_clip(self.root_font) {
                         let clip = clip.intersect(*clips.last().unwrap());
@@ -87,7 +149,11 @@ impl Page {
                     }
                     let root = self.root_font;
                     let rect = layout.finish(ui, root);
-                    self.box_rects[layout.index] = rect;
+                    let previous = std::mem::replace(&mut self.box_rects[layout.index], rect);
+                    if layout.anchored_bottom && (previous.height() - rect.height()).abs() > 0.5 {
+                        unsettled = true;
+                    }
+                    stacking.close(ui, &layout.style);
                     // Table cells fill the height of their row; cells spanning
                     // rows wait for the last one, or for the end of the table.
                     let row_bottom = layout.content_top + layout.flex_height;
@@ -172,7 +238,7 @@ impl Page {
                     let x = parent.content_left + inset_left;
                     if block.rule {
                         // An authored border or background already paints the rule's box.
-                        if !block.style.border_solid && block.style.background.3 == 0 {
+                        if !block.style.has_border() && block.style.background.3 == 0 {
                             ui.painter().hline(
                                 x..=x + width,
                                 parent.cursor + 0.5,
@@ -273,7 +339,7 @@ impl Page {
                         }
                     }
                     if let Some(matches) = self.find.blocks.get(index) {
-                        let active = self.find_current.checked_sub(match_offset);
+                        let active = self.find_current.checked_sub(match_offsets[index]);
                         let visual_matches = visual_match_ranges(block, matches);
                         if let Some(target) =
                             paint_matches(ui, &galley, galley_origin, &visual_matches, active)
@@ -283,7 +349,6 @@ impl Page {
                                 self.find_scroll = false;
                             }
                         }
-                        match_offset += matches.len();
                     }
                     parent.cursor += rect.height();
                     right = right.max(rect.right());
@@ -348,9 +413,7 @@ impl Page {
                     }
                     // Rounded corners clip the picture itself, inset by any border
                     // and padding so the frame keeps an even width.
-                    let inset = (placement.border
-                        + (content.left() - outer.left() - placement.border).max(0.0))
-                    .min(127.0) as u8;
+                    let inset = (content.left() - outer.left()).clamp(0.0, 127.0) as u8;
                     ui.painter().add(
                         egui::epaint::RectShape::filled(
                             content,
@@ -367,16 +430,10 @@ impl Page {
                             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                         ),
                     );
-                    if placement.border > 0.0 {
-                        ui.painter().rect_stroke(
-                            outer,
-                            placement.radius,
-                            Stroke::new(
-                                placement.border,
-                                paint_color(image.style.border_color, image.style.opacity),
-                            ),
-                            egui::epaint::StrokeKind::Inside,
-                        );
+                    if let Some(border) =
+                        border_shape(&image.style, outer, placement.radius.into(), self.root_font)
+                    {
+                        ui.painter().add(border);
                     }
                     let response = ui.interact(
                         outer,
@@ -423,6 +480,16 @@ impl Page {
                 }
             }
         }
+        stacking.finish(ui);
+        // Boxes placed by their bottom edge used heights from the previous
+        // frame; when those changed, lay out once more. A few frames suffice,
+        // so oscillating content cannot keep repainting.
+        if unsettled && self.settle_frames < 3 {
+            self.settle_frames += 1;
+            ui.ctx().request_repaint();
+        } else if !unsettled {
+            self.settle_frames = 0;
+        }
         ui.set_clip_rect(clips[0]);
         let bottom = stack[0].cursor.max(start.y);
         ui.allocate_space(egui::vec2(right - start.x, bottom - start.y));
@@ -443,6 +510,24 @@ impl Page {
 }
 
 // Highlight glyph ranges after text painting; translucent fills preserve authored colors.
+/// The index of the `Close` that ends the box opened at `open`.
+fn matching_close(commands: &[Command], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (index, command) in commands.iter().enumerate().skip(open) {
+        match command {
+            Command::Open(_) => depth += 1,
+            Command::Close => {
+                depth -= 1;
+                if depth == 0 {
+                    return index;
+                }
+            }
+            _ => {}
+        }
+    }
+    commands.len() - 1
+}
+
 fn paint_matches(
     ui: &egui::Ui,
     galley: &egui::Galley,

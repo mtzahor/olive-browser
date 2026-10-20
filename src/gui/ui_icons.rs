@@ -314,7 +314,11 @@ pub struct IconButton<'a> {
     warning: bool,
     primary: bool,
     quiet: bool,
+    /// No background of its own, as when it sits on a pane that reacts.
+    bare: bool,
     spinning: bool,
+    /// A picture, such as a site icon, shown in place of the icon.
+    image: Option<egui::TextureId>,
 }
 
 impl<'a> IconButton<'a> {
@@ -324,7 +328,9 @@ impl<'a> IconButton<'a> {
         let label = label.into();
         Self {
             label: label.text().to_owned(),
-            button: Button::new((Self::atom(), label)).gap(7.0).corner_radius(7),
+            button: Button::new((Self::atom(), label))
+                .gap(7.0)
+                .corner_radius(10),
             icon,
             icon_only: false,
             has_shortcut: false,
@@ -332,7 +338,9 @@ impl<'a> IconButton<'a> {
             warning: false,
             primary: false,
             quiet: false,
+            bare: false,
             spinning: false,
+            image: None,
         }
     }
 
@@ -342,9 +350,10 @@ impl<'a> IconButton<'a> {
 
     pub fn icon_only(icon: Icon, label: &str) -> Self {
         Self {
+            // Round, like drops of glass.
             button: Button::new(Self::atom())
                 .min_size(Vec2::splat(36.0))
-                .corner_radius(7),
+                .corner_radius(18),
             icon_only: true,
             ..Self::new(icon, label)
         }
@@ -359,6 +368,14 @@ impl<'a> IconButton<'a> {
     pub fn quiet(mut self) -> Self {
         self.button = self.button.frame(true).frame_when_inactive(false);
         self.quiet = true;
+        self
+    }
+
+    /// Show no background even when hovered or pressed; the surface beneath
+    /// gives the feedback.
+    pub fn bare(mut self) -> Self {
+        self = self.quiet();
+        self.bare = true;
         self
     }
 
@@ -391,6 +408,12 @@ impl<'a> IconButton<'a> {
     /// Paint the icon in this color instead of the text color.
     pub fn icon_color(mut self, color: Color32) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Show this picture in place of the icon, when there is one.
+    pub fn image(mut self, texture: Option<egui::TextureId>) -> Self {
+        self.image = texture;
         self
     }
 
@@ -438,6 +461,12 @@ impl Widget for IconButton<'_> {
                     let widgets = &mut ui.visuals_mut().widgets;
                     widgets.hovered.bg_stroke = Stroke::NONE;
                     widgets.active.bg_stroke = Stroke::NONE;
+                    if self.bare {
+                        for state in [&mut widgets.hovered, &mut widgets.active] {
+                            state.weak_bg_fill = Color32::TRANSPARENT;
+                            state.bg_fill = Color32::TRANSPARENT;
+                        }
+                    }
                     self.quiet = false;
                     self.ui(ui)
                 })
@@ -455,6 +484,8 @@ impl Widget for IconButton<'_> {
             });
             if self.spinning {
                 paint_spinner(ui, rect, color);
+            } else if let Some(texture) = self.image {
+                paint_site_icon(ui.painter(), rect, texture);
             } else {
                 self.icon.paint(ui.painter(), rect, color);
             }
@@ -477,6 +508,17 @@ impl Widget for IconButton<'_> {
             output.response
         }
     }
+}
+
+/// A site icon at 16 points, centered in `rect`.
+pub fn paint_site_icon(painter: &egui::Painter, rect: egui::Rect, texture: egui::TextureId) {
+    let side = rect.width().min(rect.height()).min(16.0);
+    painter.image(
+        texture,
+        egui::Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
 
 /// A text button with the same hover-only frame as a quiet [`IconButton`],
