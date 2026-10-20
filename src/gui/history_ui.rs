@@ -1,6 +1,6 @@
 use crate::gui::{
     history::{BrowsingHistory, MAX_ENTRIES},
-    ui_icons::{Icon, IconButton},
+    ui_icons::{self, Icon, IconButton},
 };
 use crate::net::Location;
 use eframe::egui::{self, RichText};
@@ -48,7 +48,8 @@ impl HistoryWindow {
             .min_width(300.0)
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                let search = ui.add(
+                let search = ui_icons::search_field(
+                    ui,
                     egui::TextEdit::singleline(&mut self.query)
                         .hint_text("Search titles and addresses")
                         .char_limit(256)
@@ -148,11 +149,14 @@ impl HistoryWindow {
                                         let text_width = (ui.available_width() - 56.0).max(140.0);
                                         ui.vertical(|ui| {
                                             ui.set_width(text_width);
+                                            let remote = entry.url.starts_with("http:")
+                                                || entry.url.starts_with("https:");
                                             let open_button = IconButton::new(
-                                                Icon::Page,
+                                                if remote { Icon::Globe } else { Icon::Page },
                                                 RichText::new(entry.display_title()).strong(),
                                             )
                                             .quiet()
+                                            .align_start()
                                             .truncate()
                                             .min_size(egui::vec2(text_width, 22.0));
                                             if ui
@@ -185,10 +189,13 @@ impl HistoryWindow {
                                             .on_hover_text(metadata);
                                         });
                                         if ui
-                                            .add(IconButton::icon_only(
-                                                Icon::Trash,
-                                                "Remove from history",
-                                            ))
+                                            .add(
+                                                IconButton::icon_only(
+                                                    Icon::Trash,
+                                                    "Remove from history",
+                                                )
+                                                .quiet(),
+                                            )
                                             .on_hover_text("Remove this address from saved history")
                                             .clicked()
                                         {

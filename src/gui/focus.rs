@@ -17,10 +17,9 @@ pub const MAX_FONT_SIZE: f32 = 32.0;
 /// Colors of the Focus reading surface, independent of the browser chrome palette.
 impl Theme {
     pub fn reading_visuals(self) -> egui::Visuals {
-        let mut visuals = match self {
-            Self::Light => egui::Visuals::light(),
-            Self::Dark => egui::Visuals::dark(),
-        };
+        // The browser's olive controls, on reading paper.
+        let mut visuals = self.visuals();
+        visuals.panel_fill = self.reading_paper();
         visuals.selection.bg_fill = match self {
             Self::Light => Color32::from_rgb(209, 223, 182),
             Self::Dark => Color32::from_rgb(64, 82, 43),

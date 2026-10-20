@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.0 — Grove interface
+
+- Restyle the browser chrome as an olive grove: a shaded tab strip with the
+  active tab joined to the toolbar (in Focus, to the reading toolbar), dividers
+  between background tabs, and a page, globe, leaf or warning icon on each tab.
+  A loading tab shows a spinner, and a thin bar slides along the toolbar.
+- Round the address field into a pill led by a lock, warning or page icon for
+  HTTPS, unencrypted HTTP and local pages. The toolbar no longer leaves a gap at
+  its right edge, and the bookmark star fills with olive-oil gold.
+- Show bookmarks as tiles with site initials and the most recently visited pages
+  on the new-tab page, beneath a drawn olive sprig. Middle-click or
+  Cmd/Ctrl-click opens them in a new tab.
+- Give the status bar a connection chip and one outlined zoom group, and show
+  keyboard shortcuts in the browser menu.
+- Restyle the find bar with a search field, match arrows and a close button; group
+  Settings into cards; add site initials to Bookmarks; show download sizes in KB,
+  MB and GB; and give the crash-recovery bar and page errors their own cards.
+- Quiet buttons now show a soft background on hover, olive-tinted shadows sit
+  under windows and menus, and Focus reading controls use the olive palette.
+- Stop repeating "Olive Browser" in the window title when the page title already
+  ends with it.
+
 ## 1.6.0 — Rendering polish
 
 - Lay out HTML tables with columns shared across rows and sized from their

@@ -34,6 +34,12 @@ pub enum Icon {
     Menu,
     Sun,
     Moon,
+    Leaf,
+    Globe,
+    Lock,
+    ChevronUp,
+    ChevronDown,
+    StarFilled,
 }
 
 impl Icon {
@@ -55,6 +61,19 @@ impl Icon {
                 .map(|i| {
                     let angle = (start + (end - start) * i as f32 / 32.0).to_radians();
                     [cx + radius * angle.cos(), cy + radius * angle.sin()]
+                })
+                .collect();
+            path(&points);
+        };
+        let quad = |from: [f32; 2], control: [f32; 2], to: [f32; 2]| {
+            let points: Vec<_> = (0..=16)
+                .map(|i| {
+                    let t = i as f32 / 16.0;
+                    let u = 1.0 - t;
+                    [
+                        u * u * from[0] + 2.0 * u * t * control[0] + t * t * to[0],
+                        u * u * from[1] + 2.0 * u * t * control[1] + t * t * to[1],
+                    ]
                 })
                 .collect();
             path(&points);
@@ -113,7 +132,7 @@ impl Icon {
                     [5.0, 4.0],
                 ]);
             }
-            Self::Star => {
+            Self::Star | Self::StarFilled => {
                 let points: Vec<[f32; 2]> = (0..10)
                     .map(|index| {
                         let angle = -std::f32::consts::FRAC_PI_2
@@ -122,9 +141,46 @@ impl Icon {
                         [12.0 + radius * angle.cos(), 12.0 + radius * angle.sin()]
                     })
                     .collect();
+                if matches!(self, Self::StarFilled) {
+                    // A star is not convex: fill its inner pentagon and five points.
+                    let at = |index: usize| point(points[index % 10][0], points[index % 10][1]);
+                    let fill = |points| Shape::convex_polygon(points, color, Stroke::NONE);
+                    painter.add(fill((0..5).map(|i| at(2 * i + 1)).collect()));
+                    for i in 0..5 {
+                        painter.add(fill(vec![at(2 * i + 9), at(2 * i), at(2 * i + 1)]));
+                    }
+                }
                 path(&points);
                 path(&[[points[9][0], points[9][1]], [points[0][0], points[0][1]]]);
             }
+            Self::Leaf => {
+                // An olive leaf: a slender blade with a midrib and a short stem.
+                quad([5.0, 19.0], [5.0, 7.0], [20.0, 4.0]);
+                quad([5.0, 19.0], [17.0, 18.0], [20.0, 4.0]);
+                path(&[[3.0, 21.0], [5.0, 19.0]]);
+                quad([5.0, 19.0], [11.5, 12.5], [16.5, 7.5]);
+            }
+            Self::Globe => {
+                painter.circle_stroke(point(12.0, 12.0), 9.0 * scale, stroke);
+                path(&[[3.0, 12.0], [21.0, 12.0]]);
+                quad([12.0, 3.0], [6.5, 12.0], [12.0, 21.0]);
+                quad([12.0, 3.0], [17.5, 12.0], [12.0, 21.0]);
+            }
+            Self::Lock => {
+                path(&[
+                    [5.0, 11.0],
+                    [19.0, 11.0],
+                    [19.0, 21.0],
+                    [5.0, 21.0],
+                    [5.0, 11.0],
+                ]);
+                path(&[[8.0, 11.0], [8.0, 8.0]]);
+                path(&[[16.0, 11.0], [16.0, 8.0]]);
+                arc(12.0, 8.0, 4.0, 180.0, 360.0);
+                painter.circle_filled(point(12.0, 16.0), 1.4 * scale, color);
+            }
+            Self::ChevronUp => path(&[[6.0, 15.0], [12.0, 9.0], [18.0, 15.0]]),
+            Self::ChevronDown => path(&[[6.0, 9.0], [12.0, 15.0], [18.0, 9.0]]),
             Self::Download => {
                 path(&[[12.0, 3.0], [12.0, 16.0]]);
                 path(&[[7.0, 11.0], [12.0, 16.0], [17.0, 11.0]]);
@@ -230,6 +286,21 @@ impl Icon {
     }
 }
 
+/// A three-quarter ring turning once a second, in the icon grid's stroke.
+pub fn paint_spinner(ui: &Ui, rect: Rect, color: Color32) {
+    let scale = rect.width().min(rect.height()) / 24.0;
+    let start = (ui.input(|input| input.time) as f32 * 360.0) % 360.0;
+    let points: Vec<_> = (0..=24)
+        .map(|i| {
+            let angle = (start + 270.0 * i as f32 / 24.0).to_radians();
+            rect.center() + egui::vec2(angle.cos(), angle.sin()) * 8.0 * scale
+        })
+        .collect();
+    ui.painter()
+        .add(Shape::line(points, Stroke::new(2.0 * scale, color)));
+    ui.ctx().request_repaint();
+}
+
 /// A normal egui button with a custom-painted icon atom. Keeping egui's button
 /// preserves keyboard activation, focus rings, disabled states and accessibility.
 pub struct IconButton<'a> {
@@ -237,9 +308,13 @@ pub struct IconButton<'a> {
     icon: Icon,
     label: String,
     icon_only: bool,
+    /// Keep the accessible name to the label when a shortcut is shown beside it.
+    has_shortcut: bool,
     color: Option<Color32>,
     warning: bool,
     primary: bool,
+    quiet: bool,
+    spinning: bool,
 }
 
 impl<'a> IconButton<'a> {
@@ -252,9 +327,12 @@ impl<'a> IconButton<'a> {
             button: Button::new((Self::atom(), label)).gap(7.0).corner_radius(7),
             icon,
             icon_only: false,
+            has_shortcut: false,
             color: None,
             warning: false,
             primary: false,
+            quiet: false,
+            spinning: false,
         }
     }
 
@@ -277,8 +355,16 @@ impl<'a> IconButton<'a> {
         self
     }
 
+    /// Show the button's background only while it is hovered or pressed.
     pub fn quiet(mut self) -> Self {
-        self.button = self.button.frame(false);
+        self.button = self.button.frame(true).frame_when_inactive(false);
+        self.quiet = true;
+        self
+    }
+
+    /// Keep the icon and label at the start when the button is wider than they are.
+    pub fn align_start(mut self) -> Self {
+        self.button = self.button.right_text("");
         self
     }
 
@@ -299,6 +385,25 @@ impl<'a> IconButton<'a> {
 
     pub fn warning(mut self, warning: bool) -> Self {
         self.warning = warning;
+        self
+    }
+
+    /// Paint the icon in this color instead of the text color.
+    pub fn icon_color(mut self, color: Color32) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Replace the icon with a loading spinner.
+    pub fn spinning(mut self, spinning: bool) -> Self {
+        self.spinning = spinning;
+        self
+    }
+
+    /// Weak right-aligned text, such as a menu item's keyboard shortcut.
+    pub fn shortcut(mut self, text: impl Into<String>) -> Self {
+        self.button = self.button.shortcut_text(text.into());
+        self.has_shortcut = true;
         self
     }
 
@@ -326,6 +431,18 @@ impl Widget for IconButton<'_> {
                 })
                 .inner;
         }
+        if self.quiet {
+            // A soft fill is enough feedback for toolbar and menu buttons.
+            return ui
+                .scope(|ui| {
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    widgets.hovered.bg_stroke = Stroke::NONE;
+                    widgets.active.bg_stroke = Stroke::NONE;
+                    self.quiet = false;
+                    self.ui(ui)
+                })
+                .inner;
+        }
         let output = self.button.atom_ui(ui);
         if let Some(rect) = output.rect(IdSalt::new(Self::ICON_ID)) {
             let color = self.color.unwrap_or_else(|| {
@@ -336,7 +453,11 @@ impl Widget for IconButton<'_> {
                     .fg_stroke
                     .color
             });
-            self.icon.paint(ui.painter(), rect, color);
+            if self.spinning {
+                paint_spinner(ui, rect, color);
+            } else {
+                self.icon.paint(ui.painter(), rect, color);
+            }
             if self.warning {
                 let center = rect.right_top() + egui::vec2(-1.0, 2.0);
                 ui.painter()
@@ -345,10 +466,12 @@ impl Widget for IconButton<'_> {
                     .circle_filled(center, 2.0, Color32::from_rgb(245, 184, 73));
             }
         }
-        if self.icon_only {
+        if self.icon_only || self.has_shortcut {
             output
                 .response
                 .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.label));
+        }
+        if self.icon_only {
             output.response.on_disabled_hover_text(self.label)
         } else {
             output.response
@@ -356,7 +479,44 @@ impl Widget for IconButton<'_> {
     }
 }
 
+/// A text button with the same hover-only frame as a quiet [`IconButton`],
+/// its text at the start of `width`.
+pub fn quiet_text_button(ui: &mut Ui, text: impl Into<RichText>, width: f32) -> Response {
+    ui.scope(|ui| {
+        let widgets = &mut ui.visuals_mut().widgets;
+        widgets.hovered.bg_stroke = Stroke::NONE;
+        widgets.active.bg_stroke = Stroke::NONE;
+        ui.add(
+            Button::new(text.into())
+                .frame(true)
+                .frame_when_inactive(false)
+                .right_text("")
+                .truncate()
+                .min_size(Vec2::new(width, 30.0)),
+        )
+    })
+    .inner
+}
+
 pub fn menu(ui: &mut Ui, icon: Icon, label: &str, content: impl FnOnce(&mut Ui)) {
-    let response = ui.add(IconButton::new(icon, label).small());
+    let response = ui.add(IconButton::new(icon, label).small().quiet());
     egui::Popup::menu(&response).show(content);
+}
+
+/// A rounded text field led by a magnifying glass, for find and history search.
+pub fn search_field(ui: &mut Ui, edit: egui::TextEdit<'_>) -> Response {
+    const ICON: &str = "search-field-icon";
+    let palette = crate::gui::theme::Theme::from_visuals(ui.visuals()).palette();
+    let output = ui
+        .scope(|ui| {
+            crate::gui::theme::Theme::round_fields(ui.visuals_mut(), 16);
+            edit.prefix(Atom::custom(IdSalt::new(ICON), Vec2::splat(16.0)))
+                .margin(egui::vec2(10.0, 6.0))
+                .show(ui)
+        })
+        .inner;
+    if let Some(rect) = output.response.rect(IdSalt::new(ICON)) {
+        Icon::Search.paint(ui.painter(), rect, palette.muted);
+    }
+    output.response.response
 }

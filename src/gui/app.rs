@@ -10,6 +10,7 @@ use crate::gui::{
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
+    new_tab,
     profile::{MAX_TABS, MAX_ZOOM, MIN_ZOOM, Profile, SavedTab, Session},
     render::{ImageTextureCache, Page},
     theme::{DOCUMENT_PAPER, Palette, Theme},
@@ -560,6 +561,19 @@ impl Tab {
         self.deferred_scripts && shared.profile.data.settings.javascript_by_default
     }
 
+    fn site(&self) -> Site {
+        match self
+            .loaded
+            .as_ref()
+            .map(|loaded| loaded.location.url().scheme())
+        {
+            None => Site::Blank,
+            Some("https") => Site::Secure,
+            Some("http") => Site::Insecure,
+            Some(_) => Site::Local,
+        }
+    }
+
     fn title(&self) -> &str {
         self.loaded
             .as_ref()
@@ -578,11 +592,56 @@ impl Tab {
     }
 }
 
-fn open_button(ui: &mut egui::Ui, enabled: bool) -> bool {
-    let button = IconButton::new(Icon::Folder, "Open HTML…")
-        .primary()
-        .min_size(egui::vec2(152.0, 40.0));
-    ui.add_enabled(enabled, button).clicked()
+/// The width of an icon-only toolbar button.
+const ICON_BUTTON: f32 = 36.0;
+const SITE_ICON: &str = "site-icon";
+
+/// How the current page was reached, for the address field and status bar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Site {
+    Blank,
+    Secure,
+    Insecure,
+    Local,
+}
+
+impl Site {
+    fn icon(self) -> Icon {
+        match self {
+            Self::Blank => Icon::Globe,
+            Self::Secure => Icon::Lock,
+            Self::Insecure => Icon::Warning,
+            Self::Local => Icon::Page,
+        }
+    }
+
+    fn color(self, palette: Palette) -> egui::Color32 {
+        match self {
+            Self::Secure => palette.accent,
+            Self::Insecure => palette.warning,
+            Self::Blank | Self::Local => palette.muted,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Blank => "Ready",
+            Self::Secure => "HTTPS",
+            Self::Insecure => "HTTP · Not encrypted",
+            Self::Local => "Local file",
+        }
+    }
+
+    fn description(self) -> Option<&'static str> {
+        match self {
+            Self::Blank => None,
+            Self::Secure => Some("Connection is encrypted (HTTPS)"),
+            Self::Insecure => {
+                Some("Connection is not encrypted (HTTP). Avoid entering private information.")
+            }
+            Self::Local => Some("A file on this computer"),
+        }
+    }
 }
 
 /// Requests gathered from shortcuts and controls while a tab's panels draw.
@@ -607,6 +666,8 @@ struct TabActions {
     zoom_reset: bool,
     link: Option<String>,
     link_new_tab: bool,
+    /// An address chosen on the new-tab page.
+    open_url: Option<String>,
     form: Option<Activation>,
 }
 
@@ -685,7 +746,15 @@ impl Tab {
                 if self.loaded.is_some() {
                     self.document_view(ui, shared, &mut actions, busy);
                 } else {
-                    new_tab_page(ui, shared, palette, &mut actions);
+                    let choice = new_tab::show(
+                        ui,
+                        shared.profile.data.settings.browser_theme,
+                        &shared.profile.data.bookmarks,
+                        &shared.browsing_history,
+                    );
+                    actions.open_file |= choice.open_file;
+                    actions.open_url = choice.url;
+                    actions.link_new_tab |= choice.new_tab;
                 }
             });
         self.alert_window(&ctx);
@@ -776,12 +845,13 @@ impl Tab {
         devtools_open: &mut bool,
     ) {
         let palette = shared.profile.data.settings.browser_theme.palette();
-        egui::Panel::top("toolbar")
-            .exact_size(58.0)
+        let working = self.working();
+        let panel = egui::Panel::top("toolbar")
+            .exact_size(54.0)
             .frame(
                 egui::Frame::new()
                     .fill(palette.chrome)
-                    .inner_margin(egui::Margin::symmetric(12, 10)),
+                    .inner_margin(egui::Margin::symmetric(10, 9)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -802,7 +872,6 @@ impl Tab {
                         )
                         .on_hover_text("Forward (Alt+Right)")
                         .clicked();
-                    let working = self.working();
                     if working {
                         actions.stop |= ui
                             .add(IconButton::icon_only(Icon::Close, "Stop tab").quiet())
@@ -817,29 +886,53 @@ impl Tab {
                             .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
                             .clicked();
                     }
-                    // Five trailing actions and their gaps. The bookmark slot stays
-                    // present on blank tabs to keep the address field stable.
-                    let focus_extra = if compact {
-                        0.0
+                    ui.add_space(4.0);
+                    // Go, bookmark, Focus, theme and menu follow the address field,
+                    // which takes the rest of the row. The bookmark slot stays present
+                    // on blank tabs to keep the address field stable.
+                    let focus_width = if compact {
+                        ICON_BUTTON
                     } else {
-                        ui.painter()
-                            .layout_no_wrap(
-                                "Focus".into(),
-                                egui::TextStyle::Button.resolve(ui.style()),
-                                palette.ink,
-                            )
-                            .size()
-                            .x
-                            + 5.0
+                        let label = ui.painter().layout_no_wrap(
+                            "Focus".into(),
+                            egui::TextStyle::Button.resolve(ui.style()),
+                            palette.ink,
+                        );
+                        2.0 * ui.spacing().button_padding.x + 18.0 + 7.0 + label.size().x
                     };
-                    let address_width = (ui.available_width() - 5.0 * 42.0 - focus_extra).max(60.0);
-                    let mut output = egui::TextEdit::singleline(&mut self.address)
-                        .id(egui::Id::unique(("address", self.id)))
-                        .hint_text("Enter a URL or file path")
-                        .char_limit(crate::net::MAX_URL_BYTES)
-                        .desired_width(address_width - 20.0)
-                        .margin(egui::vec2(10.0, 9.0))
-                        .show(ui);
+                    let trailing = 4.0 * ICON_BUTTON + focus_width + 5.0 * 6.0;
+                    let address_width = (ui.available_width() - trailing).max(60.0);
+                    let site = self.site();
+                    let mut output = ui
+                        .scope(|ui| {
+                            let visuals = ui.visuals_mut();
+                            Theme::round_fields(visuals, 18);
+                            visuals.widgets.hovered.bg_stroke.color = palette.muted;
+                            visuals.selection.stroke.width = 2.0;
+                            egui::TextEdit::singleline(&mut self.address)
+                                .id(egui::Id::unique(("address", self.id)))
+                                .hint_text("Enter a URL or file path")
+                                .char_limit(crate::net::MAX_URL_BYTES)
+                                .prefix(egui::Atom::custom(
+                                    egui::IdSalt::new(SITE_ICON),
+                                    egui::Vec2::splat(16.0),
+                                ))
+                                .desired_width(address_width)
+                                .margin(egui::vec2(12.0, 9.0))
+                                .show(ui)
+                        })
+                        .inner;
+                    if let Some(rect) = output.response.rect(egui::IdSalt::new(SITE_ICON)) {
+                        site.icon().paint(ui.painter(), rect, site.color(palette));
+                        if let Some(description) = site.description() {
+                            ui.interact(
+                                rect,
+                                egui::Id::unique((SITE_ICON, self.id)),
+                                egui::Sense::hover(),
+                            )
+                            .on_hover_text(description);
+                        }
+                    }
                     if focus_address {
                         output.response.request_focus();
                         output
@@ -861,23 +954,19 @@ impl Tab {
                         let marked = self.loaded.as_ref().is_some_and(|loaded| {
                             shared.profile.is_bookmarked(loaded.location.as_str())
                         });
-                        let bookmark = IconButton::icon_only(
-                            Icon::Star,
-                            if marked {
-                                "Remove bookmark"
-                            } else {
-                                "Add bookmark"
-                            },
-                        )
-                        .quiet()
-                        .selected(marked);
+                        let label = if marked {
+                            "Remove bookmark"
+                        } else {
+                            "Add bookmark"
+                        };
+                        let bookmark = if marked {
+                            IconButton::icon_only(Icon::StarFilled, label).icon_color(palette.oil)
+                        } else {
+                            IconButton::icon_only(Icon::Star, label)
+                        };
                         actions.toggle_bookmark |= ui
-                            .add_enabled(self.loaded.is_some(), bookmark)
-                            .on_hover_text(if marked {
-                                "Remove bookmark"
-                            } else {
-                                "Add bookmark"
-                            })
+                            .add_enabled(self.loaded.is_some(), bookmark.quiet())
+                            .on_hover_text(label)
                             .clicked();
                     }
                     let readable = self
@@ -936,6 +1025,19 @@ impl Tab {
                     self.browser_menu(&menu, shared, actions, devtools_open);
                 });
             });
+        if working {
+            // An indeterminate bar slides along the toolbar's lower edge.
+            let rect = panel.response.rect;
+            let phase = (ui.input(|input| input.time) as f32 / 1.4).fract();
+            let width = rect.width() * 0.3;
+            let left = rect.left() - width + phase * (rect.width() + width);
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(left.max(rect.left()), rect.bottom() - 2.5),
+                egui::pos2((left + width).min(rect.right()), rect.bottom()),
+            );
+            ui.painter().rect_filled(bar, 1, palette.accent);
+            ui.ctx().request_repaint();
+        }
     }
 
     fn browser_menu(
@@ -945,13 +1047,25 @@ impl Tab {
         actions: &mut TabActions,
         devtools_open: &mut bool,
     ) {
+        let keys = |modifiers, key| {
+            menu.ctx
+                .format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+        };
         egui::Popup::menu(menu).show(|ui| {
-            ui.set_min_width(210.0);
-            ui.label(RichText::new("Olive Browser").strong());
+            ui.set_min_width(250.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
+            ui.horizontal(|ui| {
+                ui.add(egui::Image::new(&shared.icon).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+                ui.label(RichText::new("Olive Browser").strong());
+            });
             ui.separator();
             if ui
-                .add(IconButton::new(Icon::Folder, "Open HTML…").quiet())
-                .on_hover_text("Cmd/Ctrl+O")
+                .add(
+                    IconButton::new(Icon::Folder, "Open HTML…")
+                        .quiet()
+                        .shortcut(keys(egui::Modifiers::COMMAND, egui::Key::O)),
+                )
                 .clicked()
             {
                 actions.open_file = true;
@@ -961,9 +1075,12 @@ impl Tab {
                 .add(
                     IconButton::new(Icon::History, "History")
                         .quiet()
-                        .warning(shared.browsing_history.error().is_some()),
+                        .warning(shared.browsing_history.error().is_some())
+                        .shortcut(keys(
+                            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                            egui::Key::H,
+                        )),
                 )
-                .on_hover_text("Cmd/Ctrl+Shift+H")
                 .clicked()
             {
                 actions.show_history = true;
@@ -986,7 +1103,7 @@ impl Tab {
             if ui
                 .add_enabled(
                     self.loaded.is_some(),
-                    IconButton::new(Icon::Download, "Save page…").quiet(),
+                    IconButton::new(Icon::Page, "Save page…").quiet(),
                 )
                 .clicked()
             {
@@ -1002,13 +1119,17 @@ impl Tab {
                 ui.close();
             }
             if ui
-                .add(IconButton::new(Icon::Code, "Developer tools").quiet())
-                .on_hover_text("Open developer tools (F12)")
+                .add(
+                    IconButton::new(Icon::Code, "Developer tools")
+                        .quiet()
+                        .shortcut(keys(egui::Modifiers::NONE, egui::Key::F12)),
+                )
                 .clicked()
             {
                 *devtools_open = true;
                 ui.close();
             }
+            ui.separator();
             ui.label(
                 RichText::new(concat!("Version ", env!("CARGO_PKG_VERSION")))
                     .small()
@@ -1028,71 +1149,103 @@ impl Tab {
             .frame(
                 egui::Frame::new()
                     .fill(palette.chrome)
-                    .inner_margin(egui::Margin::symmetric(12, 6)),
+                    .inner_margin(egui::Margin::symmetric(10, 5)),
             )
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                     ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
                     ui.spacing_mut().interact_size.y = 24.0;
-                    let label = if busy {
-                        "Opening…".to_owned()
+                    let site = self.site();
+                    let (icon, label) = if busy {
+                        (None, "Opening…".to_owned())
                     } else {
-                        self.loaded
-                            .as_ref()
-                            .map(|loaded| {
-                                let transport = match loaded.location.url().scheme() {
-                                    "https" => "HTTPS",
-                                    "http" => "HTTP · Not encrypted",
-                                    _ => "Local file",
-                                };
-                                match loaded.status {
-                                    Some(status) if status >= 400 => {
-                                        format!("{transport} · HTTP {status}")
-                                    }
-                                    _ => transport.to_owned(),
-                                }
-                            })
-                            .unwrap_or_else(|| "Ready".into())
+                        let label = match self.loaded.as_ref().and_then(|loaded| loaded.status) {
+                            Some(status) if status >= 400 => {
+                                format!("{} · HTTP {status}", site.label())
+                            }
+                            _ => site.label().to_owned(),
+                        };
+                        (Some(site.icon()), label)
                     };
-                    ui.add(egui::Label::new(RichText::new(label).size(12.0)).truncate());
-                    actions.zoom_out |= ui
-                        .add(IconButton::icon_only(Icon::Minus, "Zoom out").small())
-                        .on_hover_text("Zoom out (Cmd/Ctrl−)")
-                        .clicked();
-                    actions.zoom_reset |= ui
-                        .button(format!("{}%", self.zoom))
-                        .on_hover_text("Reset page zoom (Cmd/Ctrl+0)")
-                        .clicked();
-                    actions.zoom_in |= ui
-                        .add(IconButton::icon_only(Icon::Plus, "Zoom in").small())
-                        .on_hover_text("Zoom in (Cmd/Ctrl+)")
-                        .clicked();
+                    let (fill, ink) = match site {
+                        Site::Secure if !busy => (palette.selection, palette.accent),
+                        Site::Insecure if !busy => (palette.warning_bg, palette.warning),
+                        _ => (egui::Color32::TRANSPARENT, palette.muted),
+                    };
+                    let chip = egui::Frame::new()
+                        .fill(fill)
+                        .corner_radius(6)
+                        .inner_margin(egui::Margin::symmetric(7, 3))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 5.0;
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+                            match icon {
+                                Some(icon) => icon.paint(ui.painter(), rect, ink),
+                                None => ui_icons::paint_spinner(ui, rect, ink),
+                            }
+                            ui.add(
+                                egui::Label::new(RichText::new(label).size(12.0).color(ink))
+                                    .truncate(),
+                            );
+                        })
+                        .response;
+                    if let Some(description) = site.description().filter(|_| !busy) {
+                        chip.on_hover_text(description);
+                    }
+                    // Zoom out, reset and in share one outlined group.
+                    egui::Frame::new()
+                        .stroke(egui::Stroke::new(1.0, palette.border))
+                        .corner_radius(7)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            actions.zoom_out |= ui
+                                .add(
+                                    IconButton::icon_only(Icon::Minus, "Zoom out")
+                                        .small()
+                                        .quiet(),
+                                )
+                                .on_hover_text("Zoom out (Cmd/Ctrl−)")
+                                .clicked();
+                            actions.zoom_reset |= ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(format!("{}%", self.zoom)).size(12.0),
+                                    )
+                                    .frame(false)
+                                    .min_size(egui::vec2(46.0, 24.0)),
+                                )
+                                .on_hover_text("Reset page zoom (Cmd/Ctrl+0)")
+                                .clicked();
+                            actions.zoom_in |= ui
+                                .add(IconButton::icon_only(Icon::Plus, "Zoom in").small().quiet())
+                                .on_hover_text("Zoom in (Cmd/Ctrl+)")
+                                .clicked();
+                        });
                     if let Some(loaded) = &self.loaded {
                         if ui
-                            .add(IconButton::new(Icon::Search, "Find").small())
+                            .add(IconButton::new(Icon::Search, "Find").small().quiet())
                             .on_hover_text("Find in page (Cmd/Ctrl+F)")
                             .clicked()
                         {
                             self.find.activate();
                         }
                         if loaded.location.is_remote() {
+                            let enabled = loaded.scripting_enabled;
                             actions.toggle_scripts = ui
                                 .add_enabled(
                                     !busy,
                                     IconButton::new(
-                                        if loaded.scripting_enabled {
-                                            Icon::CodeOff
-                                        } else {
-                                            Icon::Code
-                                        },
-                                        if loaded.scripting_enabled {
+                                        if enabled { Icon::CodeOff } else { Icon::Code },
+                                        if enabled {
                                             "Disable JavaScript"
                                         } else {
                                             "Enable JavaScript"
                                         },
                                     )
-                                    .small(),
+                                    .small()
+                                    .quiet(),
                                 )
                                 .on_hover_text(SCRIPT_TOGGLE_HINT)
                                 .clicked();
@@ -1186,11 +1339,15 @@ impl Tab {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
                         ui.label(
                             RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                                 .size(12.0)
                                 .weak(),
                         );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+                        Icon::Leaf.paint(ui.painter(), rect, palette.accent);
                     });
                 });
             });
@@ -1200,24 +1357,39 @@ impl Tab {
         if let Some(error) = &self.error {
             egui::Frame::new()
                 .fill(palette.error_bg)
+                .stroke(egui::Stroke::new(1.0, palette.error.gamma_multiply(0.35)))
+                .corner_radius(12)
                 .inner_margin(16)
+                .outer_margin(12)
                 .show(ui, |ui| {
-                    ui.visuals_mut().override_text_color = Some(palette.error);
-                    ui.label(
-                        RichText::new(if self.crashed {
-                            "This tab stopped"
-                        } else {
-                            "Could not open this page"
-                        })
-                        .variations([("wght", 650.0)]),
-                    );
-                    ui.label(error);
-                    if ui
-                        .add(IconButton::new(Icon::Reload, "Reload tab"))
-                        .clicked()
-                    {
-                        actions.reload = true;
-                    }
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_top(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::Vec2::splat(24.0), egui::Sense::hover());
+                        Icon::Warning.paint(ui.painter(), rect, palette.error);
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            ui.visuals_mut().override_text_color = Some(palette.error);
+                            ui.label(
+                                RichText::new(if self.crashed {
+                                    "This tab stopped"
+                                } else {
+                                    "Could not open this page"
+                                })
+                                .size(16.0)
+                                .variations([("wght", 650.0)]),
+                            );
+                            ui.label(error);
+                            ui.add_space(4.0);
+                            ui.visuals_mut().override_text_color = None;
+                            if ui
+                                .add(IconButton::new(Icon::Reload, "Reload tab"))
+                                .clicked()
+                            {
+                                actions.reload = true;
+                            }
+                        });
+                    });
                 });
         }
     }
@@ -1455,6 +1627,16 @@ impl Tab {
                 .or_else(|| daily_location.and_then(|url| Location::from_input(&url).ok()))
             {
                 self.open(location, Navigation::New, ctx, shared);
+            } else if let Some(url) = actions.open_url {
+                let location = Location::from_input(&url);
+                if actions.link_new_tab {
+                    match location {
+                        Ok(location) => return Some(location),
+                        Err(error) => self.error = Some(error),
+                    }
+                } else {
+                    self.open_result(location, Navigation::New, ctx, shared);
+                }
             } else if actions.go {
                 let location = Location::from_input(&self.address);
                 let navigation = if location.as_ref().ok().is_some_and(|location| {
@@ -1530,42 +1712,6 @@ fn unsupported_css_summary(page: &Page) -> String {
         }
     }
     summary
-}
-
-fn new_tab_page(ui: &mut egui::Ui, shared: &Shared, palette: Palette, actions: &mut TabActions) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(((ui.available_height() - 320.0) * 0.4).max(16.0));
-            ui.add(egui::Image::new(&shared.icon).fit_to_exact_size(egui::vec2(64.0, 64.0)));
-            ui.add_space(16.0);
-            ui.label(
-                RichText::new("A fresh page.")
-                    .size(38.0)
-                    .color(palette.accent)
-                    .variations([("wght", 600.0)]),
-            );
-            ui.add_space(10.0);
-            ui.label(RichText::new("A small browser for the open web.").size(18.0));
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Enter a website above, or open a local HTML file.")
-                    .size(14.0)
-                    .weak(),
-            );
-            ui.add_space(22.0);
-            actions.open_file |= open_button(ui, true);
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new(if cfg!(target_os = "macos") {
-                    "⌘L to enter an address · ⌘O to open a file"
-                } else {
-                    "Ctrl+L to enter an address · Ctrl+O to open a file"
-                })
-                .size(12.0)
-                .weak(),
-            );
-        });
-    });
 }
 
 pub struct OliveApp {
@@ -1648,6 +1794,7 @@ impl OliveApp {
             self.tabs.push(tab);
         }
         self.active = session.active.min(self.tabs.len() - 1);
+        self.reveal_tab = true;
         self.focus_address = false;
     }
 
@@ -1678,16 +1825,38 @@ impl OliveApp {
         if self.recovery.is_none() {
             return;
         }
+        let palette = self.shared.profile.data.settings.browser_theme.palette();
         let mut restore = false;
         let mut discard = false;
-        egui::Panel::top("session-recovery").show(ui, |ui| {
-            ui.label("Olive did not close normally. Restore your saved tabs or start fresh.");
-            ui.small("Restored pages start with JavaScript disabled. Background tabs load when selected.");
-            ui.horizontal_wrapped(|ui| {
-                restore = ui.button("Restore tabs").clicked();
-                discard = ui.button("Start fresh").clicked();
+        egui::Panel::top("session-recovery")
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.warning_bg)
+                    .inner_margin(egui::Margin::symmetric(14, 10)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::Vec2::splat(20.0), egui::Sense::hover());
+                    Icon::History.paint(ui.painter(), rect, palette.warning);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new(
+                                "Olive did not close normally. Restore your saved tabs or start fresh.",
+                            )
+                            .strong(),
+                        );
+                        ui.small("Restored pages start with JavaScript disabled. Background tabs load when selected.");
+                    });
+                    restore = ui
+                        .add(IconButton::new(Icon::Reload, "Restore tabs").primary())
+                        .clicked();
+                    discard = ui
+                        .add(IconButton::new(Icon::Leaf, "Start fresh").quiet())
+                        .clicked();
+                });
             });
-        });
         if restore {
             let session = self.recovery.take().unwrap();
             self.restore_session(session, false);
@@ -1744,122 +1913,97 @@ impl OliveApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let palette = self.shared.profile.data.settings.browser_theme.palette();
+        // The active tab takes the colors of the toolbar below it, which in
+        // Focus follows the reading theme.
+        let joined = {
+            let tab = &self.tabs[self.active];
+            if tab.focus_mode {
+                let theme = tab.focus_settings.theme;
+                Palette {
+                    chrome: theme.reading_paper(),
+                    ..theme.palette()
+                }
+            } else {
+                palette
+            }
+        };
         let mut selected = None;
         let mut close = None;
         let mut add = false;
-        egui::Panel::top("tabs")
-            .exact_size(48.0)
+        let mut active_rect = None;
+        let mut strip_clip = egui::Rect::NOTHING;
+        // The active tab takes the toolbar's color and runs into it, so the
+        // strip draws its own lower edge everywhere else.
+        let panel = egui::Panel::top("tabs")
+            .exact_size(46.0)
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.chrome)
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
+                    .fill(palette.strip)
+                    .inner_margin(egui::Margin {
+                        left: 10,
+                        right: 8,
+                        top: 6,
+                        bottom: 0,
+                    }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.add(
                         egui::Image::new(&self.shared.icon)
-                            .fit_to_exact_size(egui::vec2(26.0, 26.0)),
+                            .fit_to_exact_size(egui::vec2(24.0, 24.0)),
                     )
                     .on_hover_text("Olive Browser");
+                    ui.add_space(6.0);
                     let width = (ui.available_width() - 44.0).max(100.0);
-                    egui::ScrollArea::horizontal()
+                    let strip = egui::ScrollArea::horizontal()
                         .id_salt("tab-strip")
                         .max_width(width)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                let mut previous: Option<(egui::Rect, bool)> = None;
                                 for (index, tab) in self.tabs.iter().enumerate() {
-                                    ui.push_id(tab.id, |ui| {
-                                        let active = index == self.active;
-                                        let card = egui::Frame::new()
-                                            .fill(if active {
-                                                palette.surface
-                                            } else {
-                                                egui::Color32::TRANSPARENT
-                                            })
-                                            .corner_radius(8)
-                                            .inner_margin(egui::Margin::symmetric(4, 0))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 0.0;
-                                                    let busy = tab.working();
-                                                    let title: String =
-                                                        tab.title().chars().take(80).collect();
-                                                    let label = if busy {
-                                                        format!("Opening… {title}")
-                                                    } else {
-                                                        title
-                                                    };
-                                                    let button = IconButton::new(
-                                                        if tab.crashed || tab.error.is_some() {
-                                                            Icon::Warning
-                                                        } else {
-                                                            Icon::Page
-                                                        },
-                                                        label,
-                                                    )
-                                                    .quiet()
-                                                    .truncate()
-                                                    .min_size(egui::vec2(140.0, 32.0));
-                                                    let response = ui
-                                                        .add_sized([180.0, 32.0], button)
-                                                        .on_hover_text(format!(
-                                                "{}\n{}",
-                                                tab.title(),
-                                                tab.worker
-                                                    .as_ref()
-                                                    .or_else(|| tab
-                                                        .pending
-                                                        .as_ref()
-                                                        .map(|p| &p.worker))
-                                                    .and_then(Worker::pid)
-                                                    .map(|pid| format!("Tab process {pid}"))
-                                                    .unwrap_or_else(|| "New tab".into())
-                                            ));
-                                                    if self.reveal_tab && index == self.active {
-                                                        response.scroll_to_me(Some(
-                                                            egui::Align::Center,
-                                                        ));
-                                                    }
-                                                    if response.clicked() {
-                                                        selected = Some(index);
-                                                    }
-                                                    if response
-                                                        .clicked_by(egui::PointerButton::Middle)
-                                                    {
-                                                        close = Some(index);
-                                                    }
-                                                    if ui
-                                                        .add(
-                                                            IconButton::icon_only(
-                                                                Icon::Close,
-                                                                "Close tab",
-                                                            )
-                                                            .small()
-                                                            .quiet(),
-                                                        )
-                                                        .on_hover_text("Close tab (Cmd/Ctrl+W)")
-                                                        .clicked()
-                                                    {
-                                                        close = Some(index);
-                                                    }
-                                                });
-                                            });
-                                        if active {
-                                            let rect = card.response.rect;
-                                            ui.painter().line_segment(
-                                                [
-                                                    egui::pos2(rect.left() + 10.0, rect.bottom()),
-                                                    egui::pos2(rect.right() - 10.0, rect.bottom()),
-                                                ],
-                                                egui::Stroke::new(2.0, palette.accent),
+                                    let active = index == self.active;
+                                    let card = ui.push_id(tab.id, |ui| {
+                                        tab_card(
+                                            ui,
+                                            tab,
+                                            active,
+                                            if active { joined } else { palette },
+                                        )
+                                    });
+                                    let (rect, response, closed) = card.inner;
+                                    if self.reveal_tab && active {
+                                        response.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                    if response.clicked() {
+                                        selected = Some(index);
+                                    }
+                                    if closed || response.clicked_by(egui::PointerButton::Middle) {
+                                        close = Some(index);
+                                    }
+                                    // A short divider between neighbouring background tabs.
+                                    if let Some((left, left_active)) = previous {
+                                        if !active && !left_active {
+                                            let x = (left.right() + rect.left()) / 2.0;
+                                            ui.painter().vline(
+                                                x,
+                                                rect.y_range().shrink(11.0),
+                                                egui::Stroke::new(1.0, palette.border),
                                             );
                                         }
-                                    });
+                                    }
+                                    if active {
+                                        active_rect = Some(rect);
+                                    }
+                                    previous = Some((rect, active));
                                 }
                             });
                         });
+                    strip_clip = strip.inner_rect;
                     add = ui
                         .add_enabled(
                             self.tabs.len() < MAX_TABS,
@@ -1872,6 +2016,38 @@ impl OliveApp {
                         .clicked();
                 });
             });
+        let strip = panel.response.rect;
+        let edge = egui::Stroke::new(1.0, palette.border);
+        let y = strip.bottom() - 0.5;
+        match active_rect.filter(|rect| rect.x_range().intersects(strip_clip.x_range())) {
+            Some(tab) => {
+                // Concave flares tuck the active tab into the toolbar below.
+                let painter = ui.painter().with_clip_rect(egui::Rect::from_x_y_ranges(
+                    strip_clip.x_range().expand(TAB_FLARE),
+                    strip.y_range(),
+                ));
+                for (corner, outside) in [
+                    (tab.left_bottom(), -TAB_FLARE),
+                    (tab.right_bottom(), TAB_FLARE),
+                ] {
+                    let square =
+                        egui::Rect::from_two_pos(corner, corner + egui::vec2(outside, -TAB_FLARE));
+                    painter.rect_filled(square, 0, joined.chrome);
+                    painter.circle_filled(
+                        corner + egui::vec2(outside, -TAB_FLARE),
+                        TAB_FLARE,
+                        palette.strip,
+                    );
+                }
+                let left = (tab.left() - TAB_FLARE).max(strip_clip.left());
+                let right = (tab.right() + TAB_FLARE).min(strip_clip.right());
+                ui.painter().hline(strip.left()..=left, y, edge);
+                ui.painter().hline(right..=strip.right(), y, edge);
+            }
+            None => {
+                ui.painter().hline(strip.x_range(), y, edge);
+            }
+        }
         self.reveal_tab = false;
         if let Some(index) = selected {
             self.select(index);
@@ -1883,6 +2059,97 @@ impl OliveApp {
             self.new_tab(None, &ctx);
         }
     }
+}
+
+const TAB_FLARE: f32 = 8.0;
+
+/// One tab in the strip: its icon, title and close button. The active tab is
+/// filled with the `chrome` of its palette. Returns the card's rectangle, the
+/// title button's response and whether close was clicked.
+fn tab_card(
+    ui: &mut egui::Ui,
+    tab: &Tab,
+    active: bool,
+    palette: Palette,
+) -> (egui::Rect, egui::Response, bool) {
+    let mut closed = false;
+    let card = egui::Frame::new()
+        .fill(if active {
+            palette.chrome
+        } else {
+            egui::Color32::TRANSPARENT
+        })
+        .corner_radius(egui::CornerRadius {
+            nw: 10,
+            ne: 10,
+            sw: 0,
+            se: 0,
+        })
+        .inner_margin(egui::Margin {
+            left: 4,
+            right: 4,
+            top: 4,
+            bottom: 4,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let busy = tab.working();
+                let title: String = tab.title().chars().take(80).collect();
+                let failed = tab.crashed || tab.error.is_some();
+                let icon = if failed {
+                    Icon::Warning
+                } else {
+                    match tab.site() {
+                        Site::Blank if tab.address.is_empty() => Icon::Leaf,
+                        Site::Blank | Site::Secure | Site::Insecure => Icon::Globe,
+                        Site::Local => Icon::Page,
+                    }
+                };
+                let ink = if active { palette.ink } else { palette.muted };
+                let button = IconButton::new(icon, RichText::new(title).color(ink))
+                    .icon_color(if failed {
+                        palette.warning
+                    } else if active {
+                        palette.accent
+                    } else {
+                        palette.muted
+                    })
+                    .spinning(busy)
+                    .quiet()
+                    .align_start()
+                    .truncate()
+                    .min_size(egui::vec2(140.0, 32.0));
+                let process = tab
+                    .worker
+                    .as_ref()
+                    .or_else(|| tab.pending.as_ref().map(|p| &p.worker))
+                    .and_then(Worker::pid)
+                    .map(|pid| format!("Tab process {pid}"))
+                    .unwrap_or_else(|| "New tab".into());
+                let response = ui.add_sized([176.0, 32.0], button).on_hover_text(format!(
+                    "{}\n{}",
+                    tab.title(),
+                    if busy {
+                        format!("Loading… · {process}")
+                    } else {
+                        process
+                    }
+                ));
+                closed = ui
+                    .add(
+                        IconButton::icon_only(Icon::Close, "Close tab")
+                            .icon_color(ink)
+                            .small()
+                            .quiet(),
+                    )
+                    .on_hover_text("Close tab (Cmd/Ctrl+W)")
+                    .clicked();
+                response
+            })
+            .inner
+        });
+    (card.response.rect, card.inner, closed)
 }
 impl eframe::App for OliveApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1978,9 +2245,13 @@ impl eframe::App for OliveApp {
         self.checkpoint();
         let title: String = self.tabs[self.active].title().chars().take(200).collect();
         if self.window_title != title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                "{title} — Olive Browser"
-            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                if title.ends_with("Olive Browser") {
+                    title.clone()
+                } else {
+                    format!("{title} — Olive Browser")
+                },
+            ));
             self.window_title = title;
         }
     }
@@ -2163,6 +2434,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn new_tab_page_offers_bookmarks_and_recent_pages_and_opens_them_in_new_tabs() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::gui::fonts::definitions());
+        ctx.enable_accesskit();
+        let (_, mut shared) = app_for_test(
+            &ctx,
+            prepare_page(remote_source("https://example.com/story")).unwrap(),
+        );
+        shared
+            .profile
+            .data
+            .bookmarks
+            .push(crate::gui::profile::Bookmark {
+                url: "https://www.rust-lang.org/".into(),
+                title: "Rust".into(),
+            });
+        let mut tab = Tab::new(1);
+        chrome_frame(&ctx, &mut tab, &mut shared, 480.0, vec![]);
+        let output = chrome_frame(&ctx, &mut tab, &mut shared, 480.0, vec![]);
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 600.0));
+        let tile = control_rect(&output, "Rust");
+        assert!(
+            viewport.contains_rect(tile),
+            "bookmark tile clipped: {tile:?}"
+        );
+        // The recorded page has no title, so its address names it.
+        assert!(viewport.contains_rect(control_rect(&output, "https://example.com/story")));
+
+        let mut opened = None;
+        for pressed in [true, false] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(viewport),
+                    events: vec![
+                        egui::Event::PointerMoved(tile.center()),
+                        egui::Event::PointerButton {
+                            pos: tile.center(),
+                            button: egui::PointerButton::Middle,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    if let Some(location) = tab.ui(ui, &mut shared, false, &mut false) {
+                        opened = Some(location);
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert_eq!(opened.unwrap().as_str(), "https://www.rust-lang.org/");
+        assert!(tab.loaded.is_none() && tab.pending.is_none() && tab.error.is_none());
     }
 
     #[test]
