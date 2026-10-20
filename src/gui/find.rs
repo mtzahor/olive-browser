@@ -1,4 +1,8 @@
 //! Case-insensitive search over rendered text, retaining original character offsets.
+use crate::gui::{
+    theme::Theme,
+    ui_icons::{self, Icon, IconButton},
+};
 use eframe::egui;
 use std::ops::Range;
 
@@ -18,55 +22,81 @@ impl FindBar {
         self.scroll = true;
     }
     pub fn show(&mut self, ui: &mut egui::Ui, count: usize) {
-        egui::Panel::top("find-bar").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Find");
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id_salt("find-query")
-                        .hint_text("Find in page")
-                        .char_limit(256)
-                        .desired_width((ui.available_width() - 280.0).clamp(60.0, 300.0)),
-                );
-                if self.focus {
-                    response.request_focus();
-                    self.focus = false;
-                }
-                if (response.has_focus() || response.lost_focus())
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
-                    let previous = ui.input(|i| i.modifiers.shift);
-                    self.step(count, previous);
-                    response.request_focus();
-                }
-                if response.changed() {
-                    self.current = 0;
-                    self.scroll = true;
-                }
-                ui.label(if self.query.is_empty() {
-                    "Type to search".into()
-                } else if count == 0 {
-                    "No matches".into()
-                } else {
-                    format!("{} of {}", self.current.min(count - 1) + 1, count)
+        let palette = Theme::from_visuals(ui.visuals()).palette();
+        egui::Panel::top("find-bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.chrome)
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let response = ui_icons::search_field(
+                        ui,
+                        egui::TextEdit::singleline(&mut self.query)
+                            .id_salt("find-query")
+                            .hint_text("Find in page")
+                            .char_limit(256)
+                            .desired_width((ui.available_width() - 240.0).clamp(120.0, 320.0)),
+                    );
+                    if self.focus {
+                        response.request_focus();
+                        self.focus = false;
+                    }
+                    if (response.has_focus() || response.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        let previous = ui.input(|i| i.modifiers.shift);
+                        self.step(count, previous);
+                        response.request_focus();
+                    }
+                    if response.changed() {
+                        self.current = 0;
+                        self.scroll = true;
+                    }
+                    ui.add_space(4.0);
+                    let (status, color) = if self.query.is_empty() {
+                        ("Type to search".into(), palette.muted)
+                    } else if count == 0 {
+                        ("No matches".into(), palette.warning)
+                    } else {
+                        (
+                            format!("{} of {}", self.current.min(count - 1) + 1, count),
+                            palette.ink,
+                        )
+                    };
+                    ui.label(egui::RichText::new(status).size(13.0).color(color));
+                    ui.add_space(4.0);
+                    if ui
+                        .add_enabled(
+                            count > 0,
+                            IconButton::icon_only(Icon::ChevronUp, "Previous").quiet(),
+                        )
+                        .on_hover_text("Previous match (Shift+Enter)")
+                        .clicked()
+                    {
+                        self.step(count, true);
+                    }
+                    if ui
+                        .add_enabled(
+                            count > 0,
+                            IconButton::icon_only(Icon::ChevronDown, "Next").quiet(),
+                        )
+                        .on_hover_text("Next match (Enter)")
+                        .clicked()
+                    {
+                        self.step(count, false);
+                    }
+                    if ui
+                        .add(IconButton::icon_only(Icon::Close, "Close").quiet())
+                        .on_hover_text("Close find (Escape)")
+                        .clicked()
+                    {
+                        self.open = false;
+                    }
                 });
-                if ui
-                    .add_enabled(count > 0, egui::Button::new("Previous"))
-                    .clicked()
-                {
-                    self.step(count, true);
-                }
-                if ui
-                    .add_enabled(count > 0, egui::Button::new("Next"))
-                    .clicked()
-                {
-                    self.step(count, false);
-                }
-                if ui.button("Close").clicked() {
-                    self.open = false;
-                }
             });
-        });
     }
     pub fn step(&mut self, count: usize, previous: bool) {
         if count > 0 {

@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.6.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.7.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -45,7 +45,7 @@ opens a fresh blank tab. The tab strip scrolls horizontally and supports up to
 
 Click **Find** in the status bar or press `Cmd+F`/`Ctrl+F` to search the current
 view. Matches are case-insensitive and highlighted, with an active match counter
-and automatic scrolling. Use **Next**/**Previous**, `F3`/`Shift+F3`, or
+and automatic scrolling. Use the **Previous**/**Next** arrows, `F3`/`Shift+F3`, or
 `Cmd+G`/`Ctrl+G` (Shift for previous). In the find field, Enter advances and
 Shift+Enter goes back. Results wrap; Escape closes find before exiting Focus or
 stopping a load. Find works in Focus mode and keeps a separate query per tab.
@@ -117,10 +117,19 @@ or executing scripts. Blank tabs need no worker.
 
 Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
+A lock, warning or page icon at the start of the address field shows whether the
+page came over HTTPS, unencrypted HTTP or from a local file. While a tab loads,
+its icon turns into a spinner and a thin bar slides along the toolbar.
 The **Browser menu** at the right of the address bar contains Open HTML, History,
-Bookmarks, Downloads, Save page, Developer tools and Settings, including in narrow windows.
+Bookmarks, Downloads, Save page, Developer tools and Settings, with their keyboard
+shortcuts, including in narrow windows. The star turns olive-oil gold on bookmarked pages.
 Tabs, toolbars, dialogs and the new-tab page share an olive palette and consistent
-control sizes. Status controls wrap to keep every action reachable.
+control sizes: a shaded tab strip, an active tab that joins the toolbar below it,
+leaf-green actions and grouped settings. Status controls wrap to keep every action reachable.
+
+New tabs show an olive sprig, **Open HTML…**, up to eight bookmarks as tiles and
+the four most recently visited pages. Click one to open it in the tab, or
+middle-click or Cmd/Ctrl-click it to open a new tab.
 
 Use the **moon/sun button** beside the browser menu to switch between **Light** and
 **Dark** mode, or choose **Browser menu → Settings → Appearance → Browser theme**.

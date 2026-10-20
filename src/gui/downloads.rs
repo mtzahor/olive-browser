@@ -179,6 +179,21 @@ fn publish_download(
     }
     Err("Could not save download: no unused filename is available.".into())
 }
+/// A byte count in the largest whole unit, such as "512 bytes" or "3.4 MB".
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1_000 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1_000.0;
+    let mut unit = 0;
+    while value >= 999.95 && unit + 1 < UNITS.len() {
+        value /= 1_000.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 pub fn fraction(received: u64, total: Option<u64>) -> f32 {
     total
         .map(|n| {
@@ -195,6 +210,16 @@ pub fn fraction(received: u64, total: Option<u64>) -> f32 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn byte_counts_use_readable_units() {
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(999), "999 bytes");
+        assert_eq!(format_bytes(1_000), "1.0 KB");
+        assert_eq!(format_bytes(3_400_000), "3.4 MB");
+        assert_eq!(format_bytes(999_960), "1.0 MB");
+        assert_eq!(format_bytes(u64::MAX), "18446744.1 TB");
+    }
 
     fn completed_file(dir: &std::path::Path, bytes: &[u8]) -> tempfile::NamedTempFile {
         let mut file = tempfile::NamedTempFile::new_in(dir).unwrap();
