@@ -423,7 +423,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     let action = format!("http://{}/submit", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
         let mut methods = Vec::new();
-        for _ in 0..2 {
+        while methods.len() < 2 {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -435,6 +435,15 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
                 headers.push(byte[0]);
             }
             let headers = String::from_utf8(headers).unwrap();
+            // Tab processes also look for the site's icon.
+            if headers.starts_with("GET /favicon.ico ") {
+                write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+                .unwrap();
+                continue;
+            }
             assert!(headers.to_ascii_lowercase().contains("cookie: session=one"));
             let length = headers
                 .lines()

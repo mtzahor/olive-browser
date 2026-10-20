@@ -547,6 +547,58 @@ fn resource_compression_obeys_decoded_limit() {
 #[cfg(all(feature = "css", feature = "js"))]
 mod page_resources {
     use super::*;
+
+    #[test]
+    fn site_icons_prefer_raster_links_near_tab_size_then_the_site_root() {
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let (location, server) = server_by_path(HashMap::from([
+            (
+                "/start".to_owned(),
+                response(
+                    "200 OK",
+                    "Content-Type: text/html\r\n",
+                    br#"<!doctype html><base href='/assets/'>
+                    <link rel=icon href=small.png sizes=16x16>
+                    <link rel="shortcut icon" href=icon.png sizes="32x32 64x64">
+                    <link rel=apple-touch-icon href=touch.png>
+                    <link rel=icon type="image/svg+xml" href=vector.svg>
+                    <link rel=mask-icon href=mask.svg>"#,
+                ),
+            ),
+            (
+                "/assets/icon.png".to_owned(),
+                response("404 Not Found", "Content-Type: text/plain\r\n", b"missing"),
+            ),
+            (
+                "/favicon.ico".to_owned(),
+                response("200 OK", "Content-Type: image/x-icon\r\n", &png),
+            ),
+        ]));
+        let loader = DocumentLoader::new().unwrap();
+        let loaded = loader.load(location).unwrap();
+        let document = loaded.parse(false).unwrap().document;
+        let addresses = PageResources::favicon_addresses(&loaded.location, &document);
+        let paths: Vec<_> = addresses
+            .iter()
+            .map(|address| address.url().path().to_owned())
+            .collect();
+        assert_eq!(paths, ["/assets/icon.png", "/favicon.ico"]);
+        let icon = PageResources::load_favicon(
+            &loader,
+            &loaded.location,
+            &addresses,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(icon.reference.ends_with("/favicon.ico"));
+        assert_eq!(icon.bytes, png);
+        server.join().unwrap();
+
+        // Local pages only use icons they declare.
+        let local = Location::from_path(std::env::temp_dir().join("page.html")).unwrap();
+        let blank = olive_html::parse("<!doctype html><p>x").unwrap().document;
+        assert!(PageResources::favicon_addresses(&local, &blank).is_empty());
+    }
     use olive_html::{
         css::{Color, ComputedStyle, StyleBudget, Stylesheet},
         js::{DocumentSession, ScriptOptions},

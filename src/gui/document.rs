@@ -14,6 +14,19 @@ use std::{collections::HashMap, io::Cursor};
 pub(crate) const MAX_IMAGE_DIMENSION: u32 = 4_096;
 const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const MAX_PAGE_IMAGE_PIXELS: u64 = 8 * 1024 * 1024;
+/// The largest side of a decoded site icon, enough for a 16-point tab icon on
+/// a 2× display.
+pub const FAVICON_PIXELS: u32 = 32;
+/// How long a page waits for its icon after its other resources are in.
+const FAVICON_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// A site icon, decoded in the tab process and scaled down to fit
+/// `FAVICON_PIXELS`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct Favicon(
+    #[serde(with = "crate::gui::worker::wire_image")] pub std::sync::Arc<egui::ColorImage>,
+);
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct LoadedPage {
     pub location: Location,
@@ -27,6 +40,8 @@ pub struct LoadedPage {
     pub resources: ResourceReport,
     #[serde(default)]
     pub cookie_updates: Vec<CookieUpdate>,
+    #[serde(default)]
+    pub favicon: Option<Favicon>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -51,6 +66,9 @@ pub struct PageUpdate {
     pub link: Option<String>,
     #[serde(default)]
     pub cookie_updates: Vec<CookieUpdate>,
+    /// A newly loaded site icon; updates without one keep the current icon.
+    #[serde(default)]
+    pub favicon: Option<Favicon>,
 }
 impl LoadedPage {
     /// Swap in a worker's newer presentation, keeping the user's form edits.
@@ -60,6 +78,9 @@ impl LoadedPage {
         self.reading = std::mem::take(&mut update.reading);
         self.base = update.base.clone();
         self.scripts = std::mem::take(&mut update.scripts);
+        if let Some(favicon) = update.favicon.take() {
+            self.favicon = Some(favicon);
+        }
     }
 
     /// Hand the whole page to the browser as a completed resource update.
@@ -76,6 +97,7 @@ impl LoadedPage {
             alert: None,
             link: None,
             cookie_updates: self.cookie_updates,
+            favicon: self.favicon,
         }
     }
 }
@@ -161,6 +183,7 @@ pub fn prepare_page_preview(
                 ..ResourceReport::default()
             },
             cookie_updates: Vec::new(),
+            favicon: None,
         },
         parsed,
     ))
@@ -173,22 +196,46 @@ pub fn prepare_page_with_loader(
     scripting_enabled: bool,
 ) -> Result<PreparedPage, String> {
     let parsed = source.parse(scripting_enabled)?;
-    prepare_page_with_parsed(source, loader, scripting_enabled, parsed)
+    prepare_page_with_parsed(source, loader, scripting_enabled, parsed, false)
 }
 
+/// Load the page's resources and build its presentation. With `favicon`, the
+/// site icon is fetched alongside the other resources.
 pub fn prepare_page_with_parsed(
     source: LoadedDocument,
     loader: &DocumentLoader,
     scripting_enabled: bool,
     parsed: ParseOutput,
+    favicon: bool,
 ) -> Result<PreparedPage, String> {
     let corrections = corrections(&parsed);
-    let resources = PageResources::load(
-        loader,
-        &source.location,
-        &parsed.document,
-        scripting_enabled,
-    );
+    let icon_addresses = if favicon {
+        PageResources::favicon_addresses(&source.location, &parsed.document)
+    } else {
+        Vec::new()
+    };
+    let (resources, favicon) = std::thread::scope(|scope| {
+        let icon = (!icon_addresses.is_empty()).then(|| {
+            scope.spawn(|| {
+                PageResources::load_favicon(
+                    loader,
+                    &source.location,
+                    &icon_addresses,
+                    FAVICON_TIMEOUT,
+                )
+            })
+        });
+        let resources = PageResources::load(
+            loader,
+            &source.location,
+            &parsed.document,
+            scripting_enabled,
+        );
+        let icon = icon
+            .and_then(|icon| icon.join().ok().flatten())
+            .and_then(|icon| decode_favicon(&icon.bytes));
+        (resources, icon)
+    });
     let mut resource_report = resources.report;
     let images = decode_images(&resources.images, &mut resource_report);
     let render = |document: &crate::Document| {
@@ -235,6 +282,7 @@ pub fn prepare_page_with_parsed(
             scripting_enabled,
             resources: resource_report,
             cookie_updates,
+            favicon,
         },
         session,
         document,
@@ -306,6 +354,30 @@ fn decode_image(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64),
     Ok((color_image(width, height, rgba.as_raw()), pixels))
 }
 
+/// Decode a site icon and scale it down to fit `FAVICON_PIXELS`. Icon files
+/// hold several sizes; the decoder picks the largest.
+fn decode_favicon(bytes: &[u8]) -> Option<Favicon> {
+    let (image, _) = decode_image(bytes).ok()?;
+    let [width, height] = image.size.map(|side| side as u32);
+    let pixels = image
+        .pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_srgba_unmultiplied())
+        .collect();
+    let rgba = image::RgbaImage::from_raw(width, height, pixels)?;
+    let scale = (FAVICON_PIXELS as f32 / width.max(height) as f32).min(1.0);
+    let fitted = image::imageops::thumbnail(
+        &rgba,
+        ((width as f32 * scale).round() as u32).max(1),
+        ((height as f32 * scale).round() as u32).max(1),
+    );
+    Some(Favicon(color_image(
+        fitted.width(),
+        fitted.height(),
+        fitted.as_raw(),
+    )))
+}
+
 fn decode_jpeg(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
     use zune_jpeg::{JpegDecoder, zune_core::colorspace::ColorSpace};
 
@@ -366,6 +438,7 @@ impl PreparedPage {
     /// loading. The document and its metadata stay for later clicks and reflows.
     pub fn take_update(&mut self) -> PageUpdate {
         PageUpdate {
+            favicon: self.loaded.favicon.clone(),
             default_allowed: false,
             page: std::mem::take(&mut self.loaded.page),
             reading: std::mem::take(&mut self.loaded.reading),
@@ -407,6 +480,7 @@ impl PreparedPage {
             alert: session.take_alerts().into_iter().next(),
             link: if allowed { click.href } else { None },
             cookie_updates: session.take_cookie_updates(),
+            favicon: None,
         })
     }
 
@@ -444,6 +518,7 @@ impl PreparedPage {
             alert: None,
             link: None,
             cookie_updates: Vec::new(),
+            favicon: None,
         })
     }
 }
@@ -451,6 +526,48 @@ impl PreparedPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decodes_gif_and_icon_files_and_scales_site_icons_down() {
+        use image::ImageEncoder;
+        let mut gif = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut gif)
+            .encode(
+                &[0, 0, 255, 255].repeat(6),
+                3,
+                2,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let (decoded, pixels) = decode_image(&gif).unwrap();
+        assert_eq!((decoded.size, pixels), ([3, 2], 6));
+        assert_eq!(decoded.pixels[0], egui::Color32::BLUE);
+
+        // An icon file holding a 64-pixel icon becomes a 32-pixel site icon.
+        let mut ico = Vec::new();
+        image::codecs::ico::IcoEncoder::new(&mut ico)
+            .write_image(
+                &[255, 0, 0, 255].repeat(64 * 64),
+                64,
+                64,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let icon = decode_favicon(&ico).unwrap();
+        assert_eq!(icon.0.size, [FAVICON_PIXELS as usize; 2]);
+        assert_eq!(icon.0.pixels[0], egui::Color32::RED);
+        // Small and wide icons keep their size and shape.
+        let mut wide = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut wide)
+            .write_image(
+                &[0, 255, 0, 255].repeat(16 * 8),
+                16,
+                8,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        assert_eq!(decode_favicon(&wide).unwrap().0.size, [16, 8]);
+        assert!(decode_favicon(b"<svg/>").is_none());
+    }
     #[test]
     fn decodes_webp_alpha_and_rejects_excessive_dimensions_and_truncation() {
         let rgba = [255, 0, 0, 255, 0, 255, 0, 128];

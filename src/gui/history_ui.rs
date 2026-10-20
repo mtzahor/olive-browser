@@ -1,4 +1,5 @@
 use crate::gui::{
+    favicons::Favicons,
     history::{BrowsingHistory, MAX_ENTRIES},
     ui_icons::{self, Icon, IconButton},
 };
@@ -24,6 +25,7 @@ impl HistoryWindow {
         &mut self,
         ctx: &egui::Context,
         history: &mut BrowsingHistory,
+        favicons: &mut Favicons,
         busy: bool,
     ) -> Option<Location> {
         if !self.open {
@@ -96,6 +98,8 @@ impl HistoryWindow {
                                 .clicked()
                             {
                                 history.clear();
+                                // Site icons would otherwise recall the history.
+                                favicons.clear();
                                 self.confirm_clear = false;
                             }
                             if ui.add(IconButton::new(Icon::Close, "Cancel")).clicked() {
@@ -154,6 +158,11 @@ impl HistoryWindow {
                                             let open_button = IconButton::new(
                                                 if remote { Icon::Globe } else { Icon::Page },
                                                 RichText::new(entry.display_title()).strong(),
+                                            )
+                                            .image(
+                                                favicons
+                                                    .get(ctx, &entry.url)
+                                                    .map(|texture| texture.id()),
                                             )
                                             .quiet()
                                             .align_start()

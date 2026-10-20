@@ -110,13 +110,23 @@ not the current document or in-memory Back/Forward stack. There is no private
 browsing mode. Storage locations and the `OLIVE_HISTORY_FILE` override are
 documented in README.md; multiple instances sharing a file use last-writer wins.
 
+Site icons are fetched by the tab process with the page's resource rules and
+cookies: at most two requests (the declared raster icon, then `/favicon.ico` for
+websites), each capped at 1 MiB and the icon deadline of 1.5 seconds after the page
+starts loading its resources. Icons decode in the tab process with the image limits
+below and are scaled to at most 32×32 pixels before reaching the browser. The
+browser keeps one icon per host as a PNG file of at most 64 KiB in the profile's
+`favicons` folder, which reveals visited hosts like the history file does. Icons
+of hosts no longer in history or bookmarks are deleted at startup, and clearing
+history deletes them all.
+
 Page resources resolve against the final document URL and first base href, with
 at most 256 attempts and a shared 30-second network deadline after document loading.
 Each resource request is capped at five seconds and the remaining shared time.
 Stylesheets precede images and optional scripts, with document order preserved
 within each kind. Resource discovery uses a linear ancestry pass and bounded queues.
 Each resource is capped at 8 MiB after decompression, with at most 8 MiB of
-external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG/WebP images
+external CSS, 32 MiB of external JavaScript, and 32 MiB of encoded PNG/JPEG/WebP/GIF/ICO/BMP images
 retained per page. Image decoding additionally caps each dimension at 4,096,
 decoder allocation at 32 MiB, and the page at 8,388,608 decoded pixels.
 A response that does not fit the remaining page budget is discarded; its error

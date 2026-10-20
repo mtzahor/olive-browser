@@ -2,8 +2,8 @@
 use olive_html::{
     NodeId,
     css::{
-        Color, ComputedStyle, Direction, Display, Length, LineHeight, StyleBudget, Stylesheet,
-        TextAlign, VerticalAlign, WhiteSpace,
+        Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, Length, LineHeight,
+        Position, StyleBudget, Stylesheet, TextAlign, TextTransform, VerticalAlign, WhiteSpace,
     },
     parse,
 };
@@ -175,9 +175,9 @@ fn shorthand_expands_before_cascade_and_resolves_lengths_after_font_size() {
             Length::Px(40.0)
         ]
     );
-    assert_eq!(s["a"].border_width, Length::Px(2.0));
-    assert_eq!(s["a"].border_color, Color(0, 0, 255, 255));
-    assert!(s["a"].border_solid);
+    assert_eq!(s["a"].border_width, [Length::Px(2.0); 4]);
+    assert_eq!(s["a"].border_color, [Color(0, 0, 255, 255); 4]);
+    assert_eq!(s["a"].border_solid, [true; 4]);
     assert_eq!(s["a"].width, Length::Percent(0.6));
     assert_eq!(s["a"].max_width, Length::Px(500.0));
 }
@@ -534,9 +534,9 @@ fn tables_take_display_spans_and_legacy_presentational_attributes() {
         (t.row_gap, t.column_gap),
         (Length::Px(0.0), Length::Px(0.0))
     );
-    assert!(t.border_solid);
-    assert_eq!(t.border_width, Length::Px(1.0));
-    assert_eq!(t.border_color, Color(128, 128, 128, 255));
+    assert_eq!(t.border_solid, [true; 4]);
+    assert_eq!(t.border_width, [Length::Px(1.0); 4]);
+    assert_eq!(t.border_color, [Color(128, 128, 128, 255); 4]);
     assert_eq!((t.margin[1], t.margin[3]), (Length::Auto, Length::Auto));
     assert_eq!(t.margin[2], Length::Px(12.0));
     assert_eq!(s["r"].display, Display::TableRow);
@@ -547,8 +547,8 @@ fn tables_take_display_spans_and_legacy_presentational_attributes() {
     assert_eq!(a.white_space, WhiteSpace::NoWrap);
     assert_eq!(a.width, Length::Px(18.0));
     assert_eq!(a.padding, [Length::Px(3.0); 4]);
-    assert!(a.border_solid);
-    assert_eq!(a.border_width, Length::Px(1.0));
+    assert_eq!(a.border_solid, [true; 4]);
+    assert_eq!(a.border_width, [Length::Px(1.0); 4]);
     assert_eq!(a.text_align, TextAlign::Right);
     assert_eq!(s["h"].font_weight, 700.0);
     assert_eq!(s["h"].text_align, TextAlign::Center);
@@ -557,7 +557,7 @@ fn tables_take_display_spans_and_legacy_presentational_attributes() {
     let plain = s["plain"];
     assert_eq!(plain.row_gap, Length::Px(2.0));
     assert_eq!(plain.margin[1], Length::Px(0.0));
-    assert!(!plain.border_solid);
+    assert!(!plain.has_border());
     assert!(px(s["b"].padding[1]) > px(s["b"].padding[0]));
     assert_eq!(s["col"].display, Display::None);
     assert_eq!(s["font"].color, Color(0, 128, 0, 255));
@@ -658,4 +658,97 @@ fn overflow_and_clear_parse_their_supported_keywords() {
     assert_eq!(s["d"].overflow_hidden, [false, false]);
     assert_eq!(s["d"].clear, Clear::None);
     assert_eq!(sheet.diagnostics.ignored + budget.ignored, 2);
+}
+
+#[test]
+fn font_shorthand_sets_and_resets_its_longhands() {
+    let (s, _, _) = styles(
+        r#"<!doctype html><style>
+        div { font-weight: 700; font-style: italic; line-height: 3 }
+        #a { font: 400 14px/35px Google-Oswald, Arimo, Arial }
+        #b { font: italic bold 2em/1.2 "Courier New", monospace }
+        #c { font: 16px Arial }
+        #d { font: 0/0 a }
+        #e { font: 12px }
+        </style><div id=a>x</div><div id=b>x</div><div id=c>x</div><div id=d>x</div><div id=e>x</div>"#,
+    );
+    assert_eq!(s["a"].font_size, 14.0);
+    assert_eq!(s["a"].font_weight, 400.0);
+    assert!(!s["a"].italic);
+    assert_eq!(s["a"].line_height, LineHeight::Px(35.0));
+    assert_eq!(s["b"].font_size, 34.0);
+    assert!(s["b"].italic && s["b"].monospace);
+    assert_eq!(s["b"].font_weight, 700.0);
+    assert_eq!(s["b"].line_height, LineHeight::Number(1.2));
+    // Omitted parts return to their initial values.
+    assert_eq!(s["c"].font_weight, 400.0);
+    assert!(!s["c"].italic);
+    assert_eq!(s["c"].line_height, LineHeight::Number(1.45));
+    assert_eq!(s["d"].font_size, 1.0);
+    // A family is required.
+    assert_eq!(s["e"].font_weight, 700.0);
+    assert_eq!(s["e"].line_height, LineHeight::Number(3.0));
+}
+
+#[test]
+fn border_sides_parse_separately_and_combine() {
+    let (s, _, _) = styles(
+        r#"<!doctype html><style>
+        #a { color: blue; border-bottom: 2px solid red; border-left: thick solid }
+        #b { border: 1px solid #000; border-top-width: 4px; border-right-style: none; border-left-color: rgb(0, 128, 0) }
+        #c { border-width: 1px 2px 3px; border-style: solid none; border-color: red green }
+        </style><p id=a>x</p><p id=b>x</p><p id=c>x</p>"#,
+    );
+    let a = s["a"];
+    assert_eq!(a.border_solid, [false, false, true, true]);
+    assert_eq!(a.border_width[2], Length::Px(2.0));
+    assert_eq!(a.border_width[3], Length::Px(5.0));
+    assert_eq!(a.border_color[2], Color(255, 0, 0, 255));
+    assert_eq!(a.border_color[3], Color(0, 0, 255, 255));
+    let b = s["b"];
+    assert_eq!(b.border_solid, [true, false, true, true]);
+    assert_eq!(b.border_width[0], Length::Px(4.0));
+    assert_eq!(b.border_color[3], Color(0, 128, 0, 255));
+    assert_eq!(b.border_color[0], Color(0, 0, 0, 255));
+    let c = s["c"];
+    assert_eq!(
+        c.border_width,
+        [
+            Length::Px(1.0),
+            Length::Px(2.0),
+            Length::Px(3.0),
+            Length::Px(2.0)
+        ]
+    );
+    assert_eq!(c.border_solid, [true, false, true, false]);
+    assert_eq!(c.border_color[1], Color(0, 128, 0, 255));
+    assert!(c.has_border());
+}
+
+#[test]
+fn positioning_layout_and_text_keywords_from_common_sites() {
+    let (s, _, budget) = styles(
+        r#"<!doctype html><style>
+        #a { position: fixed; z-index: 3; text-transform: uppercase; flex-flow: column wrap }
+        #b { position: -webkit-sticky; z-index: auto; flex-direction: row-reverse; height: 100%; min-height: 50% }
+        #c { position: sticky; flex-flow: wrap-reverse; text-transform: capitalize; z-index: -1 }
+        </style><div id=a><span id=inner>x</span></div><div id=b>x</div><div id=c>x</div>"#,
+    );
+    assert_eq!(s["a"].position, Position::Fixed);
+    assert_eq!(s["a"].z_index, Some(3));
+    assert_eq!(s["a"].flex_direction, FlexDirection::Column);
+    assert_eq!(s["a"].flex_wrap, FlexWrap::Wrap);
+    // Text transforms inherit.
+    assert_eq!(s["inner"].text_transform, TextTransform::Uppercase);
+    assert_eq!(s["b"].position, Position::Sticky);
+    assert_eq!(s["b"].z_index, None);
+    assert_eq!(s["b"].flex_direction, FlexDirection::RowReverse);
+    assert_eq!(s["b"].height, Length::Percent(1.0));
+    assert_eq!(s["b"].min_height, Length::Percent(0.5));
+    assert_eq!(s["c"].flex_direction, FlexDirection::Row);
+    assert_eq!(s["c"].flex_wrap, FlexWrap::Wrap);
+    assert_eq!(s["c"].text_transform, TextTransform::Capitalize);
+    assert_eq!(s["c"].z_index, Some(-1));
+    assert!(Position::Fixed.out_of_flow() && !Position::Sticky.out_of_flow());
+    assert_eq!(budget.ignored, 0);
 }

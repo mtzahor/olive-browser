@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.7.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.8.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -119,16 +119,28 @@ Browser buttons use scalable outline icons, with tooltips and accessible names
 for icon-only actions. **Go** is the olive-colored arrow beside the address field.
 A lock, warning or page icon at the start of the address field shows whether the
 page came over HTTPS, unencrypted HTTP or from a local file. While a tab loads,
-its icon turns into a spinner and a thin bar slides along the toolbar.
+its icon turns into a spinner and a glint slides along the foot of the address field.
 The **Browser menu** at the right of the address bar contains Open HTML, History,
 Bookmarks, Downloads, Save page, Developer tools and Settings, with their keyboard
 shortcuts, including in narrow windows. The star turns olive-oil gold on bookmarked pages.
-Tabs, toolbars, dialogs and the new-tab page share an olive palette and consistent
-control sizes: a shaded tab strip, an active tab that joins the toolbar below it,
-leaf-green actions and grouped settings. Status controls wrap to keep every action reachable.
+The browser frame is liquid glass over an olive grove. Tabs, the toolbar's three
+capsules (navigation, address and actions), the find bar and the status bar float
+as translucent panes over a soft sage-and-sunlight backdrop, each lit by a sheen
+along its top and a bright rim. The active tab is the brightest pane. Pages sit on a
+rounded card, and menus and windows are frosted glass. Status controls wrap to keep
+every action reachable.
 
-New tabs show an olive sprig, **Open HTML…**, up to eight bookmarks as tiles and
-the four most recently visited pages. Click one to open it in the tab, or
+Tabs show each site's icon, and so do bookmarks, recently visited pages and
+browsing history. The tab process looks for the icon alongside the page's other
+resources: the declared raster icon nearest 32 pixels (`<link rel="icon">`, or an
+Apple touch icon), then `/favicon.ico` for websites. PNG, ICO, GIF, JPEG and WebP
+icons work; SVG icons are skipped. Missing icons fall back to the drawn globe, page
+or initial. Icons are kept per host as small PNG files in a `favicons` folder in the
+profile directory, so they appear after a restart; icons of hosts no longer in
+history or bookmarks are removed at startup, and clearing history removes them all.
+
+New tabs show an olive sprig, **Open HTML…**, up to eight bookmarks as glass tiles
+and the four most recently visited pages. Click one to open it in the tab, or
 middle-click or Cmd/Ctrl-click it to open a new tab.
 
 Use the **moon/sun button** beside the browser menu to switch between **Light** and
@@ -225,8 +237,9 @@ prescan are supported. A BOM takes precedence over the HTTP charset, followed by
 the HTML declaration and then UTF-8. Responses are capped at 8 MiB after decompression
 and again after decoding to UTF-8. HTML and plain-text responses are supported.
 
-The viewer renders text, basic boxes, PNG, JPEG and WebP images, and linked/embedded/inline styles.
-GIF, SVG and CSS background images and HTTP authentication are not implemented. Downloads,
+The viewer renders text, basic boxes, PNG, JPEG, WebP, GIF (first frame), ICO and BMP
+images, and linked/embedded/inline styles. `<object>` elements show their fallback
+content. SVG and CSS background images and HTTP authentication are not implemented. Downloads,
 bookmarks, page zoom, persistent settings and restoring tabs across launches are supported.
 Cookies are shared in memory between tabs and
 discarded when the browser closes. Domain/path scoping, Secure, HttpOnly, SameSite,
@@ -242,7 +255,8 @@ before the script pass; changed URLs and dynamically inserted resources do not
 fetch. Failed resources leave the document readable and appear under
 **Resource errors** in the status bar. Disabled web JavaScript does not fetch
 external scripts, but images still load, and so do the stylesheets and images in
-`noscript` fallbacks.
+`noscript` fallbacks. The site icon request does not count toward the page's
+resources, and a missing icon is not reported as an error.
 
 Resource loading shares a 30-second deadline and 256-attempt limit per document,
 with a two-second cap per resource request. Stylesheets load first, then images,

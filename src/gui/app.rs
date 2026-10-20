@@ -3,9 +3,11 @@ use crate::gui::{
     devtools::DevTools,
     document::{ClickRequest, LoadedPage},
     downloads::Downloads,
+    favicons::Favicons,
     find::FindBar,
     focus::{MAX_FONT_SIZE, MIN_FONT_SIZE, Settings as FocusSettings},
     forms::{Activation, Kind},
+    glass::{self, Pane},
     history::BrowsingHistory,
     history_ui::HistoryWindow,
     icon,
@@ -36,6 +38,7 @@ struct Shared {
     profile: Profile,
     downloads: Downloads,
     daily_windows: DailyWindows,
+    favicons: Favicons,
 }
 
 pub struct Tab {
@@ -62,6 +65,8 @@ pub struct Tab {
     focus_settings: FocusSettings,
     zoom: u16,
     css_viewport: (u32, u32),
+    /// The current page's site icon.
+    favicon: Option<egui::TextureHandle>,
 }
 
 impl Tab {
@@ -85,101 +90,123 @@ impl Tab {
         let previous_style = ui.style().clone();
         // Theme just the reading surface; the browser returns to its normal appearance on exit.
         ui.style_mut().visuals = self.focus_settings.theme.reading_visuals();
+        // Focus keeps the glass frame in the reading theme's colors.
+        let palette = self.focus_settings.theme.palette();
         egui::Panel::top("focus_toolbar")
-            .exact_size(64.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(self.focus_settings.theme.reading_paper())
-                    .inner_margin(12),
-            )
+            .exact_size(60.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 12,
+                right: 12,
+                top: 4,
+                bottom: 8,
+            }))
             .show(ui, |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(12.0, 9.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(IconButton::new(Icon::Back, "Exit Focus"))
-                        .on_hover_text("Return to the page (Esc)")
-                        .clicked()
-                    {
-                        self.focus_mode = false;
-                    }
-                    if busy {
-                        ui.spinner();
-                        ui.label("Opening…");
-                    } else {
-                        ui.label(RichText::new("Focus mode").strong());
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let html = self
-                            .loaded
-                            .as_ref()
-                            .and_then(|loaded| loaded.reading.export_html.as_deref());
-                        let reason = self
-                            .loaded
-                            .as_ref()
-                            .and_then(|loaded| loaded.reading.export_error.as_deref())
-                            .unwrap_or("Export the article for offline reading");
+                glass::capsule(ui, egui::Margin::symmetric(6, 2), CAPSULE, &palette, |ui| {
+                    ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(
-                                !busy && html.is_some(),
-                                IconButton::icon_only(Icon::Download, "Export Focus view as HTML"),
-                            )
-                            .on_hover_text(reason)
+                            .add(IconButton::new(Icon::Back, "Exit Focus"))
+                            .on_hover_text("Return to the page (Esc)")
                             .clicked()
                         {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("HTML documents", &["html"])
-                                .set_file_name("olive-reading.html")
-                                .save_file()
+                            self.focus_mode = false;
+                        }
+                        if busy {
+                            ui.spinner();
+                            ui.label("Opening…");
+                        } else {
+                            ui.label(RichText::new("Focus mode").strong());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let html = self
+                                .loaded
+                                .as_ref()
+                                .and_then(|loaded| loaded.reading.export_html.as_deref());
+                            let reason = self
+                                .loaded
+                                .as_ref()
+                                .and_then(|loaded| loaded.reading.export_error.as_deref())
+                                .unwrap_or("Export the article for offline reading");
+                            if ui
+                                .add_enabled(
+                                    !busy && html.is_some(),
+                                    IconButton::icon_only(
+                                        Icon::Download,
+                                        "Export Focus view as HTML",
+                                    ),
+                                )
+                                .on_hover_text(reason)
+                                .clicked()
                             {
-                                match crate::gui::focus_export::save(&path, html.unwrap()) {
-                                    Ok(()) => {
-                                        self.alert = Some(format!(
-                                            "Focus view exported to {}",
-                                            path.display()
-                                        ))
-                                    }
-                                    Err(error) => {
-                                        self.error =
-                                            Some(format!("Could not export Focus view: {error}"))
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("HTML documents", &["html"])
+                                    .set_file_name("olive-reading.html")
+                                    .save_file()
+                                {
+                                    match crate::gui::focus_export::save(&path, html.unwrap()) {
+                                        Ok(()) => {
+                                            self.alert = Some(format!(
+                                                "Focus view exported to {}",
+                                                path.display()
+                                            ))
+                                        }
+                                        Err(error) => {
+                                            self.error = Some(format!(
+                                                "Could not export Focus view: {error}"
+                                            ))
+                                        }
                                     }
                                 }
                             }
-                        }
-                        let appearance = IconButton::new(Icon::Appearance, "Appearance")
-                            .selected(self.focus_panel);
-                        if ui
-                            .add(appearance)
-                            .on_hover_text("Show or hide reading settings")
-                            .clicked()
-                        {
-                            self.focus_panel = !self.focus_panel;
-                        }
+                            let appearance = IconButton::new(Icon::Appearance, "Appearance")
+                                .selected(self.focus_panel);
+                            if ui
+                                .add(appearance)
+                                .on_hover_text("Show or hide reading settings")
+                                .clicked()
+                            {
+                                self.focus_panel = !self.focus_panel;
+                            }
+                        });
                     });
                 });
             });
         if self.focus_panel {
             egui::Panel::top("focus_appearance")
-                .frame(
-                    egui::Frame::new()
-                        .fill(self.focus_settings.theme.reading_paper())
-                        .inner_margin(egui::Margin::symmetric(20, 12)),
-                )
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin {
+                    left: 12,
+                    right: 12,
+                    top: 0,
+                    bottom: 8,
+                }))
                 .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
-                        ui.add(
-                            egui::Slider::new(
-                                &mut self.focus_settings.font_size,
-                                MIN_FONT_SIZE..=MAX_FONT_SIZE,
-                            )
-                            .integer()
-                            .suffix(" px")
-                            .text("Font size")
-                            .show_value(true),
-                        );
-                        ui.selectable_value(&mut self.focus_settings.theme, Theme::Light, "Light");
-                        ui.selectable_value(&mut self.focus_settings.theme, Theme::Dark, "Dark");
+                    glass::capsule(ui, egui::Margin::symmetric(14, 8), 20, &palette, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.focus_settings.font_size,
+                                    MIN_FONT_SIZE..=MAX_FONT_SIZE,
+                                )
+                                .integer()
+                                .suffix(" px")
+                                .text("Font size")
+                                .show_value(true),
+                            );
+                            ui.selectable_value(
+                                &mut self.focus_settings.theme,
+                                Theme::Light,
+                                "Light",
+                            );
+                            ui.selectable_value(
+                                &mut self.focus_settings.theme,
+                                Theme::Dark,
+                                "Dark",
+                            );
+                        });
                     });
                 });
         }
@@ -210,6 +237,7 @@ impl Tab {
             focus_settings: FocusSettings::default(),
             zoom: 100,
             css_viewport: (0, 0),
+            favicon: None,
         }
     }
 
@@ -444,6 +472,7 @@ impl Tab {
                     self.image_textures.clear();
                     self.generation = self.generation.wrapping_add(1);
                     self.css_viewport = (0, 0);
+                    self.favicon = None;
                 }
                 other => {
                     let error = match other {
@@ -462,6 +491,14 @@ impl Tab {
             Some(Ok(Event::ResourcesUpdated(mut update))) => {
                 shared.cookies.apply_updates(&update.cookie_updates);
                 let keep_worker = update.presentation_available;
+                if let (Some(icon), Some(loaded)) = (&update.favicon, &self.loaded) {
+                    shared.favicons.store(ctx, loaded.location.as_str(), icon);
+                    self.favicon = Some(ctx.load_texture(
+                        format!("tab-favicon-{}", self.id),
+                        icon.0.clone(),
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
                 if let Some(loaded) = &mut self.loaded {
                     loaded.apply_update(&mut update);
                     loaded.resources = update.resources;
@@ -574,6 +611,15 @@ impl Tab {
         }
     }
 
+    /// The address whose site icon the tab shows, including a restored tab
+    /// that has not loaded yet.
+    fn page_address(&self) -> Option<&str> {
+        self.loaded
+            .as_ref()
+            .map(|loaded| loaded.location.as_str())
+            .or_else(|| self.deferred.as_ref().map(Location::as_str))
+    }
+
     fn title(&self) -> &str {
         self.loaded
             .as_ref()
@@ -592,8 +638,15 @@ impl Tab {
     }
 }
 
+/// The corner radius of the page card.
+const CARD_RADIUS: f32 = 14.0;
 /// The width of an icon-only toolbar button.
 const ICON_BUTTON: f32 = 36.0;
+/// Space between a toolbar capsule's edge and its controls, and between capsules.
+const GROUP_PAD: i8 = 4;
+const GROUP_GAP: f32 = 8.0;
+/// The corner radius of toolbar capsules: half their height.
+const CAPSULE: u8 = 22;
 const SITE_ICON: &str = "site-icon";
 
 /// How the current page was reached, for the address field and status bar.
@@ -729,28 +782,47 @@ impl Tab {
         if self.find.open {
             ui.push_id(self.id, |ui| self.find.show(ui, find_count));
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(if self.focus_mode {
+        // A page is a card of paper floating on the backdrop; the new-tab page
+        // sits on the backdrop itself.
+        let paper = self.loaded.as_ref().map(|loaded| {
+            if self.focus_mode {
                 self.focus_settings.theme.reading_paper()
             } else {
-                self.loaded
-                    .as_ref()
-                    .map(|loaded| loaded.page.background.unwrap_or(DOCUMENT_PAPER))
-                    .unwrap_or(palette.canvas)
+                loaded.page.background.unwrap_or(DOCUMENT_PAPER)
+            }
+        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(if paper.is_some() {
+                egui::Margin {
+                    left: 12,
+                    right: 12,
+                    top: 0,
+                    bottom: 2,
+                }
+            } else {
+                egui::Margin::ZERO
             }))
             .show(ui, |ui| {
+                let card = ui.available_rect_before_wrap();
+                if let Some(paper) = paper {
+                    glass::card_shadow(ui.painter(), card, CARD_RADIUS, &palette);
+                    ui.painter().rect_filled(card, CARD_RADIUS, paper);
+                }
                 if self.focus_mode {
                     ui.style_mut().visuals = self.focus_settings.theme.reading_visuals();
                 }
                 self.error_banner(ui, palette, &mut actions);
                 if self.loaded.is_some() {
-                    self.document_view(ui, shared, &mut actions, busy);
+                    if let Some(overlay) = self.document_view(ui, shared, &mut actions, busy) {
+                        glass::round_card(&ctx, overlay, card, CARD_RADIUS, &palette);
+                    }
                 } else {
                     let choice = new_tab::show(
                         ui,
                         shared.profile.data.settings.browser_theme,
                         &shared.profile.data.bookmarks,
                         &shared.browsing_history,
+                        &mut shared.favicons,
                     );
                     actions.open_file |= choice.open_file;
                     actions.open_url = choice.url;
@@ -846,47 +918,56 @@ impl Tab {
     ) {
         let palette = shared.profile.data.settings.browser_theme.palette();
         let working = self.working();
-        let panel = egui::Panel::top("toolbar")
-            .exact_size(54.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.chrome)
-                    .inner_margin(egui::Margin::symmetric(10, 9)),
-            )
+        let mut address_pane = egui::Rect::NOTHING;
+        // Three glass capsules float above the page: navigation, the address,
+        // and the page and browser actions.
+        egui::Panel::top("toolbar")
+            .exact_size(56.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 12,
+                right: 12,
+                top: 4,
+                bottom: 6,
+            }))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = GROUP_GAP;
                     ui.spacing_mut().button_padding = egui::vec2(8.0, 8.0);
                     let compact = ui.available_width() < 800.0;
-                    actions.back |= ui
-                        .add_enabled(
-                            self.history.back().is_some(),
-                            IconButton::icon_only(Icon::Back, "Back").quiet(),
-                        )
-                        .on_hover_text("Back (Alt+Left)")
-                        .clicked();
-                    actions.forward |= ui
-                        .add_enabled(
-                            self.history.forward().is_some(),
-                            IconButton::icon_only(Icon::Forward, "Forward").quiet(),
-                        )
-                        .on_hover_text("Forward (Alt+Right)")
-                        .clicked();
-                    if working {
-                        actions.stop |= ui
-                            .add(IconButton::icon_only(Icon::Close, "Stop tab").quiet())
-                            .on_hover_text("Stop this tab (Escape)")
-                            .clicked();
-                    } else {
-                        actions.reload |= ui
-                            .add_enabled(
-                                self.loaded.is_some() || !self.address.is_empty(),
-                                IconButton::icon_only(Icon::Reload, "Reload").quiet(),
-                            )
-                            .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
-                            .clicked();
-                    }
-                    ui.add_space(4.0);
+                    glass::capsule(ui, GROUP_PAD, CAPSULE, &palette, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            actions.back |= ui
+                                .add_enabled(
+                                    self.history.back().is_some(),
+                                    IconButton::icon_only(Icon::Back, "Back").quiet(),
+                                )
+                                .on_hover_text("Back (Alt+Left)")
+                                .clicked();
+                            actions.forward |= ui
+                                .add_enabled(
+                                    self.history.forward().is_some(),
+                                    IconButton::icon_only(Icon::Forward, "Forward").quiet(),
+                                )
+                                .on_hover_text("Forward (Alt+Right)")
+                                .clicked();
+                            if working {
+                                actions.stop |= ui
+                                    .add(IconButton::icon_only(Icon::Close, "Stop tab").quiet())
+                                    .on_hover_text("Stop this tab (Escape)")
+                                    .clicked();
+                            } else {
+                                actions.reload |= ui
+                                    .add_enabled(
+                                        self.loaded.is_some() || !self.address.is_empty(),
+                                        IconButton::icon_only(Icon::Reload, "Reload").quiet(),
+                                    )
+                                    .on_hover_text("Reload (Cmd/Ctrl+R or F5)")
+                                    .clicked();
+                            }
+                        });
+                    });
                     // Go, bookmark, Focus, theme and menu follow the address field,
                     // which takes the rest of the row. The bookmark slot stays present
                     // on blank tabs to keep the address field stable.
@@ -900,140 +981,161 @@ impl Tab {
                         );
                         2.0 * ui.spacing().button_padding.x + 18.0 + 7.0 + label.size().x
                     };
-                    let trailing = 4.0 * ICON_BUTTON + focus_width + 5.0 * 6.0;
+                    let pad = 2.0 * f32::from(GROUP_PAD);
+                    let trailing =
+                        pad + 4.0 + ICON_BUTTON + GROUP_GAP + pad + 3.0 * ICON_BUTTON + focus_width;
                     let address_width = (ui.available_width() - trailing).max(60.0);
                     let site = self.site();
-                    let mut output = ui
-                        .scope(|ui| {
-                            let visuals = ui.visuals_mut();
-                            Theme::round_fields(visuals, 18);
-                            visuals.widgets.hovered.bg_stroke.color = palette.muted;
-                            visuals.selection.stroke.width = 2.0;
-                            egui::TextEdit::singleline(&mut self.address)
-                                .id(egui::Id::unique(("address", self.id)))
-                                .hint_text("Enter a URL or file path")
-                                .char_limit(crate::net::MAX_URL_BYTES)
-                                .prefix(egui::Atom::custom(
-                                    egui::IdSalt::new(SITE_ICON),
-                                    egui::Vec2::splat(16.0),
-                                ))
-                                .desired_width(address_width)
-                                .margin(egui::vec2(12.0, 9.0))
-                                .show(ui)
-                        })
-                        .inner;
-                    if let Some(rect) = output.response.rect(egui::IdSalt::new(SITE_ICON)) {
-                        site.icon().paint(ui.painter(), rect, site.color(palette));
-                        if let Some(description) = site.description() {
-                            ui.interact(
-                                rect,
-                                egui::Id::unique((SITE_ICON, self.id)),
-                                egui::Sense::hover(),
-                            )
-                            .on_hover_text(description);
-                        }
-                    }
-                    if focus_address {
-                        output.response.request_focus();
-                        output
-                            .state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                egui::text::CCursor::new(0),
-                                egui::text::CCursor::new(self.address.chars().count()),
-                            )));
-                        output.state.store(ui.ctx(), output.response.id);
-                    }
-                    actions.go |= output.response.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    actions.go |= ui
-                        .add(IconButton::icon_only(Icon::Go, "Go").primary())
-                        .on_hover_text("Open address")
-                        .clicked();
-                    {
-                        let marked = self.loaded.as_ref().is_some_and(|loaded| {
-                            shared.profile.is_bookmarked(loaded.location.as_str())
+                    address_pane = glass::capsule(ui, GROUP_PAD, CAPSULE, &palette, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let mut output = ui
+                                .scope(|ui| {
+                                    // The field is clear glass inside its capsule;
+                                    // focus draws a leaf-green ring.
+                                    let visuals = ui.visuals_mut();
+                                    Theme::round_fields(visuals, 18);
+                                    visuals.text_edit_bg_color = Some(egui::Color32::TRANSPARENT);
+                                    for state in [
+                                        &mut visuals.widgets.inactive,
+                                        &mut visuals.widgets.hovered,
+                                    ] {
+                                        state.bg_stroke = egui::Stroke::NONE;
+                                    }
+                                    visuals.selection.stroke.width = 2.0;
+                                    egui::TextEdit::singleline(&mut self.address)
+                                        .id(egui::Id::unique(("address", self.id)))
+                                        .hint_text("Enter a URL or file path")
+                                        .char_limit(crate::net::MAX_URL_BYTES)
+                                        .prefix(egui::Atom::custom(
+                                            egui::IdSalt::new(SITE_ICON),
+                                            egui::Vec2::splat(16.0),
+                                        ))
+                                        .desired_width(address_width)
+                                        .margin(egui::vec2(12.0, 9.0))
+                                        .show(ui)
+                                })
+                                .inner;
+                            if let Some(rect) = output.response.rect(egui::IdSalt::new(SITE_ICON)) {
+                                site.icon().paint(ui.painter(), rect, site.color(palette));
+                                if let Some(description) = site.description() {
+                                    ui.interact(
+                                        rect,
+                                        egui::Id::unique((SITE_ICON, self.id)),
+                                        egui::Sense::hover(),
+                                    )
+                                    .on_hover_text(description);
+                                }
+                            }
+                            if focus_address {
+                                output.response.request_focus();
+                                output.state.cursor.set_char_range(Some(
+                                    egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(self.address.chars().count()),
+                                    ),
+                                ));
+                                output.state.store(ui.ctx(), output.response.id);
+                            }
+                            actions.go |= output.response.lost_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            actions.go |= ui
+                                .add(IconButton::icon_only(Icon::Go, "Go").primary())
+                                .on_hover_text("Open address")
+                                .clicked();
                         });
-                        let label = if marked {
-                            "Remove bookmark"
-                        } else {
-                            "Add bookmark"
-                        };
-                        let bookmark = if marked {
-                            IconButton::icon_only(Icon::StarFilled, label).icon_color(palette.oil)
-                        } else {
-                            IconButton::icon_only(Icon::Star, label)
-                        };
-                        actions.toggle_bookmark |= ui
-                            .add_enabled(self.loaded.is_some(), bookmark.quiet())
-                            .on_hover_text(label)
-                            .clicked();
-                    }
-                    let readable = self
-                        .loaded
-                        .as_ref()
-                        .is_some_and(|loaded| !loaded.reading.is_empty());
-                    if ui
-                        .add_enabled(
-                            !busy && readable,
-                            if compact {
-                                IconButton::icon_only(Icon::Focus, "Focus mode").quiet()
+                    })
+                    .response
+                    .rect;
+                    glass::capsule(ui, GROUP_PAD, CAPSULE, &palette, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let marked = self.loaded.as_ref().is_some_and(|loaded| {
+                                shared.profile.is_bookmarked(loaded.location.as_str())
+                            });
+                            let label = if marked {
+                                "Remove bookmark"
                             } else {
-                                IconButton::new(Icon::Focus, "Focus").quiet()
-                            },
-                        )
-                        .on_disabled_hover_text(if readable {
-                            "Wait for the page to finish loading"
-                        } else {
-                            "Open a page with readable text to use Focus mode"
-                        })
-                        .on_hover_text("Focus mode (Cmd/Ctrl+Shift+F)")
-                        .clicked()
-                    {
-                        self.toggle_focus(shared);
-                    }
-
-                    let dark = shared.profile.data.settings.browser_theme == Theme::Dark;
-                    let theme_label = if dark {
-                        "Switch to light mode"
-                    } else {
-                        "Switch to dark mode"
-                    };
-                    if ui
-                        .add(
-                            IconButton::icon_only(
-                                if dark { Icon::Sun } else { Icon::Moon },
-                                theme_label,
-                            )
-                            .quiet(),
-                        )
-                        .on_hover_text(theme_label)
-                        .clicked()
-                    {
-                        shared.profile.data.settings.browser_theme.toggle();
-                    }
-                    let menu = ui
-                        .add(
-                            IconButton::icon_only(Icon::Menu, "Browser menu")
-                                .quiet()
-                                .warning(
-                                    shared.browsing_history.error().is_some()
-                                        || shared.profile.error.is_some(),
-                                ),
-                        )
-                        .on_hover_text("Browser menu · files, history, bookmarks and settings");
-                    self.browser_menu(&menu, shared, actions, devtools_open);
+                                "Add bookmark"
+                            };
+                            let bookmark = if marked {
+                                IconButton::icon_only(Icon::StarFilled, label)
+                                    .icon_color(palette.oil)
+                            } else {
+                                IconButton::icon_only(Icon::Star, label)
+                            };
+                            actions.toggle_bookmark |= ui
+                                .add_enabled(self.loaded.is_some(), bookmark.quiet())
+                                .on_hover_text(label)
+                                .clicked();
+                            let readable = self
+                                .loaded
+                                .as_ref()
+                                .is_some_and(|loaded| !loaded.reading.is_empty());
+                            if ui
+                                .add_enabled(
+                                    !busy && readable,
+                                    if compact {
+                                        IconButton::icon_only(Icon::Focus, "Focus mode").quiet()
+                                    } else {
+                                        IconButton::new(Icon::Focus, "Focus").quiet()
+                                    },
+                                )
+                                .on_disabled_hover_text(if readable {
+                                    "Wait for the page to finish loading"
+                                } else {
+                                    "Open a page with readable text to use Focus mode"
+                                })
+                                .on_hover_text("Focus mode (Cmd/Ctrl+Shift+F)")
+                                .clicked()
+                            {
+                                self.toggle_focus(shared);
+                            }
+                            let dark = shared.profile.data.settings.browser_theme == Theme::Dark;
+                            let theme_label = if dark {
+                                "Switch to light mode"
+                            } else {
+                                "Switch to dark mode"
+                            };
+                            if ui
+                                .add(
+                                    IconButton::icon_only(
+                                        if dark { Icon::Sun } else { Icon::Moon },
+                                        theme_label,
+                                    )
+                                    .quiet(),
+                                )
+                                .on_hover_text(theme_label)
+                                .clicked()
+                            {
+                                shared.profile.data.settings.browser_theme.toggle();
+                            }
+                            let menu = ui
+                                .add(
+                                    IconButton::icon_only(Icon::Menu, "Browser menu")
+                                        .quiet()
+                                        .warning(
+                                            shared.browsing_history.error().is_some()
+                                                || shared.profile.error.is_some(),
+                                        ),
+                                )
+                                .on_hover_text(
+                                    "Browser menu · files, history, bookmarks and settings",
+                                );
+                            self.browser_menu(&menu, shared, actions, devtools_open);
+                        });
+                    });
                 });
             });
-        if working {
-            // An indeterminate bar slides along the toolbar's lower edge.
-            let rect = panel.response.rect;
+        if working && address_pane.is_finite() {
+            // An indeterminate glint slides along the foot of the address capsule.
+            let track = address_pane.shrink2(egui::vec2(CAPSULE as f32, 0.0));
             let phase = (ui.input(|input| input.time) as f32 / 1.4).fract();
-            let width = rect.width() * 0.3;
-            let left = rect.left() - width + phase * (rect.width() + width);
+            let width = track.width() * 0.35;
+            let left = track.left() - width + phase * (track.width() + width);
             let bar = egui::Rect::from_min_max(
-                egui::pos2(left.max(rect.left()), rect.bottom() - 2.5),
-                egui::pos2((left + width).min(rect.right()), rect.bottom()),
+                egui::pos2(left.max(track.left()), track.bottom() - 3.0),
+                egui::pos2((left + width).min(track.right()), track.bottom() - 1.0),
             );
             ui.painter().rect_filled(bar, 1, palette.accent);
             ui.ctx().request_repaint();
@@ -1145,209 +1247,228 @@ impl Tab {
         actions: &mut TabActions,
         busy: bool,
     ) {
+        // One glass capsule floats along the foot of the window.
         egui::Panel::bottom("status")
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.chrome)
-                    .inner_margin(egui::Margin::symmetric(10, 5)),
-            )
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 12,
+                right: 12,
+                top: 6,
+                bottom: 8,
+            }))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                    ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
-                    ui.spacing_mut().interact_size.y = 24.0;
-                    let site = self.site();
-                    let (icon, label) = if busy {
-                        (None, "Opening…".to_owned())
-                    } else {
-                        let label = match self.loaded.as_ref().and_then(|loaded| loaded.status) {
-                            Some(status) if status >= 400 => {
-                                format!("{} · HTTP {status}", site.label())
-                            }
-                            _ => site.label().to_owned(),
+                glass::capsule(ui, egui::Margin::symmetric(8, 4), 18, &palette, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+                        ui.spacing_mut().interact_size.y = 24.0;
+                        let site = self.site();
+                        let (icon, label) = if busy {
+                            (None, "Opening…".to_owned())
+                        } else {
+                            let label = match self.loaded.as_ref().and_then(|loaded| loaded.status)
+                            {
+                                Some(status) if status >= 400 => {
+                                    format!("{} · HTTP {status}", site.label())
+                                }
+                                _ => site.label().to_owned(),
+                            };
+                            (Some(site.icon()), label)
                         };
-                        (Some(site.icon()), label)
-                    };
-                    let (fill, ink) = match site {
-                        Site::Secure if !busy => (palette.selection, palette.accent),
-                        Site::Insecure if !busy => (palette.warning_bg, palette.warning),
-                        _ => (egui::Color32::TRANSPARENT, palette.muted),
-                    };
-                    let chip = egui::Frame::new()
-                        .fill(fill)
-                        .corner_radius(6)
-                        .inner_margin(egui::Margin::symmetric(7, 3))
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.x = 5.0;
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-                            match icon {
-                                Some(icon) => icon.paint(ui.painter(), rect, ink),
-                                None => ui_icons::paint_spinner(ui, rect, ink),
+                        let (fill, ink) = match site {
+                            Site::Secure if !busy => (palette.selection, palette.accent),
+                            Site::Insecure if !busy => (palette.warning_bg, palette.warning),
+                            _ => (egui::Color32::TRANSPARENT, palette.muted),
+                        };
+                        let chip = egui::Frame::new()
+                            .fill(fill)
+                            .corner_radius(6)
+                            .inner_margin(egui::Margin::symmetric(7, 3))
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(14.0),
+                                    egui::Sense::hover(),
+                                );
+                                match icon {
+                                    Some(icon) => icon.paint(ui.painter(), rect, ink),
+                                    None => ui_icons::paint_spinner(ui, rect, ink),
+                                }
+                                ui.add(
+                                    egui::Label::new(RichText::new(label).size(12.0).color(ink))
+                                        .truncate(),
+                                );
+                            })
+                            .response;
+                        if let Some(description) = site.description().filter(|_| !busy) {
+                            chip.on_hover_text(description);
+                        }
+                        // Zoom out, reset and in share one outlined group.
+                        egui::Frame::new()
+                            .stroke(egui::Stroke::new(1.0, palette.border))
+                            .corner_radius(7)
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                actions.zoom_out |= ui
+                                    .add(
+                                        IconButton::icon_only(Icon::Minus, "Zoom out")
+                                            .small()
+                                            .quiet(),
+                                    )
+                                    .on_hover_text("Zoom out (Cmd/Ctrl−)")
+                                    .clicked();
+                                actions.zoom_reset |= ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new(format!("{}%", self.zoom)).size(12.0),
+                                        )
+                                        .frame(false)
+                                        .min_size(egui::vec2(46.0, 24.0)),
+                                    )
+                                    .on_hover_text("Reset page zoom (Cmd/Ctrl+0)")
+                                    .clicked();
+                                actions.zoom_in |= ui
+                                    .add(
+                                        IconButton::icon_only(Icon::Plus, "Zoom in")
+                                            .small()
+                                            .quiet(),
+                                    )
+                                    .on_hover_text("Zoom in (Cmd/Ctrl+)")
+                                    .clicked();
+                            });
+                        if let Some(loaded) = &self.loaded {
+                            if ui
+                                .add(IconButton::new(Icon::Search, "Find").small().quiet())
+                                .on_hover_text("Find in page (Cmd/Ctrl+F)")
+                                .clicked()
+                            {
+                                self.find.activate();
                             }
-                            ui.add(
-                                egui::Label::new(RichText::new(label).size(12.0).color(ink))
-                                    .truncate(),
-                            );
-                        })
-                        .response;
-                    if let Some(description) = site.description().filter(|_| !busy) {
-                        chip.on_hover_text(description);
-                    }
-                    // Zoom out, reset and in share one outlined group.
-                    egui::Frame::new()
-                        .stroke(egui::Stroke::new(1.0, palette.border))
-                        .corner_radius(7)
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            actions.zoom_out |= ui
-                                .add(
-                                    IconButton::icon_only(Icon::Minus, "Zoom out")
+                            if loaded.location.is_remote() {
+                                let enabled = loaded.scripting_enabled;
+                                actions.toggle_scripts = ui
+                                    .add_enabled(
+                                        !busy,
+                                        IconButton::new(
+                                            if enabled { Icon::CodeOff } else { Icon::Code },
+                                            if enabled {
+                                                "Disable JavaScript"
+                                            } else {
+                                                "Enable JavaScript"
+                                            },
+                                        )
                                         .small()
                                         .quiet(),
-                                )
-                                .on_hover_text("Zoom out (Cmd/Ctrl−)")
-                                .clicked();
-                            actions.zoom_reset |= ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new(format!("{}%", self.zoom)).size(12.0),
                                     )
-                                    .frame(false)
-                                    .min_size(egui::vec2(46.0, 24.0)),
-                                )
-                                .on_hover_text("Reset page zoom (Cmd/Ctrl+0)")
-                                .clicked();
-                            actions.zoom_in |= ui
-                                .add(IconButton::icon_only(Icon::Plus, "Zoom in").small().quiet())
-                                .on_hover_text("Zoom in (Cmd/Ctrl+)")
-                                .clicked();
-                        });
-                    if let Some(loaded) = &self.loaded {
-                        if ui
-                            .add(IconButton::new(Icon::Search, "Find").small().quiet())
-                            .on_hover_text("Find in page (Cmd/Ctrl+F)")
-                            .clicked()
-                        {
-                            self.find.activate();
-                        }
-                        if loaded.location.is_remote() {
-                            let enabled = loaded.scripting_enabled;
-                            actions.toggle_scripts = ui
-                                .add_enabled(
-                                    !busy,
-                                    IconButton::new(
-                                        if enabled { Icon::CodeOff } else { Icon::Code },
-                                        if enabled {
-                                            "Disable JavaScript"
-                                        } else {
-                                            "Enable JavaScript"
-                                        },
-                                    )
-                                    .small()
-                                    .quiet(),
-                                )
-                                .on_hover_text(SCRIPT_TOGGLE_HINT)
-                                .clicked();
-                        }
-                        if loaded.resources.attempted > 0 || loaded.resources.limited {
-                            ui_icons::menu(
-                                ui,
-                                if loaded.resources.diagnostics.is_empty() {
-                                    Icon::Resources
-                                } else {
-                                    Icon::Warning
-                                },
-                                if loaded.resources.diagnostics.is_empty() {
-                                    "Resources"
-                                } else {
-                                    "Resource errors"
-                                },
-                                |ui| {
-                                    ui.label(format!(
-                                        "{} of {} resources loaded",
-                                        loaded.resources.loaded, loaded.resources.attempted
-                                    ));
-                                    egui::ScrollArea::vertical()
-                                        .max_height(240.0)
-                                        .show(ui, |ui| {
-                                            for message in &loaded.resources.diagnostics {
-                                                ui.label(message);
-                                            }
-                                        });
-                                },
-                            );
-                        }
-                        if loaded.scripts.attempted > 0
-                            || loaded.scripts.skipped > 0
-                            || loaded.scripts.limited
-                        {
-                            let label = if loaded.scripts.limited {
-                                "JavaScript limit reached"
-                            } else if !loaded.scripts.diagnostics.is_empty() {
-                                "JavaScript errors"
-                            } else {
-                                "JavaScript"
-                            };
-                            ui_icons::menu(
-                                ui,
-                                if loaded.scripts.limited || !loaded.scripts.diagnostics.is_empty()
-                                {
-                                    Icon::Warning
-                                } else {
-                                    Icon::Code
-                                },
-                                label,
-                                |ui| {
-                                    ui.label(format!(
-                                        "{} scripts completed; {} skipped",
-                                        loaded.scripts.executed, loaded.scripts.skipped
-                                    ));
-                                    egui::ScrollArea::vertical()
-                                        .max_height(240.0)
-                                        .show(ui, |ui| {
-                                            for error in &loaded.scripts.diagnostics {
-                                                if let Some(source) = &error.source {
-                                                    ui.strong(source);
+                                    .on_hover_text(SCRIPT_TOGGLE_HINT)
+                                    .clicked();
+                            }
+                            if loaded.resources.attempted > 0 || loaded.resources.limited {
+                                ui_icons::menu(
+                                    ui,
+                                    if loaded.resources.diagnostics.is_empty() {
+                                        Icon::Resources
+                                    } else {
+                                        Icon::Warning
+                                    },
+                                    if loaded.resources.diagnostics.is_empty() {
+                                        "Resources"
+                                    } else {
+                                        "Resource errors"
+                                    },
+                                    |ui| {
+                                        ui.label(format!(
+                                            "{} of {} resources loaded",
+                                            loaded.resources.loaded, loaded.resources.attempted
+                                        ));
+                                        egui::ScrollArea::vertical().max_height(240.0).show(
+                                            ui,
+                                            |ui| {
+                                                for message in &loaded.resources.diagnostics {
+                                                    ui.label(message);
                                                 }
-                                                ui.label(&error.message);
-                                            }
-                                            for message in &loaded.scripts.console {
-                                                ui.monospace(message);
-                                            }
-                                            let omitted =
-                                                loaded.scripts.omitted_diagnostics.saturating_add(
-                                                    loaded.scripts.omitted_console_messages,
-                                                );
-                                            if omitted > 0 {
-                                                ui.label(format!("{omitted} messages omitted"));
-                                            }
-                                        });
-                                },
-                            );
-                        }
-                        if loaded.page.css_ignored > 0 {
-                            ui.label(RichText::new("Some CSS is unsupported").size(11.0).weak())
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            if loaded.scripts.attempted > 0
+                                || loaded.scripts.skipped > 0
+                                || loaded.scripts.limited
+                            {
+                                let label = if loaded.scripts.limited {
+                                    "JavaScript limit reached"
+                                } else if !loaded.scripts.diagnostics.is_empty() {
+                                    "JavaScript errors"
+                                } else {
+                                    "JavaScript"
+                                };
+                                ui_icons::menu(
+                                    ui,
+                                    if loaded.scripts.limited
+                                        || !loaded.scripts.diagnostics.is_empty()
+                                    {
+                                        Icon::Warning
+                                    } else {
+                                        Icon::Code
+                                    },
+                                    label,
+                                    |ui| {
+                                        ui.label(format!(
+                                            "{} scripts completed; {} skipped",
+                                            loaded.scripts.executed, loaded.scripts.skipped
+                                        ));
+                                        egui::ScrollArea::vertical().max_height(240.0).show(
+                                            ui,
+                                            |ui| {
+                                                for error in &loaded.scripts.diagnostics {
+                                                    if let Some(source) = &error.source {
+                                                        ui.strong(source);
+                                                    }
+                                                    ui.label(&error.message);
+                                                }
+                                                for message in &loaded.scripts.console {
+                                                    ui.monospace(message);
+                                                }
+                                                let omitted = loaded
+                                                    .scripts
+                                                    .omitted_diagnostics
+                                                    .saturating_add(
+                                                        loaded.scripts.omitted_console_messages,
+                                                    );
+                                                if omitted > 0 {
+                                                    ui.label(format!("{omitted} messages omitted"));
+                                                }
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            if loaded.page.css_ignored > 0 {
+                                ui.label(
+                                    RichText::new("Some CSS is unsupported").size(11.0).weak(),
+                                )
                                 .on_hover_text(unsupported_css_summary(&loaded.page));
+                            }
+                            if loaded.corrections > 0 {
+                                ui.label(
+                                    RichText::new("Opened with HTML corrections")
+                                        .size(11.0)
+                                        .weak(),
+                                );
+                            }
                         }
-                        if loaded.corrections > 0 {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
                             ui.label(
-                                RichText::new("Opened with HTML corrections")
-                                    .size(11.0)
+                                RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                    .size(12.0)
                                     .weak(),
                             );
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(
-                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
-                                .size(12.0)
-                                .weak(),
-                        );
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-                        Icon::Leaf.paint(ui.painter(), rect, palette.accent);
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+                            Icon::Leaf.paint(ui.painter(), rect, palette.accent);
+                        });
                     });
                 });
             });
@@ -1394,16 +1515,18 @@ impl Tab {
         }
     }
 
+    /// Show the page, returning the layer painted directly above it.
     fn document_view(
         &mut self,
         ui: &mut egui::Ui,
         shared: &Shared,
         actions: &mut TabActions,
         busy: bool,
-    ) {
+    ) -> Option<egui::LayerId> {
         let Some(loaded) = &mut self.loaded else {
-            return;
+            return None;
         };
+        let mut overlay = None;
         let focus = self.focus_mode;
         let resource_pending = loaded.resources.pending;
         let scripting_enabled = loaded.scripting_enabled;
@@ -1493,6 +1616,7 @@ impl Tab {
                                 })
                                 .inner;
                             overflow = rendered.overflow;
+                            overlay = Some(rendered.overlay);
                             if let Some(click) = rendered.inner {
                                 actions.link = click.href;
                                 actions.link_new_tab = click.new_tab;
@@ -1543,6 +1667,7 @@ impl Tab {
                     ui.allocate_space(overflow);
                 });
             });
+        overlay
     }
 
     fn alert_window(&mut self, ctx: &egui::Context) {
@@ -1607,13 +1732,18 @@ impl Tab {
                 shared.downloads.open = true;
             }
         }
-        let daily_location =
-            shared
-                .daily_windows
-                .show(ctx, &mut shared.profile, &mut shared.downloads);
-        let history_location = shared
-            .history_window
-            .show(ctx, &mut shared.browsing_history, false);
+        let daily_location = shared.daily_windows.show(
+            ctx,
+            &mut shared.profile,
+            &mut shared.downloads,
+            &mut shared.favicons,
+        );
+        let history_location = shared.history_window.show(
+            ctx,
+            &mut shared.browsing_history,
+            &mut shared.favicons,
+            false,
+        );
         actions.stop |= !find_escape
             && !self.focus_mode
             && shortcut(ctx, egui::Modifiers::NONE, egui::Key::Escape);
@@ -1748,6 +1878,7 @@ impl OliveApp {
                 profile,
                 downloads: Downloads::default(),
                 daily_windows: DailyWindows::default(),
+                favicons: Favicons::load_default(),
             },
             tabs: Vec::new(),
             active: 0,
@@ -1758,6 +1889,22 @@ impl OliveApp {
             window_title: String::new(),
             devtools: DevTools::default(),
         };
+        // Keep only the icons that bookmarks and history can still show.
+        app.shared.favicons.prune(
+            app.shared
+                .browsing_history
+                .entries()
+                .iter()
+                .map(|entry| entry.url.as_str())
+                .chain(
+                    app.shared
+                        .profile
+                        .data
+                        .bookmarks
+                        .iter()
+                        .map(|bookmark| bookmark.url.as_str()),
+                ),
+        );
         let tab = app.blank_tab();
         app.tabs.push(tab);
         if let Some(source) = source {
@@ -1829,9 +1976,18 @@ impl OliveApp {
         let mut restore = false;
         let mut discard = false;
         egui::Panel::top("session-recovery")
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.warning_bg)
+                    .fill(palette.warning_bg.gamma_multiply(0.92))
+                    .stroke(egui::Stroke::new(1.0, palette.warning.gamma_multiply(0.3)))
+                    .corner_radius(18)
+                    .outer_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 8,
+                        bottom: 0,
+                    })
                     .inner_margin(egui::Margin::symmetric(14, 10)),
             )
             .show(ui, |ui| {
@@ -1913,42 +2069,21 @@ impl OliveApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let palette = self.shared.profile.data.settings.browser_theme.palette();
-        // The active tab takes the colors of the toolbar below it, which in
-        // Focus follows the reading theme.
-        let joined = {
-            let tab = &self.tabs[self.active];
-            if tab.focus_mode {
-                let theme = tab.focus_settings.theme;
-                Palette {
-                    chrome: theme.reading_paper(),
-                    ..theme.palette()
-                }
-            } else {
-                palette
-            }
-        };
         let mut selected = None;
         let mut close = None;
         let mut add = false;
-        let mut active_rect = None;
-        let mut strip_clip = egui::Rect::NOTHING;
-        // The active tab takes the toolbar's color and runs into it, so the
-        // strip draws its own lower edge everywhere else.
-        let panel = egui::Panel::top("tabs")
-            .exact_size(46.0)
+        // Tabs float on the backdrop; the active one is the brightest glass.
+        egui::Panel::top("tabs")
+            .exact_size(50.0)
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.strip)
-                    .inner_margin(egui::Margin {
-                        left: 10,
-                        right: 8,
-                        top: 6,
-                        bottom: 0,
-                    }),
-            )
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 12,
+                right: 10,
+                top: 4,
+                bottom: 0,
+            }))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.add(
                         egui::Image::new(&self.shared.icon)
@@ -1957,53 +2092,50 @@ impl OliveApp {
                     .on_hover_text("Olive Browser");
                     ui.add_space(6.0);
                     let width = (ui.available_width() - 44.0).max(100.0);
-                    let strip = egui::ScrollArea::horizontal()
+                    egui::ScrollArea::horizontal()
                         .id_salt("tab-strip")
                         .max_width(width)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 2.0;
-                                let mut previous: Option<(egui::Rect, bool)> = None;
-                                for (index, tab) in self.tabs.iter().enumerate() {
-                                    let active = index == self.active;
-                                    let card = ui.push_id(tab.id, |ui| {
-                                        tab_card(
-                                            ui,
-                                            tab,
-                                            active,
-                                            if active { joined } else { palette },
-                                        )
-                                    });
-                                    let (rect, response, closed) = card.inner;
-                                    if self.reveal_tab && active {
-                                        response.scroll_to_me(Some(egui::Align::Center));
-                                    }
-                                    if response.clicked() {
-                                        selected = Some(index);
-                                    }
-                                    if closed || response.clicked_by(egui::PointerButton::Middle) {
-                                        close = Some(index);
-                                    }
-                                    // A short divider between neighbouring background tabs.
-                                    if let Some((left, left_active)) = previous {
-                                        if !active && !left_active {
-                                            let x = (left.right() + rect.left()) / 2.0;
-                                            ui.painter().vline(
-                                                x,
-                                                rect.y_range().shrink(11.0),
-                                                egui::Stroke::new(1.0, palette.border),
-                                            );
+                            // Room for the panes' shadows inside the strip's clip.
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(4, 6))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                        for (index, tab) in self.tabs.iter().enumerate() {
+                                            let active = index == self.active;
+                                            let favicon = tab.favicon.clone().or_else(|| {
+                                                self.shared.favicons.get(
+                                                    &ctx,
+                                                    tab.page_address().unwrap_or_default(),
+                                                )
+                                            });
+                                            let card = ui.push_id(tab.id, |ui| {
+                                                tab_card(
+                                                    ui,
+                                                    tab,
+                                                    favicon.as_ref().map(egui::TextureHandle::id),
+                                                    active,
+                                                    &palette,
+                                                )
+                                            });
+                                            let (response, closed) = card.inner;
+                                            if self.reveal_tab && active {
+                                                response.scroll_to_me(Some(egui::Align::Center));
+                                            }
+                                            if response.clicked() {
+                                                selected = Some(index);
+                                            }
+                                            if closed
+                                                || response.clicked_by(egui::PointerButton::Middle)
+                                            {
+                                                close = Some(index);
+                                            }
                                         }
-                                    }
-                                    if active {
-                                        active_rect = Some(rect);
-                                    }
-                                    previous = Some((rect, active));
-                                }
-                            });
+                                    });
+                                });
                         });
-                    strip_clip = strip.inner_rect;
                     add = ui
                         .add_enabled(
                             self.tabs.len() < MAX_TABS,
@@ -2016,38 +2148,6 @@ impl OliveApp {
                         .clicked();
                 });
             });
-        let strip = panel.response.rect;
-        let edge = egui::Stroke::new(1.0, palette.border);
-        let y = strip.bottom() - 0.5;
-        match active_rect.filter(|rect| rect.x_range().intersects(strip_clip.x_range())) {
-            Some(tab) => {
-                // Concave flares tuck the active tab into the toolbar below.
-                let painter = ui.painter().with_clip_rect(egui::Rect::from_x_y_ranges(
-                    strip_clip.x_range().expand(TAB_FLARE),
-                    strip.y_range(),
-                ));
-                for (corner, outside) in [
-                    (tab.left_bottom(), -TAB_FLARE),
-                    (tab.right_bottom(), TAB_FLARE),
-                ] {
-                    let square =
-                        egui::Rect::from_two_pos(corner, corner + egui::vec2(outside, -TAB_FLARE));
-                    painter.rect_filled(square, 0, joined.chrome);
-                    painter.circle_filled(
-                        corner + egui::vec2(outside, -TAB_FLARE),
-                        TAB_FLARE,
-                        palette.strip,
-                    );
-                }
-                let left = (tab.left() - TAB_FLARE).max(strip_clip.left());
-                let right = (tab.right() + TAB_FLARE).min(strip_clip.right());
-                ui.painter().hline(strip.left()..=left, y, edge);
-                ui.painter().hline(right..=strip.right(), y, edge);
-            }
-            None => {
-                ui.painter().hline(strip.x_range(), y, edge);
-            }
-        }
         self.reveal_tab = false;
         if let Some(index) = selected {
             self.select(index);
@@ -2061,96 +2161,86 @@ impl OliveApp {
     }
 }
 
-const TAB_FLARE: f32 = 8.0;
-
-/// One tab in the strip: its icon, title and close button. The active tab is
-/// filled with the `chrome` of its palette. Returns the card's rectangle, the
-/// title button's response and whether close was clicked.
+/// One tab in the strip: its site icon (or a drawn one), title and close
+/// button, on a glass pane while it is active or under the pointer. Returns
+/// the title button's response and whether close was clicked.
 fn tab_card(
     ui: &mut egui::Ui,
     tab: &Tab,
+    favicon: Option<egui::TextureId>,
     active: bool,
-    palette: Palette,
-) -> (egui::Rect, egui::Response, bool) {
+    palette: &Palette,
+) -> (egui::Response, bool) {
     let mut closed = false;
-    let card = egui::Frame::new()
-        .fill(if active {
-            palette.chrome
-        } else {
-            egui::Color32::TRANSPARENT
-        })
-        .corner_radius(egui::CornerRadius {
-            nw: 10,
-            ne: 10,
-            sw: 0,
-            se: 0,
-        })
-        .inner_margin(egui::Margin {
-            left: 4,
-            right: 4,
-            top: 4,
-            bottom: 4,
-        })
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                let busy = tab.working();
-                let title: String = tab.title().chars().take(80).collect();
-                let failed = tab.crashed || tab.error.is_some();
-                let icon = if failed {
-                    Icon::Warning
+    let pane = glass::reserve(ui);
+    let card = egui::Frame::new().inner_margin(4).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let busy = tab.working();
+            let title: String = tab.title().chars().take(80).collect();
+            let failed = tab.crashed || tab.error.is_some();
+            let icon = if failed {
+                Icon::Warning
+            } else {
+                match tab.site() {
+                    Site::Blank if tab.address.is_empty() => Icon::Leaf,
+                    Site::Blank | Site::Secure | Site::Insecure => Icon::Globe,
+                    Site::Local => Icon::Page,
+                }
+            };
+            let ink = if active { palette.ink } else { palette.muted };
+            let button = IconButton::new(icon, RichText::new(title).color(ink))
+                .icon_color(if failed {
+                    palette.warning
+                } else if active {
+                    palette.accent
                 } else {
-                    match tab.site() {
-                        Site::Blank if tab.address.is_empty() => Icon::Leaf,
-                        Site::Blank | Site::Secure | Site::Insecure => Icon::Globe,
-                        Site::Local => Icon::Page,
-                    }
-                };
-                let ink = if active { palette.ink } else { palette.muted };
-                let button = IconButton::new(icon, RichText::new(title).color(ink))
-                    .icon_color(if failed {
-                        palette.warning
-                    } else if active {
-                        palette.accent
-                    } else {
-                        palette.muted
-                    })
-                    .spinning(busy)
-                    .quiet()
-                    .align_start()
-                    .truncate()
-                    .min_size(egui::vec2(140.0, 32.0));
-                let process = tab
-                    .worker
-                    .as_ref()
-                    .or_else(|| tab.pending.as_ref().map(|p| &p.worker))
-                    .and_then(Worker::pid)
-                    .map(|pid| format!("Tab process {pid}"))
-                    .unwrap_or_else(|| "New tab".into());
-                let response = ui.add_sized([176.0, 32.0], button).on_hover_text(format!(
-                    "{}\n{}",
-                    tab.title(),
-                    if busy {
-                        format!("Loading… · {process}")
-                    } else {
-                        process
-                    }
-                ));
-                closed = ui
-                    .add(
-                        IconButton::icon_only(Icon::Close, "Close tab")
-                            .icon_color(ink)
-                            .small()
-                            .quiet(),
-                    )
-                    .on_hover_text("Close tab (Cmd/Ctrl+W)")
-                    .clicked();
-                response
-            })
-            .inner
-        });
-    (card.response.rect, card.inner, closed)
+                    palette.muted
+                })
+                .image(favicon.filter(|_| !failed))
+                .spinning(busy)
+                .bare()
+                .align_start()
+                .truncate()
+                .min_size(egui::vec2(140.0, 30.0));
+            let process = tab
+                .worker
+                .as_ref()
+                .or_else(|| tab.pending.as_ref().map(|p| &p.worker))
+                .and_then(Worker::pid)
+                .map(|pid| format!("Tab process {pid}"))
+                .unwrap_or_else(|| "New tab".into());
+            let response = ui.add_sized([176.0, 30.0], button).on_hover_text(format!(
+                "{}\n{}",
+                tab.title(),
+                if busy {
+                    format!("Loading… · {process}")
+                } else {
+                    process
+                }
+            ));
+            closed = ui
+                .add(
+                    IconButton::icon_only(Icon::Close, "Close tab")
+                        .icon_color(ink)
+                        .small()
+                        .quiet(),
+                )
+                .on_hover_text("Close tab (Cmd/Ctrl+W)")
+                .clicked();
+            response
+        })
+        .inner
+    });
+    let rect = card.response.rect;
+    if active {
+        glass::fill(ui, pane, rect, 15, palette, Pane::Prominent);
+    } else if ui.rect_contains_pointer(rect) {
+        glass::fill(ui, pane, rect, 15, palette, Pane::Regular);
+    }
+    (card.inner, closed)
 }
+
 impl eframe::App for OliveApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.checkpoint();
@@ -2215,6 +2305,11 @@ impl eframe::App for OliveApp {
             }
         }
         ui.spacing_mut().item_spacing.y = 0.0;
+        glass::backdrop(
+            ui.painter(),
+            ctx.content_rect(),
+            &self.shared.profile.data.settings.browser_theme.palette(),
+        );
         self.recovery_bar(ui);
         self.tab_bar(ui);
         if let Some(location) = self.tabs[self.active].deferred.take() {
@@ -2288,6 +2383,7 @@ mod tests {
             profile: Profile::default(),
             downloads: Downloads::default(),
             daily_windows: DailyWindows::default(),
+            favicons: Favicons::default(),
         };
         shared
             .browsing_history

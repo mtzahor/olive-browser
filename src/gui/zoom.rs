@@ -3,6 +3,8 @@ use eframe::egui;
 pub struct ZoomOutput<R> {
     pub inner: R,
     pub overflow: egui::Vec2,
+    /// An untransformed layer painted directly above the document.
+    pub overlay: egui::LayerId,
 }
 
 /// Give the document its own coordinate system. Layout sees the narrower CSS
@@ -19,6 +21,9 @@ pub fn show<R>(
         * egui::emath::TSTransform::from_scaling(scale);
     let layer = egui::LayerId::new(ui.layer_id().order, ui.scope_id().with(("page-zoom", id)));
     ui.ctx().set_sublayer(ui.layer_id(), layer);
+    // Registered together, the overlay stays ordered right after the document.
+    let overlay = egui::LayerId::new(layer.order, layer.id.with("overlay"));
+    ui.ctx().set_sublayer(ui.layer_id(), overlay);
     ui.ctx().set_transform_layer(layer, transform);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -44,6 +49,7 @@ pub fn show<R>(
             (content_size.x - rect.width()).max(0.0),
             (content_size.y - rect.height()).max(0.0),
         ),
+        overlay,
     }
 }
 

@@ -487,7 +487,7 @@ fn navigate(
         )
         .map_err(|error| error.to_string())?;
         preview = Some(preview_page);
-        prepare_page_with_parsed(source, &loader, scripting, parsed)
+        prepare_page_with_parsed(source, &loader, scripting, parsed, true)
     })();
     Ok(match result {
         Ok(mut page) => {

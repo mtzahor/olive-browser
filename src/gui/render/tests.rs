@@ -1304,3 +1304,171 @@ fn empty_relative_frames_take_the_height_of_an_absolute_picture() {
     assert!(headline >= figure.bottom());
     output.textures_delta.clear();
 }
+
+/// The paint order of the box filled with each color, among `output`'s shapes.
+fn paint_order(output: &egui::FullOutput, colors: &[Color32]) -> Vec<usize> {
+    colors
+        .iter()
+        .map(|&color| {
+            output
+                .shapes
+                .iter()
+                .position(
+                    |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == color),
+                )
+                .unwrap_or_else(|| panic!("no shape filled with {color:?}"))
+        })
+        .collect()
+}
+
+#[test]
+fn fixed_headers_stay_out_of_flow_and_paint_above_the_page() {
+    // GSMArena's header: fixed, floated and full width, above a padded wrapper.
+    let mut page = page(
+        r#"<!doctype html><body style="margin:0">
+        <header style="position:fixed; float:left; top:0; left:0; min-width:100%; height:50px;
+            z-index:1; background:rgb(1,0,0)">Header</header>
+        <div style="position:relative; z-index:0; padding-top:40px; background:rgb(2,0,0)">
+            <p style="margin:0">Content</p></div>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    let header = box_with_background(&page, Color(1, 0, 0, 255));
+    let wrapper = box_with_background(&page, Color(2, 0, 0, 255));
+    assert_eq!(header.min, egui::Pos2::ZERO);
+    assert_eq!(header.width(), 600.0);
+    // The float does not push the page aside, and the header paints over it.
+    assert_eq!(wrapper.min, egui::Pos2::ZERO);
+    assert_eq!(wrapper.width(), 600.0);
+    let order = paint_order(
+        &output,
+        &[Color32::from_rgb(2, 0, 0), Color32::from_rgb(1, 0, 0)],
+    );
+    assert!(order[0] < order[1]);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn reversed_rows_start_at_the_right_and_wrapped_columns_fill_fixed_heights() {
+    let mut page = page(
+        r#"<!doctype html><body style="margin:0">
+        <div style="display:flex; flex-direction:row-reverse; width:300px">
+            <div style="width:100px; background:rgb(1,0,0)">a</div>
+            <div style="width:50px; background:rgb(2,0,0)">b</div></div>
+        <ul style="display:flex; flex-flow:column wrap; height:60px; width:200px; margin:0; padding:0">
+            <li style="height:20px; width:50px; background:rgb(3,0,0)"></li>
+            <li style="height:20px; width:50px; background:rgb(4,0,0)"></li>
+            <li style="height:20px; width:50px; background:rgb(5,0,0)"></li>
+            <li style="height:20px; width:50px; background:rgb(6,0,0)"></li></ul>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    let first = box_with_background(&page, Color(1, 0, 0, 255));
+    let second = box_with_background(&page, Color(2, 0, 0, 255));
+    assert_eq!(first.x_range(), egui::Rangef::new(200.0, 300.0));
+    assert_eq!(second.x_range(), egui::Rangef::new(150.0, 200.0));
+    let column_top = box_with_background(&page, Color(3, 0, 0, 255));
+    let third = box_with_background(&page, Color(5, 0, 0, 255));
+    let fourth = box_with_background(&page, Color(6, 0, 0, 255));
+    assert_eq!(third.left(), column_top.left());
+    assert_eq!(third.top(), column_top.top() + 40.0);
+    assert_eq!(fourth.left(), column_top.left() + 50.0);
+    assert_eq!(fourth.top(), column_top.top());
+    output.textures_delta.clear();
+}
+
+#[test]
+fn absolute_boxes_use_their_positioned_ancestor_and_follow_z_index() {
+    // A review card: a picture and a caption placed in the card, not in the
+    // static link that wraps them, with the caption painted above the picture.
+    let mut page = page(
+        r#"<!doctype html><body style="margin:0">
+        <article style="position:relative; width:200px; height:100px; overflow:hidden">
+          <a href="/review" style="display:block">
+            <header style="position:absolute; bottom:0; left:0; width:100%; z-index:1;
+                background:rgb(1,0,0)">Caption</header>
+            <div style="position:absolute; top:0; left:-50%; height:100%; width:300px;
+                z-index:0; background:rgb(2,0,0)"></div>
+          </a></article>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    output.textures_delta.clear();
+    // Bottom edges settle on the next frame, once the caption's height is known.
+    let mut output = draw(&mut page, 600.0);
+    let caption = box_with_background(&page, Color(1, 0, 0, 255));
+    let picture = box_with_background(&page, Color(2, 0, 0, 255));
+    assert_eq!(picture.left(), -100.0);
+    assert_eq!(picture.height(), 100.0);
+    assert_eq!(picture.width(), 300.0);
+    assert_eq!(caption.bottom(), 100.0);
+    assert_eq!(caption.width(), 200.0);
+    let order = paint_order(
+        &output,
+        &[Color32::from_rgb(2, 0, 0), Color32::from_rgb(1, 0, 0)],
+    );
+    assert!(order[0] < order[1]);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn percentage_heights_need_a_definite_container() {
+    let mut page = page(
+        r#"<!doctype html><body style="margin:0">
+        <div style="height:200px"><div style="height:50%; background:rgb(1,0,0)"></div></div>
+        <div><div style="height:50%; background:rgb(2,0,0)">auto</div></div>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    assert_eq!(
+        box_with_background(&page, Color(1, 0, 0, 255)).height(),
+        100.0
+    );
+    assert!(box_with_background(&page, Color(2, 0, 0, 255)).height() < 40.0);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn uneven_borders_paint_each_side_and_take_their_own_space() {
+    let mut page = page(
+        r#"<!doctype html><body style="margin:0">
+        <div style="width:100px; height:20px; border-bottom:3px solid rgb(200,0,0);
+            border-left:1px solid rgb(0,0,200); background:rgb(1,0,0)"></div>
+        <p style="margin:0">After</p>"#,
+    );
+    let mut output = draw(&mut page, 600.0);
+    let rect = box_with_background(&page, Color(1, 0, 0, 255));
+    assert_eq!(rect.size(), egui::vec2(101.0, 23.0));
+    fn fills(shape: &egui::Shape, colors: &mut Vec<Color32>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| fills(shape, colors)),
+            egui::Shape::Path(path) => colors.push(path.fill),
+            _ => {}
+        }
+    }
+    let mut sides = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|shape| fills(&shape.shape, &mut sides));
+    assert!(sides.contains(&Color32::from_rgb(200, 0, 0)));
+    assert!(sides.contains(&Color32::from_rgb(0, 0, 200)));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn object_fallbacks_text_transforms_and_icon_font_glyphs() {
+    let page = page(
+        "<!doctype html><object data='logo.svg' type='image/svg+xml'><p>Fallback logo</p></object>\
+         <p style='text-transform:uppercase'>mixed Case</p>\
+         <p style='text-transform:capitalize'>hello <b>wide</b> world</p>\
+         <p style='text-transform:lowercase'>QUIET</p>\
+         <p>Search\u{e962} here</p>",
+    );
+    assert_eq!(
+        texts(&page),
+        [
+            "Fallback logo",
+            "MIXED CASE",
+            "Hello Wide World",
+            "quiet",
+            "Search here"
+        ]
+    );
+}

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.8.0 — Glass, icons and GSMArena
+
+- Restyle the browser frame as liquid glass. Tabs, the toolbar's navigation,
+  address and action capsules, the find bar and the status bar float as
+  translucent panes over a soft olive-grove backdrop, lit by a sheen and a bright
+  rim. The active tab is the brightest pane, pages sit on a rounded card, menus
+  and windows are frosted glass, and icon buttons are round. A glint slides along
+  the address field while a tab loads, and new-tab bookmarks are glass tiles.
+- Show site icons on tabs, bookmarks, recently visited pages and in History. Tab
+  processes fetch the declared raster icon nearest 32 pixels, or `/favicon.ico`,
+  alongside the page's resources. Icons are kept per host in the profile, so they
+  appear after a restart; clearing history removes them.
+- Decode GIF (first frame), ICO and BMP images, and show `<object>` fallback
+  content.
+- Improve compatibility with GSMArena and similar sites:
+  - Support `position: fixed` (placed against the first screen and painted on
+    top) and `sticky` (kept in flow), so fixed headers no longer push the page
+    off screen.
+  - Place absolutely positioned boxes in their nearest positioned ancestor, give
+    them the room their insets leave, stretch them between opposite insets, and
+    place boxes anchored to `bottom`.
+  - Paint positioned boxes above in-flow content, ordered by `z-index` in
+    stacking contexts.
+  - Parse the `font` shorthand, `text-transform`, per-side borders
+    (`border-top` and friends), `flex-flow`, `row-reverse`, and percentage
+    heights against definite containers.
+  - Fill fixed-height `column wrap` flex containers column by column, keep
+    `nowrap` runs of inline blocks on one line, and treat flex children as blocks.
+  - Leave out icon-font glyphs from the Unicode private use areas, which showed
+    as empty boxes.
+- Library: `ComputedStyle` gains `text_transform` and `z_index`, and its
+  `border_width`, `border_color` and `border_solid` are now per side, with
+  `border_widths`, `has_border` and `set_border` helpers. `Position` gains `Fixed`,
+  `Sticky` and `out_of_flow`; `FlexDirection` gains `RowReverse`, `ColumnReverse`
+  and `is_row`; `Length` gains `has_percent`; `css::TextTransform` is new.
+  `PageResources::favicon_addresses` and `PageResources::load_favicon` find and
+  fetch a page's icon.
+
 ## 1.7.0 — Grove interface
 
 - Restyle the browser chrome as an olive grove: a shaded tab strip with the

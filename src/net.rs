@@ -281,7 +281,9 @@ impl DocumentLoader {
                     match kind {
                         Some(ResourceKind::Stylesheet) => "text/css",
                         Some(ResourceKind::Script) => "text/javascript, application/javascript",
-                        Some(ResourceKind::Image) => "image/png, image/jpeg, image/webp",
+                        Some(ResourceKind::Image) => {
+                            "image/png, image/jpeg, image/webp, image/gif, image/x-icon, image/bmp"
+                        }
                         None => "text/html, application/xhtml+xml, text/plain;q=0.8",
                     },
                 )
@@ -389,9 +391,16 @@ impl DocumentLoader {
                     | "text/jscript"
                     | "text/livescript"
             ),
-            Some(ResourceKind::Image) => {
-                matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp")
-            }
+            Some(ResourceKind::Image) => matches!(
+                mime.as_str(),
+                "image/jpeg"
+                    | "image/png"
+                    | "image/webp"
+                    | "image/gif"
+                    | "image/x-icon"
+                    | "image/vnd.microsoft.icon"
+                    | "image/bmp"
+            ),
         };
         if !supported {
             return Err(format!(
