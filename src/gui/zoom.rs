@@ -3,27 +3,27 @@ use eframe::egui;
 pub struct ZoomOutput<R> {
     pub inner: R,
     pub overflow: egui::Vec2,
-    /// An untransformed layer painted directly above the document.
-    pub overlay: egui::LayerId,
 }
 
-/// Give the document its own coordinate system. Layout sees the narrower CSS
-/// viewport at higher zoom; egui transforms painting and native control input.
+/// Give the document its own coordinate system, painted in `layer`. Layout
+/// sees the narrower CSS viewport at higher zoom; egui transforms painting and
+/// native control input. `view` is the part of the screen where the page is
+/// not covered by the browser frame; `contents` receives it in document
+/// coordinates. The document paints wherever `ui`'s clip rect allows, which
+/// may reach beneath the frame.
 pub fn show<R>(
     ui: &mut egui::Ui,
     id: u64,
+    layer: egui::LayerId,
     percent: u16,
-    contents: impl FnOnce(&mut egui::Ui) -> R,
+    view: egui::Rect,
+    contents: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
 ) -> ZoomOutput<R> {
     let rect = ui.available_rect_before_wrap();
     let scale = f32::from(percent) / 100.0;
     let transform = egui::emath::TSTransform::from_translation(rect.min.to_vec2())
         * egui::emath::TSTransform::from_scaling(scale);
-    let layer = egui::LayerId::new(ui.layer_id().order, ui.scope_id().with(("page-zoom", id)));
     ui.ctx().set_sublayer(ui.layer_id(), layer);
-    // Registered together, the overlay stays ordered right after the document.
-    let overlay = egui::LayerId::new(layer.order, layer.id.with("overlay"));
-    ui.ctx().set_sublayer(ui.layer_id(), overlay);
     ui.ctx().set_transform_layer(layer, transform);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -37,7 +37,7 @@ pub fn show<R>(
     // bottom of the clip as the outer scroll offset grows, making lower page
     // content disappear while scrolling.
     child.set_clip_rect(transform.inverse() * ui.clip_rect());
-    let result = contents(&mut child);
+    let result = contents(&mut child, transform.inverse() * view);
     // Keep the transformed layer at the viewport size. The caller reserves the
     // returned overflow after its frame has painted, so the frame itself does
     // not expand over the transformed page.
@@ -49,7 +49,6 @@ pub fn show<R>(
             (content_size.x - rect.width()).max(0.0),
             (content_size.y - rect.height()).max(0.0),
         ),
-        overlay,
     }
 }
 
@@ -71,8 +70,18 @@ pub fn step(percent: u16, increase: bool) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::show;
     use eframe::egui;
+
+    fn show<R>(
+        ui: &mut egui::Ui,
+        id: u64,
+        percent: u16,
+        contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> super::ZoomOutput<R> {
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("test-page"));
+        let view = ui.clip_rect();
+        super::show(ui, id, layer, percent, view, |ui, _| contents(ui))
+    }
 
     #[test]
     fn propagates_scaled_document_size_to_the_parent() {

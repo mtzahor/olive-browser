@@ -28,7 +28,9 @@ Recovery diagnostics are capped at 64 by default and 512 bytes per message.
 Tree output escapes terminal control characters and limits indentation.
 Olive's flat arena avoids ownership cycles and recursive DOM drop. Unsafe code is
 denied projectwide, with narrow Linux and Windows exceptions for Landlock and
-Win32 worker setup.
+Win32 worker setup, and one for the OpenGL calls that draw the browser frame's
+glass. Those copy the browser's own rendered window into a texture and draw it
+blurred; they run in the browser process and read no tab data.
 
 The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
 display limit. Table cells are boxes, so once 70% of the text-block or box limit
@@ -122,7 +124,10 @@ history deletes them all.
 
 Page resources resolve against the final document URL and first base href, with
 at most 256 attempts and a shared 30-second network deadline after document loading.
-Each resource request is capped at five seconds and the remaining shared time.
+Each resource request is capped at two seconds and the remaining shared time, with
+at most 16 requests in flight. Elements that use the same address for the same
+kind of resource share one request; each still counts toward the attempt limit
+and the page budgets.
 Stylesheets precede images and optional scripts, with document order preserved
 within each kind. Resource discovery uses a linear ancestry pass and bounded queues.
 Each resource is capped at 8 MiB after decompression, with at most 8 MiB of
@@ -225,8 +230,13 @@ window or reading browser history.
 
 IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
 files. Messages have a four-byte length prefix: commands are limited to 1 MiB,
-presentation responses to 128 MiB. Pipe reads, writes, JSON decoding, image
-validation and presentation-index checks happen off the UI thread. Only inert
+presentation responses to 128 MiB. A message is JSON followed by the raw RGBA
+pixels of the pictures it refers to, each picture once per message. The browser
+checks each picture's dimensions, pixel budget and length and runs no image
+decoder on tab data. Pipe reads, writes, JSON decoding, image validation and
+presentation-index checks happen off the UI thread. Focus exports carry
+placeholders for their pictures; the browser encodes the validated pixels as PNG
+only when an export is saved. Only inert
 text/style/image presentation data and bounded reports cross into the browser;
 DOMs and JavaScript realms stay in their document process. The UI retains shared
 text layout, GPU uploads and window composition, so faults in that common UI

@@ -51,6 +51,12 @@ pub struct Palette {
     pub sheen: Color32,
     /// Recessed glass for fields, such as the address field.
     pub well: Color32,
+    /// Glass panes over a page, and the brighter glass of the active tab
+    /// there: tinted enough for the frame's text to read over any page.
+    pub page_glass: Color32,
+    pub page_glass_strong: Color32,
+    /// The veil that softens the page under the frame toward the window edge.
+    pub veil: Color32,
 }
 
 impl Theme {
@@ -102,6 +108,9 @@ impl Theme {
                 glass_shadow: Color32::from_rgba_unmultiplied(40, 52, 22, 38),
                 sheen: Color32::from_white_alpha(150),
                 well: Color32::from_white_alpha(196),
+                page_glass: Color32::from_rgba_unmultiplied(250, 251, 244, 115),
+                page_glass_strong: Color32::from_rgba_unmultiplied(252, 253, 247, 200),
+                veil: Color32::from_rgba_unmultiplied(236, 240, 226, 150),
             },
             Self::Dark => Palette {
                 canvas: Color32::from_rgb(24, 28, 23),
@@ -134,6 +143,9 @@ impl Theme {
                 glass_shadow: Color32::from_black_alpha(120),
                 sheen: Color32::from_white_alpha(22),
                 well: Color32::from_black_alpha(70),
+                page_glass: Color32::from_rgba_unmultiplied(30, 36, 27, 175),
+                page_glass_strong: Color32::from_rgba_unmultiplied(46, 54, 40, 210),
+                veil: Color32::from_rgba_unmultiplied(20, 24, 18, 175),
             },
         }
     }

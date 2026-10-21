@@ -127,9 +127,11 @@ struct RenderedImage {
     action: Action,
 }
 
+/// Textures of one page's pictures by address. A page fetches each address
+/// once, so pictures sharing one also share a texture, in both views.
 #[derive(Default)]
 pub struct ImageTextureCache {
-    textures: HashMap<(NodeId, String), TextureHandle>,
+    textures: HashMap<String, TextureHandle>,
 }
 
 impl ImageTextureCache {
@@ -138,16 +140,16 @@ impl ImageTextureCache {
     }
 
     fn texture(&mut self, ctx: &egui::Context, image: &RenderedImage) -> TextureHandle {
-        let key = (image.node, image.reference.clone());
-        if let Some(texture) = self.textures.get(&key) {
+        if let Some(texture) = self.textures.get(&image.reference) {
             return texture.clone();
         }
         let texture = ctx.load_texture(
-            format!("olive-image-{:?}-{}", image.node, image.reference),
-            (*image.image).clone(),
+            format!("olive-image-{}", image.reference),
+            image.image.clone(),
             TextureOptions::LINEAR,
         );
-        self.textures.insert(key, texture.clone());
+        self.textures
+            .insert(image.reference.clone(), texture.clone());
         texture
     }
 }
@@ -380,6 +382,60 @@ impl Page {
             }
         }
         Ok(())
+    }
+
+    /// The Focus export with its pictures embedded, when the view has one.
+    pub fn export_document(&self) -> Option<Result<String, String>> {
+        let html = self.export_html.as_deref()?;
+        let pictures: HashMap<usize, &ColorImage> = self
+            .images
+            .iter()
+            .map(|image| (image.node.index(), &*image.image))
+            .collect();
+        Some(crate::gui::focus_export::embed_pictures(html, |node| {
+            pictures.get(&node).copied()
+        }))
+    }
+
+    /// Keep the shaped lines of text that `previous` already showed, so an
+    /// updated presentation of the same document appears without shaping its
+    /// unchanged text again.
+    pub fn reuse_text_layout(&mut self, previous: &mut Page) {
+        use std::hash::BuildHasher;
+        let hasher = std::collections::hash_map::RandomState::new();
+        let mut shaped: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (index, block) in previous.blocks.iter().enumerate() {
+            if block.layout.is_some() {
+                shaped
+                    .entry(hasher.hash_one(&block.job))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        if shaped.is_empty() {
+            return;
+        }
+        for block in &mut self.blocks {
+            let Some(candidates) = shaped.get_mut(&hasher.hash_one(&block.job)) else {
+                continue;
+            };
+            // Bidi layout also reads the direction, alignment, wrapping and links.
+            let Some(position) = candidates.iter().position(|&index| {
+                let old = &previous.blocks[index];
+                old.job == block.job
+                    && old.actions == block.actions
+                    && old.style.direction == block.style.direction
+                    && old.style.text_align == block.style.text_align
+                    && old.style.white_space == block.style.white_space
+            }) else {
+                continue;
+            };
+            let old = &mut previous.blocks[candidates.swap_remove(position)];
+            block.layout = old.layout.take();
+            block.visual_job = std::mem::take(&mut old.visual_job);
+            block.visual_to_logical = std::mem::take(&mut old.visual_to_logical);
+            block.visual_actions = std::mem::take(&mut old.visual_actions);
+        }
     }
 
     /// Cached galleys refer to the font atlas, which egui rebuilds on theme changes.

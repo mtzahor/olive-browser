@@ -3,10 +3,10 @@ use crate::gui::render::{ImageAsset, Page};
 use crate::js::{DocumentSession, ScriptOptions, ScriptReport};
 use crate::{
     ExternalSource, NodeId, ParseOutput,
-    css::{DEFAULT_VIEWPORT, Stylesheet},
+    css::Stylesheet,
     net::{CookieJar, CookieUpdate},
     net::{DocumentLoader, LoadedDocument, Location},
-    resources::{PageResources, ResourceReport},
+    resources::{PageResources, RESOURCE_TIMEOUT, ResourceReport},
 };
 use eframe::egui;
 use image::{ImageReader, Limits};
@@ -74,6 +74,8 @@ impl LoadedPage {
     /// Swap in a worker's newer presentation, keeping the user's form edits.
     pub fn apply_update(&mut self, update: &mut PageUpdate) {
         update.page.forms.preserve_edits(&self.page.forms);
+        update.page.reuse_text_layout(&mut self.page);
+        update.reading.reuse_text_layout(&mut self.reading);
         self.page = std::mem::take(&mut update.page);
         self.reading = std::mem::take(&mut update.reading);
         self.base = update.base.clone();
@@ -158,6 +160,7 @@ fn corrections(parsed: &ParseOutput) -> usize {
 pub fn prepare_page_preview(
     source: &LoadedDocument,
     scripting_enabled: bool,
+    viewport: (f32, f32),
 ) -> Result<(LoadedPage, ParseOutput), String> {
     let parsed = source.parse(scripting_enabled)?;
     let view = present(
@@ -166,7 +169,7 @@ pub fn prepare_page_preview(
         &HashMap::new(),
         &HashMap::new(),
         scripting_enabled,
-        DEFAULT_VIEWPORT,
+        viewport,
     );
     Ok((
         LoadedPage {
@@ -196,17 +199,29 @@ pub fn prepare_page_with_loader(
     scripting_enabled: bool,
 ) -> Result<PreparedPage, String> {
     let parsed = source.parse(scripting_enabled)?;
-    prepare_page_with_parsed(source, loader, scripting_enabled, parsed, false)
+    prepare_page_with_parsed(
+        source,
+        loader,
+        scripting_enabled,
+        parsed,
+        false,
+        crate::css::DEFAULT_VIEWPORT,
+        None,
+    )
 }
 
-/// Load the page's resources and build its presentation. With `favicon`, the
-/// site icon is fetched alongside the other resources.
+/// Load the page's resources and build its presentation for a CSS viewport
+/// of `viewport` pixels. With `favicon`, the site icon is fetched alongside
+/// the other resources. `progress` receives the page styled by its
+/// stylesheets while images and scripts are still loading.
 pub fn prepare_page_with_parsed(
     source: LoadedDocument,
     loader: &DocumentLoader,
     scripting_enabled: bool,
     parsed: ParseOutput,
     favicon: bool,
+    viewport: (f32, f32),
+    mut progress: Option<&mut dyn FnMut(PageUpdate)>,
 ) -> Result<PreparedPage, String> {
     let corrections = corrections(&parsed);
     let icon_addresses = if favicon {
@@ -225,11 +240,42 @@ pub fn prepare_page_with_parsed(
                 )
             })
         });
-        let resources = PageResources::load(
+        let resources = PageResources::load_with_progress(
             loader,
             &source.location,
             &parsed.document,
             scripting_enabled,
+            RESOURCE_TIMEOUT,
+            |styles| {
+                let Some(progress) = progress.as_mut() else {
+                    return;
+                };
+                let view = present(
+                    &parsed.document,
+                    &source.location,
+                    styles,
+                    &HashMap::new(),
+                    scripting_enabled,
+                    viewport,
+                );
+                progress(PageUpdate {
+                    default_allowed: false,
+                    page: view.page,
+                    reading: view.reading,
+                    base: view.base,
+                    scripts: ScriptReport::default(),
+                    resources: ResourceReport {
+                        pending: true,
+                        ..ResourceReport::default()
+                    },
+                    session_available: false,
+                    presentation_available: false,
+                    alert: None,
+                    link: None,
+                    cookie_updates: Vec::new(),
+                    favicon: None,
+                });
+            },
         );
         let icon = icon
             .and_then(|icon| icon.join().ok().flatten())
@@ -245,7 +291,7 @@ pub fn prepare_page_with_parsed(
             &resources.styles,
             &images,
             scripting_enabled,
-            DEFAULT_VIEWPORT,
+            viewport,
         )
     };
     let (view, session, document) = if scripting_enabled {
@@ -289,32 +335,81 @@ pub fn prepare_page_with_parsed(
         styles: resources.styles,
         images,
         stylesheet: view.sheet,
-        viewport: DEFAULT_VIEWPORT,
+        viewport,
     })
 }
 
+/// Decode the page's pictures. Each picture's header reserves its share of the
+/// page's pixel budget in document order, so the same pictures show on every
+/// load, and the reserved pictures then decode in parallel.
 fn decode_images(
     sources: &HashMap<NodeId, crate::resources::ExternalImage>,
     report: &mut ResourceReport,
 ) -> HashMap<NodeId, ImageAsset> {
-    let mut decoded = HashMap::new();
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut ordered: Vec<_> = sources.iter().collect();
+    ordered.sort_unstable_by_key(|(id, _)| id.index());
     let mut pixels = 0_u64;
-    for (&id, source) in sources {
-        let result = decode_image(&source.bytes).and_then(|(image, image_pixels)| {
-            if pixels.saturating_add(image_pixels) > MAX_PAGE_IMAGE_PIXELS {
-                Err(format!(
-                    "Page image pixel budget exhausted ({} pixels total).",
-                    MAX_PAGE_IMAGE_PIXELS
-                ))
-            } else {
-                pixels += image_pixels;
-                Ok(image)
-            }
-        });
-        match result {
+    let reserved: Vec<_> = ordered
+        .into_iter()
+        .map(|(&id, source)| {
+            let result = image_pixels(&source.bytes).and_then(|image_pixels| {
+                if pixels.saturating_add(image_pixels) > MAX_PAGE_IMAGE_PIXELS {
+                    Err(format!(
+                        "Page image pixel budget exhausted ({} pixels total).",
+                        MAX_PAGE_IMAGE_PIXELS
+                    ))
+                } else {
+                    pixels += image_pixels;
+                    Ok(image_pixels)
+                }
+            });
+            (id, source, result)
+        })
+        .collect();
+    let decoded = Mutex::new(
+        std::iter::repeat_with(|| None)
+            .take(reserved.len())
+            .collect::<Vec<_>>(),
+    );
+    // Workers take one picture at a time, so a few large ones do not hold up the rest.
+    let next = AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |count| count.get())
+        .clamp(1, 8)
+        .min(reserved.len());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((_, source, reserved)) = reserved.get(index) else {
+                        break;
+                    };
+                    let result = reserved.clone().and_then(|reserved| {
+                        let (image, pixels) = decode_image(&source.bytes)?;
+                        if pixels > reserved {
+                            return Err("image is larger than its header states".to_owned());
+                        }
+                        Ok(image)
+                    });
+                    if let Ok(mut decoded) = decoded.lock() {
+                        decoded[index] = Some(result);
+                    }
+                }
+            });
+        }
+    });
+    let mut images = HashMap::new();
+    let decoded = decoded.into_inner().unwrap_or_default();
+    for ((id, source, _), result) in reserved.iter().zip(decoded) {
+        match result.unwrap_or_else(|| Err("image decoding stopped".into())) {
             Ok(image) => {
-                decoded.insert(
-                    id,
+                images.insert(
+                    *id,
                     ImageAsset {
                         reference: source.reference.clone(),
                         image,
@@ -329,7 +424,28 @@ fn decode_images(
             }
         }
     }
-    decoded
+    images
+}
+
+/// The pixel count a picture's header states, within the per-image limits.
+fn image_pixels(bytes: &[u8]) -> Result<u64, String> {
+    let (width, height) = if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut decoder = zune_jpeg::JpegDecoder::new(Cursor::new(bytes));
+        decoder
+            .decode_headers()
+            .map_err(|error| format!("could not read image dimensions: {error}"))?;
+        let info = decoder
+            .info()
+            .ok_or_else(|| "could not read image dimensions".to_owned())?;
+        (u32::from(info.width), u32::from(info.height))
+    } else {
+        ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|error| format!("could not identify image format: {error}"))?
+            .into_dimensions()
+            .map_err(|error| format!("could not decode image: {error}"))?
+    };
+    checked_image_pixels(width, height)
 }
 
 fn decode_image(bytes: &[u8]) -> Result<(std::sync::Arc<egui::ColorImage>, u64), String> {
@@ -526,6 +642,69 @@ impl PreparedPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pages_are_laid_out_for_the_requested_viewport() {
+        let source = LoadedDocument {
+            location: Location::from_input("https://example.com/").unwrap(),
+            bytes:
+                b"<style>@media (max-width: 600px) { p { color: rgb(255, 0, 0) } }</style><p>Narrow"
+                    .to_vec(),
+            status: Some(200),
+            plain_text: false,
+        };
+        let red = |viewport| {
+            let (preview, _) = prepare_page_preview(&source, false, viewport).unwrap();
+            serde_json::to_string(&preview.page)
+                .unwrap()
+                .contains("[255,0,0,255]")
+        };
+        assert!(red((500.0, 700.0)));
+        assert!(!red((1024.0, 768.0)));
+    }
+
+    #[test]
+    fn the_pixel_budget_goes_to_pictures_in_document_order() {
+        // A BMP header states the size; the missing pixels fail to decode later.
+        let header = |side: i32| {
+            let mut bmp = b"BM".to_vec();
+            for value in [54_u32, 0, 54, 40] {
+                bmp.extend_from_slice(&value.to_le_bytes());
+            }
+            bmp.extend_from_slice(&side.to_le_bytes());
+            bmp.extend_from_slice(&side.to_le_bytes());
+            bmp.extend_from_slice(&1_u16.to_le_bytes());
+            bmp.extend_from_slice(&24_u16.to_le_bytes());
+            bmp.extend(vec![0; 24]);
+            bmp
+        };
+        let doc = crate::parse("<img src=z.bmp><img src=y.bmp><img src=x.bmp>")
+            .unwrap()
+            .document;
+        let sources: HashMap<_, _> = doc
+            .descendants(doc.root())
+            .filter_map(|id| {
+                let reference = doc.node(id)?.as_element()?.attribute("src")?.to_owned();
+                Some((
+                    id,
+                    crate::resources::ExternalImage {
+                        reference,
+                        bytes: header(2048),
+                    },
+                ))
+            })
+            .collect();
+        for _ in 0..3 {
+            let mut report = ResourceReport::default();
+            assert!(decode_images(&sources, &mut report).is_empty());
+            let exhausted: Vec<_> = report
+                .diagnostics
+                .iter()
+                .filter(|message| message.contains("budget exhausted"))
+                .collect();
+            assert_eq!(exhausted.len(), 1);
+            assert!(exhausted[0].starts_with("x.bmp:"), "{exhausted:?}");
+        }
+    }
     #[test]
     fn decodes_gif_and_icon_files_and_scales_site_icons_down() {
         use image::ImageEncoder;

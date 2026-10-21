@@ -27,6 +27,7 @@ fn spawn(path: &Path) -> Worker {
             scripting: ScriptPolicy::Page,
             cookies: CookieJar::default(),
             initiator: None,
+            viewport: None,
         },
         &egui::Context::default(),
     )
@@ -42,6 +43,10 @@ fn reply(worker: &mut Worker) -> Result<Event, String> {
                     loop {
                         if let Some(event) = worker.poll() {
                             match event? {
+                                // A styled page can arrive before the images.
+                                Event::ResourcesUpdated(update) if update.resources.pending => {
+                                    merge_resources(&mut page, *update);
+                                }
                                 Event::ResourcesUpdated(update) => {
                                     merge_resources(&mut page, *update);
                                     return Ok(Event::Loaded(page));
@@ -253,6 +258,7 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_document() {
             scripting: ScriptPolicy::Disabled,
             cookies: CookieJar::default(),
             initiator: None,
+            viewport: None,
         },
         32768,
     )
@@ -383,6 +389,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
                     scripting: policy,
                     cookies: CookieJar::default(),
                     initiator: None,
+                    viewport: None,
                 }
             } else {
                 Command::Load {
@@ -390,6 +397,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
                     scripting: policy,
                     cookies: CookieJar::default(),
                     initiator: None,
+                    viewport: None,
                 }
             };
             let mut worker = Worker::spawn_command_at(
@@ -489,6 +497,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
             scripting: ScriptPolicy::Disabled,
             cookies: cookies.clone(),
             initiator,
+            viewport: None,
         },
         &ctx,
     )
@@ -519,6 +528,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
             scripting: ScriptPolicy::Disabled,
             cookies,
             initiator: None,
+            viewport: None,
         },
         &ctx,
     )
@@ -539,6 +549,7 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
         scripting: ScriptPolicy::Disabled,
         cookies: CookieJar::default(),
         initiator: None,
+        viewport: None,
     })
     .unwrap();
     assert!(matches!(

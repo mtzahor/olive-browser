@@ -25,13 +25,14 @@ pub const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_URL_BYTES: usize = 8192;
 pub const MAX_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
 /// Resource types the viewer can explicitly request. No recursive fetching occurs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Stylesheet,
     Script,
     Image,
 }
 
+#[derive(Clone)]
 pub struct LoadedResource {
     pub location: Location,
     /// Decoded text for stylesheets and scripts, or the original bytes for images.

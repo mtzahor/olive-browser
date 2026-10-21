@@ -14,6 +14,19 @@ impl Page {
         ui: &mut egui::Ui,
         textures: &mut ImageTextureCache,
     ) -> Option<PageClick> {
+        let view = ui.clip_rect();
+        self.show_in_view(ui, textures, view)
+    }
+
+    /// Show the page where `view` is the part of the screen not covered by
+    /// the browser frame. The page paints wherever `ui`'s clip rect allows,
+    /// which may reach beneath the frame; `view`'s height is its first screen.
+    pub fn show_in_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        textures: &mut ImageTextureCache,
+        view: egui::Rect,
+    ) -> Option<PageClick> {
         let mut clicked = None;
         // Find numbers matches in document order, which deferred fixed boxes
         // leave, so each block's first match number is counted up front.
@@ -39,7 +52,17 @@ impl Page {
             }
         }
         let width = ui.available_width().max(1.0);
-        let viewport = egui::Rect::from_min_size(start, egui::vec2(width, ui.clip_rect().height()));
+        let viewport = egui::Rect::from_min_size(start, egui::vec2(width, view.height()));
+        // Text starting within a screen below the visible page is shaped now,
+        // and more for a short time each frame; the rest takes an estimated
+        // height until a later frame shapes it, so long pages and window
+        // resizes do not stall the browser. Fragment and find scrolling need
+        // exact positions, so they shape everything.
+        let shape_all = scroll_to.is_some() || self.find_scroll;
+        let shape_below = ui.clip_rect().bottom() + view.height();
+        // Time spent shaping text below that; the first block always fits.
+        let mut shaping = std::time::Duration::ZERO;
+        let mut estimated = false;
         // The page's first screen is the initial containing block.
         let mut stack = vec![BoxLayout::root(start, width)];
         stack[0].definite_height = Some(viewport.height());
@@ -259,8 +282,20 @@ impl Page {
                             (previous - width).abs() > 0.5 || *previous_scale != scale
                         })
                     {
+                        let below = !shape_all && parent.cursor > shape_below;
+                        if below && shaping >= SHAPING_TIME {
+                            estimated = true;
+                            if !block.marker {
+                                parent.cursor += estimated_height(block, width);
+                            }
+                            continue;
+                        }
+                        let started = std::time::Instant::now();
                         let galley = layout_bidi(block, ui, width);
                         block.layout = Some((width, scale, galley));
+                        if below {
+                            shaping += started.elapsed();
+                        }
                     }
                     let galley = block.layout.as_ref().unwrap().2.clone();
                     if block.marker {
@@ -484,7 +519,11 @@ impl Page {
         // Boxes placed by their bottom edge used heights from the previous
         // frame; when those changed, lay out once more. A few frames suffice,
         // so oscillating content cannot keep repainting.
-        if unsettled && self.settle_frames < 3 {
+        if estimated {
+            // Shape the rest over the next frames; positions settle after.
+            self.settle_frames = 0;
+            ui.ctx().request_repaint();
+        } else if unsettled && self.settle_frames < 3 {
             self.settle_frames += 1;
             ui.ctx().request_repaint();
         } else if !unsettled {
@@ -507,6 +546,33 @@ impl Page {
         }
         clicked
     }
+}
+
+/// How long each frame may spend shaping text below the visible page.
+const SHAPING_TIME: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// The height `block` will likely take at `width`: its earlier lines rewrapped
+/// in proportion, or for new text, lines of half-em characters.
+fn estimated_height(block: &Block, width: f32) -> f32 {
+    if let Some((_, _, galley)) = &block.layout {
+        let size = galley.size();
+        if size.x <= width {
+            return size.y;
+        }
+        let rows = galley.rows.len().max(1) as f32;
+        return size.y / rows * (rows * size.x / width).ceil();
+    }
+    let breaks = block.job.text.matches('\n').count() as f32;
+    let lines = if matches!(
+        block.style.white_space,
+        WhiteSpace::Pre | WhiteSpace::NoWrap
+    ) {
+        breaks + 1.0
+    } else {
+        let per_line = (width / (block.style.font_size * 0.5)).max(1.0);
+        (block.characters as f32 / per_line).ceil().max(1.0) + breaks
+    };
+    lines * block.style.line_height_px()
 }
 
 // Highlight glyph ranges after text painting; translucent fills preserve authored colors.

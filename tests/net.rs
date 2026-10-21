@@ -973,3 +973,137 @@ fn pages_can_load_more_than_sixty_four_resources() {
     assert!(!resources.report.limited);
     assert_eq!(server.join().unwrap().len(), 70);
 }
+
+#[cfg(all(feature = "css", feature = "js"))]
+#[test]
+fn repeated_resource_addresses_are_fetched_once() {
+    use olive_html::resources::PageResources;
+    let (location, server) = server_by_path(HashMap::from([
+        (
+            "/shared.css".to_owned(),
+            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}"),
+        ),
+        (
+            "/icon.png".to_owned(),
+            response(
+                "200 OK",
+                "Content-Type: image/png\r\n",
+                include_bytes!("../assets/olive-browser.png"),
+            ),
+        ),
+    ]));
+    let document = olive_html::parse(
+        "<link rel=stylesheet href=shared.css><link rel=stylesheet href='/shared.css'>
+        <img src=icon.png><img src=icon.png><img src='./icon.png'>",
+    )
+    .unwrap()
+    .document;
+    let resources =
+        PageResources::load(&DocumentLoader::new().unwrap(), &location, &document, false);
+    // Each element still gets its own copy and counts against the budgets.
+    assert_eq!(resources.report.attempted, 5);
+    assert_eq!(resources.report.loaded, 5);
+    assert_eq!(resources.styles.len(), 2);
+    assert_eq!(resources.images.len(), 3);
+    assert!(
+        resources
+            .images
+            .values()
+            .all(|image| image.bytes.len() == include_bytes!("../assets/olive-browser.png").len())
+    );
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[cfg(all(feature = "css", feature = "js"))]
+#[test]
+fn stylesheets_are_handed_over_while_images_load() {
+    use olive_html::resources::{PageResources, RESOURCE_TIMEOUT};
+    use std::sync::{Arc, Condvar, Mutex};
+    // Serve each request on its own thread; the image waits for the hand-off.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let location =
+        Location::from_input(&format!("http://{}/start", listener.local_addr().unwrap())).unwrap();
+    let released = Arc::new((Mutex::new(false), Condvar::new()));
+    let concurrent = {
+        let released = released.clone();
+        thread::spawn(move || {
+            let handlers: Vec<_> = (0..2)
+                .map(|_| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let released = released.clone();
+                    thread::spawn(move || {
+                        let mut request = Vec::new();
+                        while !request.ends_with(b"\r\n\r\n") {
+                            let mut byte = [0];
+                            if stream.read(&mut byte).unwrap() == 0 {
+                                break;
+                            }
+                            request.push(byte[0]);
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        let body = if request.starts_with("GET /picture.png ") {
+                            let (lock, wake) = &*released;
+                            let _ = wake
+                                .wait_timeout_while(
+                                    lock.lock().unwrap(),
+                                    Duration::from_secs(1),
+                                    |done| !*done,
+                                )
+                                .unwrap();
+                            response(
+                                "200 OK",
+                                "Content-Type: image/png\r\n",
+                                include_bytes!("../assets/olive-browser.png"),
+                            )
+                        } else {
+                            response("200 OK", "Content-Type: text/css\r\n", b"p{color:red}")
+                        };
+                        let _ = stream.write_all(&body);
+                    })
+                })
+                .collect();
+            for handler in handlers {
+                handler.join().unwrap();
+            }
+        })
+    };
+    let document = olive_html::parse("<img src=picture.png><link rel=stylesheet href=style.css>")
+        .unwrap()
+        .document;
+    let mut handed_over = Vec::new();
+    let resources = PageResources::load_with_progress(
+        &DocumentLoader::new().unwrap(),
+        &location,
+        &document,
+        false,
+        RESOURCE_TIMEOUT,
+        |styles| {
+            handed_over.push(styles.len());
+            let (lock, wake) = &*released;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+        },
+    );
+    assert_eq!(handed_over, [1]);
+    assert_eq!(resources.styles.len(), 1);
+    assert_eq!(resources.images.len(), 1);
+    concurrent.join().unwrap();
+
+    // Pages without linked stylesheets have nothing to hand over early.
+    let (location, server) = server(vec![response(
+        "200 OK",
+        "Content-Type: image/png\r\n",
+        include_bytes!("../assets/olive-browser.png"),
+    )]);
+    let document = olive_html::parse("<img src=picture.png>").unwrap().document;
+    let resources = PageResources::load_with_progress(
+        &DocumentLoader::new().unwrap(),
+        &location,
+        &document,
+        false,
+        RESOURCE_TIMEOUT,
+        |_| panic!("no stylesheets to hand over"),
+    );
+    assert_eq!(resources.images.len(), 1);
+    server.join().unwrap();
+}

@@ -9,7 +9,7 @@ use cssparser::{
     AtRuleParser, CowRcStr, DeclarationParser, Delimiter, Parser, ParserState, QualifiedRuleParser,
     RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
 };
-use selectors::{Key, Selector};
+use selectors::{AncestorFilter, Key, Selector};
 use std::collections::HashMap;
 pub use values::{
     BoxShadow, Clear, Color, ComputedStyle, Direction, Display, FlexDirection, FlexWrap, FloatSide,
@@ -267,18 +267,54 @@ pub struct Diagnostics {
 #[derive(Clone, Default, Debug)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
-    index: HashMap<Key, Vec<(usize, usize)>>,
+    index: RuleIndex,
     unindexed: Vec<(usize, usize)>,
     pub diagnostics: Diagnostics,
     bytes: usize,
     viewport_dependent: bool,
 }
-/// A per-document work budget. Reuse it across the whole style traversal.
+/// Selectors by the ID, class, attribute or tag their subject needs, each
+/// folded to ASCII lowercase, as `(rule, selector)` positions.
+#[derive(Clone, Default, Debug)]
+struct RuleIndex {
+    ids: HashMap<String, Vec<(usize, usize)>>,
+    classes: HashMap<String, Vec<(usize, usize)>>,
+    attributes: HashMap<String, Vec<(usize, usize)>>,
+    tags: HashMap<String, Vec<(usize, usize)>>,
+}
+
+impl RuleIndex {
+    fn insert(&mut self, key: Key, entry: (usize, usize)) {
+        let (map, name) = match key {
+            Key::Id(name) => (&mut self.ids, name),
+            Key::Class(name) => (&mut self.classes, name),
+            Key::Attribute(name) => (&mut self.attributes, name),
+            Key::Tag(name) => (&mut self.tags, name),
+        };
+        map.entry(name).or_default().push(entry);
+    }
+}
+
+/// `value` folded to ASCII lowercase, without copying when it already is.
+fn ascii_lowercase(value: &str) -> std::borrow::Cow<'_, str> {
+    if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        value.to_ascii_lowercase().into()
+    } else {
+        value.into()
+    }
+}
+
+/// A per-document work budget. Reuse it across the whole style traversal of
+/// one document.
 #[derive(Debug)]
 pub struct StyleBudget {
     matches: usize,
     inline_bytes: usize,
     custom_properties: HashMap<NodeId, std::sync::Arc<HashMap<String, String>>>,
+    /// The ancestor filter for the children of each parent seen so far.
+    ancestor_filters: HashMap<NodeId, AncestorFilter>,
+    /// Reused storage for the rules an element may match.
+    candidates: Vec<(usize, usize)>,
     custom_property_bytes_used: usize,
     pub limited: bool,
     pub ignored: usize,
@@ -292,6 +328,8 @@ impl Default for StyleBudget {
             matches: MATCH_BUDGET,
             inline_bytes: 0,
             custom_properties: HashMap::new(),
+            ancestor_filters: HashMap::new(),
+            candidates: Vec::new(),
             custom_property_bytes_used: 0,
             limited: false,
             ignored: 0,
@@ -305,6 +343,28 @@ impl StyleBudget {
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.viewport_width = width.clamp(1.0, 10_000.0);
         self.viewport_height = height.clamp(1.0, 10_000.0);
+    }
+
+    /// The filter of the names of `id`'s ancestors, built once per parent.
+    fn ancestor_filter(&mut self, doc: &Document, id: NodeId) -> AncestorFilter {
+        let mut filter = AncestorFilter::default();
+        let mut uncached = Vec::new();
+        let mut ancestor = doc.node(id).and_then(|node| node.parent());
+        while let Some(parent) = ancestor {
+            if let Some(cached) = self.ancestor_filters.get(&parent) {
+                filter = *cached;
+                break;
+            }
+            uncached.push(parent);
+            ancestor = doc.node(parent).and_then(|node| node.parent());
+        }
+        for parent in uncached.into_iter().rev() {
+            if let Some(element) = doc.node(parent).and_then(|node| node.as_element()) {
+                filter = filter.with_element(element);
+            }
+            self.ancestor_filters.insert(parent, filter);
+        }
+        filter
     }
 }
 impl Stylesheet {
@@ -396,7 +456,7 @@ impl Stylesheet {
                         for (selector_index, selector) in rule.selectors.iter().enumerate() {
                             let entry = (index, selector_index);
                             if let Some(key) = selector.key() {
-                                self.index.entry(key).or_default().push(entry);
+                                self.index.insert(key, entry);
                             } else {
                                 self.unindexed.push(entry);
                             }
@@ -437,14 +497,16 @@ impl Stylesheet {
         };
         let quirks = doc.quirks_mode() == crate::QuirksMode::Quirks;
         let border_color = user_agent(element, parent_element, table, quirks, &mut style);
-        type Priority = (bool, bool, (u16, u16, u16));
+        // Importance, inline, specificity, then source order: the later rule wins
+        // ties, so rules can be considered in any order.
+        type Priority = (bool, bool, (u16, u16, u16), usize);
         let mut winners: [Option<(Priority, Value)>; PROPERTIES.len()] = [None; PROPERTIES.len()];
         let mut custom_winners: HashMap<String, (Priority, String)> = HashMap::new();
         let mut deferred: Vec<(Priority, Declaration)> = Vec::new();
         let mut custom_limited = false;
         let mut deferred_limited = false;
-        let mut consider = |declaration: &Declaration, inline, specificity| {
-            let priority = (declaration.important, inline, specificity);
+        let mut consider = |declaration: &Declaration, inline, specificity, order| {
+            let priority = (declaration.important, inline, specificity, order);
             if declaration.name.starts_with("--") {
                 let eligible = custom_winners.contains_key(&declaration.name)
                     || custom_winners.len() < MAX_CUSTOM_PROPERTIES;
@@ -475,36 +537,46 @@ impl Stylesheet {
                 }
             }
         };
-        let mut candidates = Vec::new();
+        // Each selector sits in one index list, so no candidate repeats.
+        let mut candidates = std::mem::take(&mut budget.candidates);
+        candidates.clear();
         if budget.matches > 0 {
             candidates.extend_from_slice(&self.unindexed);
-            let mut collect = |key| {
-                if let Some(entries) = self.index.get(&key) {
+            let mut collect = |map: &HashMap<String, Vec<(usize, usize)>>, name: &str| {
+                if let Some(entries) = map.get(name) {
                     candidates.extend_from_slice(entries);
                 }
             };
-            collect(Key::Tag(element.name.local.as_str().to_ascii_lowercase()));
+            collect(
+                &self.index.tags,
+                &ascii_lowercase(element.name.local.as_str()),
+            );
             if let Some(id) = element.attribute("id") {
-                collect(Key::Id(id.to_ascii_lowercase()));
+                collect(&self.index.ids, &ascii_lowercase(id));
             }
             if let Some(classes) = element.attribute("class") {
-                let classes: std::collections::HashSet<_> = classes
+                let mut classes: Vec<_> = classes
                     .split_ascii_whitespace()
-                    .map(str::to_ascii_lowercase)
+                    .map(ascii_lowercase)
                     .collect();
+                classes.sort_unstable();
+                classes.dedup();
                 for class in classes {
-                    collect(Key::Class(class));
+                    collect(&self.index.classes, &class);
                 }
             }
             for attribute in &element.attributes {
                 if attribute.name.ns.is_empty() {
-                    collect(Key::Attribute(attribute.name.local.to_string()));
+                    collect(&self.index.attributes, &attribute.name.local);
                 }
             }
         }
-        candidates.sort_unstable();
-        candidates.dedup();
-        for (rule_index, selector_index) in candidates {
+        let ancestors = if candidates.is_empty() {
+            AncestorFilter::default()
+        } else {
+            budget.ancestor_filter(doc, id)
+        };
+        for &(rule_index, selector_index) in &candidates {
             if budget.matches == 0 {
                 budget.limited = true;
                 break;
@@ -517,12 +589,13 @@ impl Stylesheet {
                 continue;
             }
             let selector = &rule.selectors[selector_index];
-            if selector.matches(doc, id, &mut budget.matches) {
+            if selector.matches_with(doc, id, &mut budget.matches, Some(&ancestors)) {
                 for declaration in &rule.declarations {
-                    consider(declaration, false, selector.specificity);
+                    consider(declaration, false, selector.specificity, rule_index);
                 }
             }
         }
+        budget.candidates = candidates;
         budget.limited |= budget.matches == 0;
         if let Some(inline) = element.attribute("style") {
             if self
@@ -541,7 +614,7 @@ impl Stylesheet {
                     record_unsupported(&mut budget.unsupported_properties, &property, count);
                 }
                 for declaration in &declarations {
-                    consider(declaration, true, (0, 0, 0));
+                    consider(declaration, true, (0, 0, 0), usize::MAX);
                 }
             } else {
                 budget.limited = true;
