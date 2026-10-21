@@ -1,6 +1,6 @@
 //! Case-insensitive search over rendered text, retaining original character offsets.
 use crate::gui::{
-    glass,
+    glass::{self, Band},
     theme::Theme,
     ui_icons::{self, Icon, IconButton},
 };
@@ -33,72 +33,76 @@ impl FindBar {
                 bottom: 8,
             }))
             .show(ui, |ui| {
-                glass::capsule(ui, egui::Margin::symmetric(6, 4), 20, &palette, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        let response = ui_icons::search_field(
-                            ui,
-                            egui::TextEdit::singleline(&mut self.query)
-                                .id_salt("find-query")
-                                .hint_text("Find in page")
-                                .char_limit(256)
-                                .desired_width((ui.available_width() - 240.0).clamp(120.0, 320.0)),
-                        );
-                        if self.focus {
-                            response.request_focus();
-                            self.focus = false;
-                        }
-                        if (response.has_focus() || response.lost_focus())
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        {
-                            let previous = ui.input(|i| i.modifiers.shift);
-                            self.step(count, previous);
-                            response.request_focus();
-                        }
-                        if response.changed() {
-                            self.current = 0;
-                            self.scroll = true;
-                        }
-                        ui.add_space(4.0);
-                        let (status, color) = if self.query.is_empty() {
-                            ("Type to search".into(), palette.muted)
-                        } else if count == 0 {
-                            ("No matches".into(), palette.warning)
-                        } else {
-                            (
-                                format!("{} of {}", self.current.min(count - 1) + 1, count),
-                                palette.ink,
-                            )
-                        };
-                        ui.label(egui::RichText::new(status).size(13.0).color(color));
-                        ui.add_space(4.0);
-                        if ui
-                            .add_enabled(
-                                count > 0,
-                                IconButton::icon_only(Icon::ChevronUp, "Previous").quiet(),
-                            )
-                            .on_hover_text("Previous match (Shift+Enter)")
-                            .clicked()
-                        {
-                            self.step(count, true);
-                        }
-                        if ui
-                            .add_enabled(
-                                count > 0,
-                                IconButton::icon_only(Icon::ChevronDown, "Next").quiet(),
-                            )
-                            .on_hover_text("Next match (Enter)")
-                            .clicked()
-                        {
-                            self.step(count, false);
-                        }
-                        if ui
-                            .add(IconButton::icon_only(Icon::Close, "Close").quiet())
-                            .on_hover_text("Close find (Escape)")
-                            .clicked()
-                        {
-                            self.open = false;
-                        }
+                glass::in_band(ui, Band::Top, |ui| {
+                    glass::capsule(ui, egui::Margin::symmetric(6, 4), 20, &palette, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let response = ui_icons::search_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut self.query)
+                                    .id_salt("find-query")
+                                    .hint_text("Find in page")
+                                    .char_limit(256)
+                                    .desired_width(
+                                        (ui.available_width() - 240.0).clamp(120.0, 320.0),
+                                    ),
+                            );
+                            if self.focus {
+                                response.request_focus();
+                                self.focus = false;
+                            }
+                            if (response.has_focus() || response.lost_focus())
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                let previous = ui.input(|i| i.modifiers.shift);
+                                self.step(count, previous);
+                                response.request_focus();
+                            }
+                            if response.changed() {
+                                self.current = 0;
+                                self.scroll = true;
+                            }
+                            ui.add_space(4.0);
+                            let (status, color) = if self.query.is_empty() {
+                                ("Type to search".into(), palette.muted)
+                            } else if count == 0 {
+                                ("No matches".into(), palette.warning)
+                            } else {
+                                (
+                                    format!("{} of {}", self.current.min(count - 1) + 1, count),
+                                    palette.ink,
+                                )
+                            };
+                            ui.label(egui::RichText::new(status).size(13.0).color(color));
+                            ui.add_space(4.0);
+                            if ui
+                                .add_enabled(
+                                    count > 0,
+                                    IconButton::icon_only(Icon::ChevronUp, "Previous").quiet(),
+                                )
+                                .on_hover_text("Previous match (Shift+Enter)")
+                                .clicked()
+                            {
+                                self.step(count, true);
+                            }
+                            if ui
+                                .add_enabled(
+                                    count > 0,
+                                    IconButton::icon_only(Icon::ChevronDown, "Next").quiet(),
+                                )
+                                .on_hover_text("Next match (Enter)")
+                                .clicked()
+                            {
+                                self.step(count, false);
+                            }
+                            if ui
+                                .add(IconButton::icon_only(Icon::Close, "Close").quiet())
+                                .on_hover_text("Close find (Escape)")
+                                .clicked()
+                            {
+                                self.open = false;
+                            }
+                        });
                     });
                 });
             });

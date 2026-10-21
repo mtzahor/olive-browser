@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.9.0 — Faster loading and real liquid glass
+
+- Make the liquid glass real. Pages now fill the window and scroll beneath the
+  tabs, toolbar, find bar and status bar instead of sitting on a separate card
+  between them. Each glass pane shows the page behind it blurred and bent at its
+  rim like a lens, and the page softens beneath the frame toward the window
+  edges so the controls read over any page. The page's first screen still starts
+  below the toolbar, and its scroll bar stays between the frame's bands. The blur
+  is drawn with OpenGL; without OpenGL 3 or OpenGL ES 3 shaders, panes keep a
+  plain tint.
+- Show pages styled as soon as their stylesheets arrive, while images and
+  scripts are still loading, instead of waiting for every resource.
+- Load pages laid out for the tab's viewport. Pages with media queries or
+  viewport units no longer reload their whole presentation after loading.
+- Fetch up to 16 resources at once instead of 8, and request an address that
+  several elements use only once.
+- Decode a page's images in parallel. The page's pixel budget now goes to
+  images in document order, so the same images show on every load.
+- Send pictures from tab processes to the browser as raw pixels after each
+  message, once per message, instead of as PNG text in each view. The browser
+  no longer decodes PNG data from tab processes.
+- Encode Focus export images only when an export is saved, rather than on
+  every page update.
+- Match CSS selectors faster: a filter of each element's ancestor tags, IDs and
+  classes rules out most descendant selectors without walking the tree, and
+  candidate rules are gathered without sorting or copying names. Building a
+  page's presentation takes a third of the time on large sites.
+- Lay out the visible text of long pages first and the rest over the following
+  frames, keeping the browser responsive when pages arrive and windows resize.
+  Updates reuse the layout of unchanged text, and images upload without a copy,
+  once per address.
+- Measured on the same network, complete loads at the window's viewport took
+  1.6–3.0 s instead of 5.5–6.7 s on ynet.co.il, 1.6–1.9 s instead of
+  7.6–8.5 s on walla.co.il, about 1.0 s instead of 2.5–2.8 s on BBC News, and
+  1.7 s instead of 2.6 s on Wikipedia.
+- Library: `PageResources::load_with_progress` hands over the page's
+  stylesheets while other resources load. `LoadedResource` is `Clone` and
+  `ResourceKind` is `Hash`.
+
 ## 1.8.0 — Glass, icons and GSMArena
 
 - Restyle the browser frame as liquid glass. Tabs, the toolbar's navigation,

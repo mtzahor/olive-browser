@@ -752,3 +752,51 @@ fn positioning_layout_and_text_keywords_from_common_sites() {
     assert!(Position::Fixed.out_of_flow() && !Position::Sticky.out_of_flow());
     assert_eq!(budget.ignored, 0);
 }
+#[test]
+fn ancestor_filter_keeps_combinator_matches_exact() {
+    let (s, _, _) = styles(
+        r#"<!doctype html><style>
+        .outer .target { color: red }
+        .outer > .child { background: blue }
+        #frame span.inner { font-weight: 700 }
+        h2 + section .target { color: green }
+        .missing .target, .absent > * { color: black }
+        </style>
+        <div class="Outer outer"><p class=target id=a>a</p><p class=child id=b>b</p></div>
+        <p class=target id=c>c</p>
+        <div id=frame><div><span class=inner id=d>d</span></div></div>
+        <h2>t</h2><section><div><p class=target id=e>e</p></div></section>
+        <h3>t</h3><section><p class=target id=f>f</p></section>"#,
+    );
+    assert_eq!(s["a"].color, Color(255, 0, 0, 255));
+    assert_eq!(s["b"].background, Color(0, 0, 255, 255));
+    assert_eq!(s["c"].color, ComputedStyle::default().color);
+    assert_eq!(s["d"].font_weight, 700.0);
+    // In `A + B C`, `A` is a sibling of an ancestor, not an ancestor itself.
+    assert_eq!(s["e"].color, Color(0, 128, 0, 255));
+    assert_eq!(s["f"].color, ComputedStyle::default().color);
+    // Quirks mode matches IDs and classes without regard to case.
+    let (s, _, _) = styles(
+        "<style>.OUTER .Target { color: red } #FRAME p { color: blue }</style>
+        <div class=outer><p class=target id=a>a</p></div><div id=frame><p id=b>b</p></div>",
+    );
+    assert_eq!(s["a"].color, Color(255, 0, 0, 255));
+    assert_eq!(s["b"].color, Color(0, 0, 255, 255));
+}
+#[test]
+fn source_order_breaks_ties_across_selector_index_kinds() {
+    // Equal specificity from the attribute, class and unindexed lists.
+    let (s, _, _) = styles(
+        r#"<!doctype html><style>
+        [data-kind] { color: red }
+        .note { color: blue }
+        :first-child { background: red }
+        [data-kind] { background: green }
+        .late { font-weight: 700 }
+        :last-child { font-weight: 300 }
+        </style><div><p id=a class="note late" data-kind=x>a</p></div>"#,
+    );
+    assert_eq!(s["a"].color, Color(0, 0, 255, 255));
+    assert_eq!(s["a"].background, Color(0, 128, 0, 255));
+    assert_eq!(s["a"].font_weight, 300.0);
+}

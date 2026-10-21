@@ -1472,3 +1472,89 @@ fn object_fallbacks_text_transforms_and_icon_font_glyphs() {
         ]
     );
 }
+
+#[test]
+fn text_below_the_visible_page_is_shaped_over_later_frames() {
+    // Enough text that shaping all of it takes longer than one frame's share,
+    // even in optimized builds.
+    let words = "Long paragraphs wrap across many lines in a narrow column. ".repeat(10);
+    let html: String = (0..80)
+        .map(|i| format!("<p>Paragraph {i}. {words}</p>"))
+        .collect();
+    let mut deferred = page(&html);
+    let mut exact = page(&html);
+    // Find scrolling shapes the whole page in one frame.
+    exact.find_scroll = true;
+    // Separate contexts, so egui's layout cache cannot shape for the other page.
+    let contexts = [egui::Context::default(), egui::Context::default()];
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(300.0, 100.0),
+        )),
+        ..Default::default()
+    };
+    let frame = |page: &mut Page| {
+        let ctx = &contexts[usize::from(page.find_scroll)];
+        let mut output = ctx.run_ui(input(), |ui| {
+            page.show(ui);
+        });
+        output.textures_delta.clear();
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+            .is_zero()
+    };
+    frame(&mut exact);
+    assert!(exact.blocks.iter().all(|block| block.layout.is_some()));
+    assert!(
+        frame(&mut deferred),
+        "estimated text asks for another frame"
+    );
+    assert!(deferred.blocks.first().unwrap().layout.is_some());
+    assert!(deferred.blocks.last().unwrap().layout.is_none());
+    let mut frames = 1;
+    while frame(&mut deferred) {
+        frames += 1;
+        assert!(frames < 1000, "shaping must finish");
+    }
+    frame(&mut exact);
+    assert!(deferred.blocks.iter().all(|block| block.layout.is_some()));
+    for (shaped, expected) in deferred.box_rects.iter().zip(&exact.box_rects) {
+        assert!(
+            (shaped.min - expected.min).length() < 0.01,
+            "{shaped:?} {expected:?}"
+        );
+        assert!(
+            (shaped.max - expected.max).length() < 0.01,
+            "{shaped:?} {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn updates_keep_the_shaped_lines_of_unchanged_text() {
+    let ctx = egui::Context::default();
+    let mut previous = page("<p>Unchanged text</p><p>Old ending</p>");
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        previous.show(ui);
+    });
+    output.textures_delta.clear();
+    let shaped = previous.blocks[0].layout.as_ref().unwrap().2.clone();
+    let mut updated = page("<p>Unchanged text</p><p>New ending</p>");
+    updated.reuse_text_layout(&mut previous);
+    assert!(Arc::ptr_eq(
+        &updated.blocks[0].layout.as_ref().unwrap().2,
+        &shaped
+    ));
+    assert_eq!(updated.blocks[0].visual_to_logical.len(), 14);
+    assert!(updated.blocks[1].layout.is_none());
+    // Text in another direction is shaped again.
+    let mut previous = page("<p>Unchanged text</p>");
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        previous.show(ui);
+    });
+    output.textures_delta.clear();
+    let mut rtl = page("<p dir=rtl>Unchanged text</p>");
+    rtl.reuse_text_layout(&mut previous);
+    assert!(rtl.blocks[0].layout.is_none());
+}

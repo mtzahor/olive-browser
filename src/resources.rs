@@ -8,7 +8,7 @@ use crate::{
 use std::{
     collections::HashMap,
     sync::{
-        Mutex,
+        Condvar, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
@@ -25,7 +25,9 @@ pub const MAX_FAVICON_BYTES: usize = 1024 * 1024;
 // Page resources are opportunistic: a stalled image or stylesheet must not
 // hold the whole document for several seconds before it can be displayed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
-const RESOURCE_WORKERS: usize = 8;
+// Most page resources come from a few hosts; this many requests in flight
+// roughly halves image-heavy page loads compared with eight.
+const RESOURCE_WORKERS: usize = 16;
 
 #[derive(Default)]
 pub struct PageResources {
@@ -120,12 +122,32 @@ impl PageResources {
         scripting: bool,
         timeout: Duration,
     ) -> Self {
-        let mut resources = Self::default();
+        Self::load_with_progress(loader, location, document, scripting, timeout, |_| {})
+    }
+
+    /// `load_with_timeout` that hands `styles_loaded` the page's stylesheets as
+    /// soon as they are in, while images and scripts are still loading, so a
+    /// styled page can show before its pictures. It runs at most once, on the
+    /// calling thread, and only when a stylesheet loaded before the rest.
+    pub fn load_with_progress(
+        loader: &DocumentLoader,
+        location: &Location,
+        document: &Document,
+        scripting: bool,
+        timeout: Duration,
+        styles_loaded: impl FnOnce(&HashMap<NodeId, ExternalSource>),
+    ) -> Self {
+        let mut intake = Intake {
+            document,
+            started: Instant::now(),
+            timeout,
+            resources: Self::default(),
+            css_remaining: MAX_PAGE_CSS_BYTES,
+            js_remaining: MAX_PAGE_SCRIPT_BYTES,
+            image_remaining: MAX_PAGE_IMAGE_BYTES,
+            stopped: false,
+        };
         let base = location.document_base(document);
-        let started = Instant::now();
-        let mut css_remaining = MAX_PAGE_CSS_BYTES;
-        let mut js_remaining = MAX_PAGE_SCRIPT_BYTES;
-        let mut image_remaining = MAX_PAGE_IMAGE_BYTES;
         // Fetch visual resources before optional scripts. Bound each queue while
         // scanning so a large page cannot allocate an unbounded request list.
         let mut queues = [Vec::new(), Vec::new(), Vec::new()];
@@ -176,124 +198,160 @@ impl PageResources {
             let queue_len = queue.len();
             candidates.extend(queue.into_iter().take(remaining_slots));
             if queue_len > remaining_slots {
-                resources.report.limited = true;
-                resources
-                    .report
-                    .diagnostics
-                    .push("Page resource count or time limit reached.".into());
+                intake.limit_reached();
             }
         }
+        // Stylesheets lead the queue; the page can be styled once they are in.
+        let styles = candidates
+            .iter()
+            .take_while(|(_, kind, _)| *kind == ResourceKind::Stylesheet)
+            .count();
         let outcomes = load_batch(
             loader,
             location,
             document,
             &base,
             &candidates,
-            started,
+            intake.started,
             timeout,
+            styles,
+            |outcomes, still_loading| {
+                for (&candidate, result) in candidates.iter().zip(outcomes) {
+                    intake.accept(candidate, result);
+                }
+                if still_loading && !intake.resources.styles.is_empty() {
+                    styles_loaded(&intake.resources.styles);
+                }
+            },
         );
-        for ((id, kind, reference), result) in candidates.iter().copied().zip(outcomes) {
-            let element = document.node(id).unwrap().as_element().unwrap();
-            let remaining = match kind {
-                ResourceKind::Stylesheet => &mut css_remaining,
-                ResourceKind::Script => &mut js_remaining,
-                ResourceKind::Image => &mut image_remaining,
-            };
-            if resources.report.attempted == MAX_RESOURCES {
-                resources.report.limited = true;
+        for (&candidate, result) in candidates[styles..].iter().zip(outcomes) {
+            intake.accept(candidate, result);
+        }
+        intake.resources
+    }
+}
+
+/// Fetched resources accepted in document order against the page's budgets.
+struct Intake<'a> {
+    document: &'a Document,
+    started: Instant,
+    timeout: Duration,
+    resources: PageResources,
+    css_remaining: usize,
+    js_remaining: usize,
+    image_remaining: usize,
+    /// The resource count or time limit stopped intake.
+    stopped: bool,
+}
+
+impl Intake<'_> {
+    fn limit_reached(&mut self) {
+        self.resources.report.limited = true;
+        self.resources
+            .report
+            .diagnostics
+            .push("Page resource count or time limit reached.".into());
+    }
+
+    fn accept(
+        &mut self,
+        (id, kind, reference): (NodeId, ResourceKind, &str),
+        result: Result<crate::net::LoadedResource, String>,
+    ) {
+        if self.stopped {
+            return;
+        }
+        if self.resources.report.attempted == MAX_RESOURCES
+            || self.started.elapsed() >= self.timeout
+        {
+            self.limit_reached();
+            self.stopped = true;
+            return;
+        }
+        let element = self.document.node(id).unwrap().as_element().unwrap();
+        let resources = &mut self.resources;
+        let remaining = match kind {
+            ResourceKind::Stylesheet => &mut self.css_remaining,
+            ResourceKind::Script => &mut self.js_remaining,
+            ResourceKind::Image => &mut self.image_remaining,
+        };
+        resources.report.attempted += 1;
+        let result = if *remaining == 0 {
+            resources.report.limited = true;
+            Err(format!(
+                "Page {:?} budget exhausted ({} bytes total).",
+                kind,
+                match kind {
+                    ResourceKind::Stylesheet => MAX_PAGE_CSS_BYTES,
+                    ResourceKind::Script => MAX_PAGE_SCRIPT_BYTES,
+                    ResourceKind::Image => MAX_PAGE_IMAGE_BYTES,
+                }
+            ))
+        } else if reference.trim().is_empty() {
+            Err("Empty resource address.".into())
+        } else if element
+            .attribute("integrity")
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            Err("Resources requiring integrity verification are not supported.".into())
+        } else {
+            result.and_then(|loaded| {
+                if loaded.bytes.len() > *remaining {
+                    resources.report.limited = true;
+                    Err(format!(
+                        "Page {:?} budget exhausted: resource needs {} bytes; {} bytes remain.",
+                        kind,
+                        loaded.bytes.len(),
+                        *remaining
+                    ))
+                } else {
+                    Ok(loaded)
+                }
+            })
+        };
+        match result {
+            Ok(loaded) => {
+                *remaining -= loaded.bytes.len();
+                match kind {
+                    ResourceKind::Stylesheet => {
+                        resources.styles.insert(
+                            id,
+                            ExternalSource {
+                                reference: reference.to_owned(),
+                                source: loaded.source,
+                            },
+                        );
+                    }
+                    ResourceKind::Script => {
+                        resources.scripts.insert(
+                            id,
+                            ExternalSource {
+                                reference: reference.to_owned(),
+                                source: loaded.source,
+                            },
+                        );
+                    }
+                    ResourceKind::Image => {
+                        resources.images.insert(
+                            id,
+                            ExternalImage {
+                                reference: reference.to_owned(),
+                                bytes: loaded.bytes,
+                            },
+                        );
+                    }
+                };
+                resources.report.loaded += 1;
+            }
+            Err(error) => {
+                // Bound both retained URLs and transport error chains.
+                let message = format!("{reference}: {error}");
                 resources
                     .report
                     .diagnostics
-                    .push("Page resource count or time limit reached.".into());
-                break;
-            }
-            if started.elapsed() >= timeout {
-                resources.report.limited = true;
-                resources
-                    .report
-                    .diagnostics
-                    .push("Page resource count or time limit reached.".into());
-                break;
-            }
-            resources.report.attempted += 1;
-            let result = if *remaining == 0 {
-                resources.report.limited = true;
-                Err(format!(
-                    "Page {:?} budget exhausted ({} bytes total).",
-                    kind,
-                    match kind {
-                        ResourceKind::Stylesheet => MAX_PAGE_CSS_BYTES,
-                        ResourceKind::Script => MAX_PAGE_SCRIPT_BYTES,
-                        ResourceKind::Image => MAX_PAGE_IMAGE_BYTES,
-                    }
-                ))
-            } else if reference.trim().is_empty() {
-                Err("Empty resource address.".into())
-            } else if element
-                .attribute("integrity")
-                .is_some_and(|value| !value.trim().is_empty())
-            {
-                Err("Resources requiring integrity verification are not supported.".into())
-            } else {
-                result.and_then(|loaded| {
-                    if loaded.bytes.len() > *remaining {
-                        resources.report.limited = true;
-                        Err(format!(
-                            "Page {:?} budget exhausted: resource needs {} bytes; {} bytes remain.",
-                            kind,
-                            loaded.bytes.len(),
-                            *remaining
-                        ))
-                    } else {
-                        Ok(loaded)
-                    }
-                })
-            };
-            match result {
-                Ok(loaded) => {
-                    *remaining -= loaded.bytes.len();
-                    match kind {
-                        ResourceKind::Stylesheet => {
-                            resources.styles.insert(
-                                id,
-                                ExternalSource {
-                                    reference: reference.to_owned(),
-                                    source: loaded.source,
-                                },
-                            );
-                        }
-                        ResourceKind::Script => {
-                            resources.scripts.insert(
-                                id,
-                                ExternalSource {
-                                    reference: reference.to_owned(),
-                                    source: loaded.source,
-                                },
-                            );
-                        }
-                        ResourceKind::Image => {
-                            resources.images.insert(
-                                id,
-                                ExternalImage {
-                                    reference: reference.to_owned(),
-                                    bytes: loaded.bytes,
-                                },
-                            );
-                        }
-                    };
-                    resources.report.loaded += 1;
-                }
-                Err(error) => {
-                    // Bound both retained URLs and transport error chains.
-                    let message = format!("{reference}: {error}");
-                    resources
-                        .report
-                        .diagnostics
-                        .push(crate::text::truncate(&message, 1024).to_owned());
-                }
+                    .push(crate::text::truncate(&message, 1024).to_owned());
             }
         }
-        resources
     }
 }
 
@@ -351,7 +409,12 @@ fn favicon_link(document: &Document) -> Option<&str> {
 
 /// Fetch page resources with one bounded pool. Fetching resource classes
 /// sequentially creates avoidable delays; CSS and scripts are still applied in
-/// document order after their sources have been collected.
+/// document order after their sources have been collected. Repeated addresses
+/// are fetched once. `first_loaded` receives the outcomes of the first `first`
+/// candidates on the calling thread as soon as they are in, and whether others
+/// are still loading; the outcomes of the rest are returned.
+// These borrowed inputs are one page's shared loading context.
+#[allow(clippy::too_many_arguments)]
 fn load_batch(
     loader: &DocumentLoader,
     location: &Location,
@@ -360,12 +423,17 @@ fn load_batch(
     candidates: &[(NodeId, ResourceKind, &str)],
     started: Instant,
     timeout: Duration,
-) -> Vec<Result<crate::net::LoadedResource, String>> {
+    first: usize,
+    first_loaded: impl FnOnce(Vec<LoadOutcome>, bool),
+) -> Vec<LoadOutcome> {
     if started.elapsed() >= timeout {
-        return candidates
+        let mut outcomes: Vec<LoadOutcome> = candidates
             .iter()
             .map(|_| Err("Resource loading deadline reached.".into()))
             .collect();
+        let rest = outcomes.split_off(first);
+        first_loaded(outcomes, false);
+        return rest;
     }
     let targets: Vec<_> = candidates
         .iter()
@@ -390,44 +458,80 @@ fn load_batch(
                 })
         })
         .collect();
-    let results = Mutex::new(
-        std::iter::repeat_with(|| None)
-            .take(candidates.len())
-            .collect::<Vec<Option<Result<crate::net::LoadedResource, String>>>>(),
-    );
+    // Each candidate takes its outcome from the first candidate fetching the
+    // same address as the same kind of resource.
+    let mut first_fetch = HashMap::new();
+    let source: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, (_, kind, _))| match &targets[index] {
+            Ok(target) if !requires_integrity[index] => {
+                *first_fetch.entry((*kind, target.as_str())).or_insert(index)
+            }
+            _ => index,
+        })
+        .collect();
+    let fetches: Vec<usize> = (0..candidates.len())
+        .filter(|&index| source[index] == index && !requires_integrity[index])
+        .filter(|&index| targets[index].is_ok())
+        .collect();
+    let slots: Vec<Option<LoadOutcome>> = (0..candidates.len())
+        .map(|index| match &targets[index] {
+            _ if requires_integrity[index] => Some(Err(
+                "Resources requiring integrity verification are not supported.".into(),
+            )),
+            Err(error) => Some(Err(error.clone())),
+            Ok(_) => None,
+        })
+        .collect();
+    let finished = |slots: &[Option<LoadOutcome>], range: std::ops::Range<usize>| {
+        range
+            .into_iter()
+            .all(|index| slots[source[index]].is_some())
+    };
+    // Duplicates copy the outcome of their source, which comes earlier, so
+    // outcomes are taken from the end.
+    let take = |slots: &mut [Option<LoadOutcome>], range: std::ops::Range<usize>| {
+        let mut outcomes: Vec<_> = range
+            .rev()
+            .map(|index| {
+                if source[index] == index {
+                    slots[index].take()
+                } else {
+                    slots[source[index]].clone()
+                }
+                .unwrap_or_else(|| Err("Resource loading worker stopped.".into()))
+            })
+            .collect();
+        outcomes.reverse();
+        outcomes
+    };
+    let first_done = finished(&slots, 0..first);
+    let slots = Mutex::new(slots);
+    let filled = Condvar::new();
     let next = AtomicUsize::new(0);
-    let worker_count = RESOURCE_WORKERS.min(candidates.len());
+    let worker_count = RESOURCE_WORKERS.min(fetches.len());
+    let mut first_loaded = Some(first_loaded);
     thread::scope(|scope| {
         for _ in 0..worker_count {
-            let targets = &targets;
-            let requires_integrity = &requires_integrity;
-            let results = &results;
-            let next = &next;
+            let (fetches, targets, slots, filled, next) =
+                (&fetches, &targets, &slots, &filled, &next);
             scope.spawn(move || {
                 loop {
                     if started.elapsed() >= timeout {
                         break;
                     }
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some((_, kind, _)) = candidates.get(index) else {
+                    let Some(&index) = fetches.get(next.fetch_add(1, Ordering::Relaxed)) else {
                         break;
                     };
-                    if requires_integrity[index] {
-                        if let Ok(mut slots) = results.lock() {
-                            slots[index] = Some(Err(
-                                "Resources requiring integrity verification are not supported."
-                                    .into(),
-                            ));
-                        }
-                        continue;
-                    }
+                    let (_, kind, _) = candidates[index];
                     let result = targets[index].as_ref().map_or_else(
                         |error| Err(error.clone()),
                         |target| {
                             loader.load_resource(
                                 location,
                                 target.clone(),
-                                *kind,
+                                kind,
                                 timeout
                                     .saturating_sub(started.elapsed())
                                     .min(REQUEST_TIMEOUT),
@@ -435,17 +539,43 @@ fn load_batch(
                             )
                         },
                     );
-                    if let Ok(mut slots) = results.lock() {
+                    if let Ok(mut slots) = slots.lock() {
                         slots[index] = Some(result);
                     }
+                    filled.notify_all();
                 }
+                // Wake the caller when the pool stops at the deadline.
+                filled.notify_all();
             });
         }
+        if first == 0 || first_done || first == candidates.len() {
+            return;
+        }
+        let Ok(mut guard) = slots.lock() else { return };
+        while !finished(&guard, 0..first) {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            match filled.wait_timeout(guard, remaining) {
+                Ok((next_guard, _)) => guard = next_guard,
+                Err(_) => return,
+            }
+        }
+        let still_loading = !finished(&guard, first..candidates.len());
+        let outcomes = take(&mut guard, 0..first);
+        drop(guard);
+        if let Some(first_loaded) = first_loaded.take() {
+            first_loaded(outcomes, still_loading);
+        }
     });
-    results
-        .into_inner()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|result| result.unwrap_or_else(|| Err("Resource loading worker stopped.".into())))
-        .collect()
+    let mut slots = slots.into_inner().unwrap_or_default();
+    slots.resize_with(candidates.len(), || None);
+    let rest = take(&mut slots, first..candidates.len());
+    if let Some(first_loaded) = first_loaded {
+        first_loaded(take(&mut slots, 0..first), false);
+    }
+    rest
 }
+
+type LoadOutcome = Result<crate::net::LoadedResource, String>;

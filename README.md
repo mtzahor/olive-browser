@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.8.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.9.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -123,12 +123,16 @@ its icon turns into a spinner and a glint slides along the foot of the address f
 The **Browser menu** at the right of the address bar contains Open HTML, History,
 Bookmarks, Downloads, Save page, Developer tools and Settings, with their keyboard
 shortcuts, including in narrow windows. The star turns olive-oil gold on bookmarked pages.
-The browser frame is liquid glass over an olive grove. Tabs, the toolbar's three
-capsules (navigation, address and actions), the find bar and the status bar float
-as translucent panes over a soft sage-and-sunlight backdrop, each lit by a sheen
-along its top and a bright rim. The active tab is the brightest pane. Pages sit on a
-rounded card, and menus and windows are frosted glass. Status controls wrap to keep
-every action reachable.
+The browser frame is liquid glass. Pages fill the window and scroll beneath the
+tabs, the toolbar's three capsules (navigation, address and actions), the find bar
+and the status bar, which float above them as glass panes lit by a sheen along
+their top and a bright rim. Each pane shows the page behind it blurred and bent
+at its edge like a lens, and the page softens beneath the frame toward the window
+edges, so the controls read over any page. The active tab is the brightest pane.
+New tabs show the frame over a soft sage-and-sunlight backdrop, and menus and
+windows are frosted glass. Status controls wrap to keep every action reachable.
+The blur needs OpenGL 3 or OpenGL ES 3 shaders; elsewhere the panes keep a plain
+tint.
 
 Tabs show each site's icon, and so do bookmarks, recently visited pages and
 browsing history. The tab process looks for the icon alongside the page's other
@@ -176,7 +180,8 @@ text because it does not load data URLs. Exports use a fixed reading style and o
 scripts, event handlers, forms, page styles and remote resource loads. They reflect
 the current document, including completed script changes, without running scripts
 again. Exports are capped at 8 MiB, 100,000 nodes, 256 levels and 8,388,608
-image pixels. If a limit is reached, export is disabled with an explanation.
+image pixels. If a limit is reached, export is disabled with an explanation; an
+export whose embedded images take it past 8 MiB fails when saving.
 A native save dialog selects the destination; files are replaced atomically.
 
 Content selection uses local heuristics, so unusual page layouts may omit useful
@@ -252,7 +257,9 @@ Linked `<link rel="stylesheet" href="…">`, classic `<script src="…">`, and
 `<img src="…">` sources resolve against the final document URL and first
 `<base href>`. Local relative CSS/JS/image files work too. Sources load once
 before the script pass; changed URLs and dynamically inserted resources do not
-fetch. Failed resources leave the document readable and appear under
+fetch. Up to 16 requests run at once, and an address that several elements use
+is requested once. As soon as the stylesheets are in, the page shows styled
+while its images and scripts finish loading. Failed resources leave the document readable and appear under
 **Resource errors** in the status bar. Disabled web JavaScript does not fetch
 external scripts, but images still load, and so do the stylesheets and images in
 `noscript` fallbacks. The site icon request does not count toward the page's
@@ -392,8 +399,10 @@ subset covers common document styling, basic page layout and viewport-responsive
 rules. Its full property and value matrix, layout limits, and unsupported cases are
 listed in the [CSS compatibility map](docs/css-compatibility.md).
 
-The browser recomputes CSS when the content viewport changes, including zoom and
-window resizing. Unsupported property names appear in the status bar and Developer
+Pages load laid out for the tab's content viewport, and the browser recomputes
+CSS when the viewport changes, including zoom and window resizing. Long pages
+lay out the visible text first and the rest over the next few frames, so new
+pages and window resizes do not stall the browser. Unsupported property names appear in the status bar and Developer
 tools; invalid or unsupported values are counted with ignored declarations. The
 [compatibility example](examples/compatibility.html) covers selectors, variables,
 responsive rules, flex, grid, positioning and paint.

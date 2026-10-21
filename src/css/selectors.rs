@@ -115,6 +115,51 @@ pub(super) struct Selector {
     /// The selector targets generated content such as `::before`, which Olive
     /// does not render. It is valid, so the rest of its list still applies.
     pub generated: bool,
+    /// Hashes of the tags, IDs and classes that the subject's ancestors must
+    /// have, checked against an `AncestorFilter` before walking the tree.
+    ancestor_hashes: Vec<u64>,
+}
+
+/// A Bloom filter of the tags, IDs and classes of an element's ancestors. It
+/// may report a name that is absent but never misses one that is present, so
+/// a selector needing a missing ancestor name cannot match. Names are folded
+/// to ASCII lowercase, which suits both standards and quirks mode matching.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct AncestorFilter([u64; 4]);
+
+impl AncestorFilter {
+    /// The filter for the children of `element`, whose ancestors `self` holds.
+    pub fn with_element(mut self, element: &Element) -> Self {
+        self.insert(name_hash(b'<', element.name.local.as_str()));
+        if let Some(id) = element.attribute("id") {
+            self.insert(name_hash(b'#', id));
+        }
+        if let Some(classes) = element.attribute("class") {
+            for class in classes.split_ascii_whitespace() {
+                self.insert(name_hash(b'.', class));
+            }
+        }
+        self
+    }
+    fn insert(&mut self, hash: u64) {
+        for bit in [hash & 255, (hash >> 8) & 255] {
+            self.0[bit as usize / 64] |= 1 << (bit % 64);
+        }
+    }
+    fn may_contain(&self, hash: u64) -> bool {
+        [hash & 255, (hash >> 8) & 255]
+            .into_iter()
+            .all(|bit| self.0[bit as usize / 64] & (1 << (bit % 64)) != 0)
+    }
+}
+
+/// FNV-1a over a name kind and the ASCII lowercase name.
+fn name_hash(kind: u8, name: &str) -> u64 {
+    std::iter::once(kind)
+        .chain(name.bytes().map(|byte| byte.to_ascii_lowercase()))
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
 }
 
 /// Whether `name` is a pseudo-element that browsers accept. Other engines'
@@ -134,6 +179,7 @@ impl Selector {
             parts: vec![],
             specificity: (0, 0, 0),
             generated: false,
+            ancestor_hashes: Vec::new(),
         };
         let mut simple = vec![];
         let mut relation = Relation::Descendant;
@@ -321,7 +367,33 @@ impl Selector {
             simple.push(Simple::Universal);
         }
         result.parts.push(Compound { simple, relation });
+        result.ancestor_hashes = result.required_ancestor_hashes();
         Ok(result)
+    }
+
+    /// Every compound matches the subject, an ancestor of it, or a sibling of
+    /// one of those, so a compound directly left of a descendant or child
+    /// combinator always matches an ancestor of the subject. In `A + B C`, `B`
+    /// must be an ancestor of the subject but `A` need not be.
+    fn required_ancestor_hashes(&self) -> Vec<u64> {
+        let mut hashes = Vec::new();
+        for index in 1..self.parts.len() {
+            if !matches!(
+                self.parts[index].relation,
+                Relation::Descendant | Relation::Child
+            ) {
+                continue;
+            }
+            for simple in &self.parts[index - 1].simple {
+                hashes.push(match simple {
+                    Simple::Tag(tag) => name_hash(b'<', tag),
+                    Simple::Id(id) => name_hash(b'#', id),
+                    Simple::Class(class) => name_hash(b'.', class),
+                    _ => continue,
+                });
+            }
+        }
+        hashes
     }
 
     /// A necessary rightmost condition, used to avoid testing unrelated rules.
@@ -352,6 +424,26 @@ impl Selector {
                     _ => None,
                 })
             })
+    }
+
+    /// Whether the element `id`, whose ancestors `ancestors` holds when given,
+    /// matches.
+    pub fn matches_with(
+        &self,
+        doc: &Document,
+        id: NodeId,
+        budget: &mut usize,
+        ancestors: Option<&AncestorFilter>,
+    ) -> bool {
+        if ancestors.is_some_and(|filter| {
+            !self
+                .ancestor_hashes
+                .iter()
+                .all(|&hash| filter.may_contain(hash))
+        }) {
+            return false;
+        }
+        self.matches(doc, id, budget)
     }
 
     pub fn matches(&self, doc: &Document, id: NodeId, budget: &mut usize) -> bool {

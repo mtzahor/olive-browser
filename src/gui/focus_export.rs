@@ -2,6 +2,7 @@
 use crate::gui::{focus::Content, render::ImageAsset};
 use crate::{Document, NodeId, NodeKind, css::Direction, net::Location};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use eframe::egui::ColorImage;
 use html5ever::{
     QualName, ns,
     serialize::{HtmlSerializer, SerializeOpts, Serializer},
@@ -172,30 +173,14 @@ fn export_with_limit(
                     .get(&id)
                     .filter(|asset| element.attribute("src") == Some(asset.reference.as_str()))
                 {
-                    let image = &asset.image;
-                    image_pixels = image_pixels.saturating_add(image.pixels.len());
+                    image_pixels = image_pixels.saturating_add(asset.image.pixels.len());
                     if image_pixels > 8 * 1024 * 1024 {
                         return Err(io::Error::other(
                             "Focus export exceeds the image work limit",
                         ));
                     }
-                    let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
-                    for pixel in &image.pixels {
-                        rgba.extend_from_slice(&pixel.to_srgba_unmultiplied());
-                    }
-                    let mut png = BoundedBytes {
-                        bytes: Vec::new(),
-                        limit: limit.saturating_mul(3) / 4,
-                    };
-                    image::ImageEncoder::write_image(
-                        image::codecs::png::PngEncoder::new(&mut png),
-                        &rgba,
-                        image.size[0] as u32,
-                        image.size[1] as u32,
-                        image::ExtendedColorType::Rgba8,
-                    )
-                    .map_err(io::Error::other)?;
-                    let src = format!("data:image/png;base64,{}", STANDARD.encode(png.bytes));
+                    // The picture is embedded only if the export is saved.
+                    let src = format!("{PICTURE}{}", id.index());
                     serializer.start_elem(
                         name("img"),
                         [
@@ -277,6 +262,58 @@ fn export_with_limit(
     serializer.end_elem(name("body"))?;
     serializer.end_elem(name("html"))?;
     String::from_utf8(out.bytes).map_err(io::Error::other)
+}
+
+/// The `src` of a picture still to be embedded, followed by its node's index.
+const PICTURE: &str = "olive-picture:";
+
+/// Embed the pictures of an export as PNG data. Exports name each picture
+/// by its node, and `picture` looks the nodes up; unknown pictures are left
+/// blank. A raw `<img src="` appears only in markup, never in escaped text or
+/// attribute values, so only the export's own pictures are replaced.
+pub fn embed_pictures<'a>(
+    html: &str,
+    picture: impl Fn(usize) -> Option<&'a ColorImage>,
+) -> Result<String, String> {
+    let marker = format!("<img src=\"{PICTURE}");
+    let mut out = BoundedBytes {
+        bytes: Vec::with_capacity(html.len()),
+        limit: MAX_EXPORT_BYTES,
+    };
+    let mut rest = html;
+    while let Some(start) = rest.find(&marker) {
+        // Keep `<img src="` and replace the placeholder after it.
+        let (before, tail) = rest.split_at(start + marker.len() - PICTURE.len());
+        let tail = &tail[PICTURE.len()..];
+        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+        let node = tail[..digits].parse().ok();
+        out.write_all(before.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if let Some(image) = node.and_then(&picture) {
+            let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
+            for pixel in &image.pixels {
+                rgba.extend_from_slice(&pixel.to_srgba_unmultiplied());
+            }
+            let mut png = BoundedBytes {
+                bytes: Vec::new(),
+                limit: MAX_EXPORT_BYTES.saturating_mul(3) / 4,
+            };
+            image::ImageEncoder::write_image(
+                image::codecs::png::PngEncoder::new(&mut png),
+                &rgba,
+                image.size[0] as u32,
+                image.size[1] as u32,
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|error| error.to_string())?;
+            write!(out, "data:image/png;base64,{}", STANDARD.encode(png.bytes))
+                .map_err(|error| error.to_string())?;
+        }
+        rest = &tail[digits..];
+    }
+    out.write_all(rest.as_bytes())
+        .map_err(|error| error.to_string())?;
+    String::from_utf8(out.bytes).map_err(|error| error.to_string())
 }
 
 pub fn save(path: &std::path::Path, html: &str) -> io::Result<()> {
@@ -377,6 +414,12 @@ mod tests {
             &Location::from_input("https://example.com/").unwrap(),
             &images,
         )
+        .unwrap();
+        // Pictures are embedded only when the export is saved.
+        assert!(!output.contains("data:image"));
+        let output = embed_pictures(&output, |node| {
+            (node == id.index()).then(|| &*images[&id].image)
+        })
         .unwrap();
         let reparsed = parse(&output).unwrap().document;
         let img = reparsed
