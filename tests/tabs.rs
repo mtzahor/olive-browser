@@ -69,6 +69,8 @@ fn reply(worker: &mut Worker) -> Result<Event, String> {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
+                // Report a tab's error rather than an unexpected reply.
+                Event::Error(error) => return Err(error),
                 event => return Ok(event),
             }
         }

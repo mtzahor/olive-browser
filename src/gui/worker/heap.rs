@@ -20,8 +20,14 @@ pub struct CountedHeap;
 /// Limit the counted heap to `bytes`. Returns false when this executable does
 /// not count its allocations, so no limit can apply.
 pub(super) fn limit(bytes: usize) -> bool {
+    // Only this allocator moves the count, so a probe allocation shows whether
+    // it is installed. The count alone can be zero at startup.
+    let before = IN_USE.load(Ordering::Relaxed);
+    let probe = std::hint::black_box(Box::new(0_u64));
+    let counted = IN_USE.load(Ordering::Relaxed) != before;
+    drop(probe);
     LIMIT.store(bytes, Ordering::Relaxed);
-    IN_USE.load(Ordering::Relaxed) > 0
+    counted
 }
 
 /// Count `size` more bytes, unless that would pass the limit.

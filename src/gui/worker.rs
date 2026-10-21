@@ -1223,6 +1223,12 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_process_refuses_to_start_without_the_counted_heap() {
+        // Unit tests run on the system allocator, so no heap limit could apply.
+        assert!(!heap::limit(usize::MAX));
+    }
+
+    #[test]
     fn tab_processes_keep_only_proxy_certificate_and_system_variables() {
         let kept: Vec<_> = worker_environment(
             [
