@@ -1,4 +1,4 @@
-# Security boundary in 1.10.0
+# Security boundary in 1.11.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -40,17 +40,43 @@ rendered frame, tables lay out at most 64 columns, and each container tracks at
 most 64 active floats. The browser fetches each document and a dedicated child
 process parses, styles and executes it.
 On macOS, the GUI launches that process through `/usr/bin/sandbox-exec` with a
-Seatbelt profile denying `file-write*`. Linux workers apply a Landlock ruleset
-before starting any threads; it denies filesystem write operations and requires
-Landlock ABI v3 so truncate operations are covered. Windows launches a second
-copy of the browser with a low-integrity LUA token and places it in a
-kill-on-close job so worker descendants stop with the tab. Windows Mandatory
-Integrity Control blocks writes to medium- and higher-integrity objects;
-low-integrity targets can remain writable. All three policies preserve local
-file reads and network access. Linux or Windows worker
-startup fails closed if its restriction cannot be established. `sandbox-exec`
-is deprecated by Apple, so the macOS path is an initial containment layer rather
-than a long-term App Sandbox integration.
+Seatbelt profile that denies everything by default, on top of Apple's
+`system.sb` baseline for system processes. It allows starting only the
+browser's own executable, signals only to itself, file reads, socket creation,
+outbound IP connections and the DNS daemon's socket, and the keychain service
+that supplies root certificates. Writes, other programs and processes, signals
+to other processes, local Unix sockets (such as SSH agents or Docker) and
+system services beyond the baseline's, including Launch Services, Apple Events
+and the pasteboard, are denied. `sandbox-exec` is deprecated by Apple, so this
+is a containment layer rather than an App Sandbox integration.
+
+Linux workers apply a Landlock ruleset and a seccomp filter before starting any
+threads. Landlock denies filesystem writes and requires ABI v3 so truncate
+operations are covered; on kernels that support them it also denies TCP
+listening (ABI v4), device ioctls (v5), and abstract Unix sockets and signals
+reaching outside the sandbox (v6). The seccomp filter, for x86_64 and aarch64,
+denies starting programs and processes (only threads may be created), debugging
+or reading other processes, signals to other processes, namespaces and mounts,
+Unix sockets, terminal input injection (`TIOCSTI` and `TIOCLINUX`), io_uring,
+BPF, perf events, userfaultfd, keyrings and kernel modules. Other architectures
+fail closed.
+
+Windows launches a second copy of the browser with a low-integrity LUA token in
+a job that allows one process, limits its committed memory to 2 GiB, stops it on
+an unhandled exception or when the tab closes, and denies the clipboard, the
+desktop, global atoms, display and system settings, and other processes' user
+handles. The worker inherits only its three pipe handles, cannot create child
+processes, and starts with strict handle checks and without legacy extension
+points such as AppInit DLLs, non-system fonts, or images from remote shares or
+with a low integrity label. Windows Mandatory Integrity Control blocks writes to
+medium- and higher-integrity objects; low-integrity targets can remain writable.
+
+All three policies preserve local file reads and outbound network connections,
+which tab processes still need for page resources. Worker startup fails closed
+on every platform if its restriction cannot be established. Sandbox tests, built
+with the `sandbox-probe` feature, ask real tab processes started like the
+browser's to write files and start programs, and on Unix to connect to a local
+socket and signal their parent, and expect each attempt to fail.
 The previous page and its process remain available if a new document cannot be read.
 Up to 32 tabs are open at once; a tab can temporarily own an old document process
 and a pending replacement. Empty tabs do not start a process.
@@ -224,9 +250,8 @@ operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents and enable web
 JavaScript only for pages and their script providers you trust. Web scripting is
 an explicit experimental opt-in, not safe execution of untrusted code. The worker
-policies do not restrict reads or outbound network access. Linux workers can
-create processes; Windows keeps worker descendants in a job that is terminated
-with the tab. Each tab process counts its heap and limits it to 1 GiB: past the
+policies do not restrict reads or outbound network access. Tab processes
+cannot create processes on any platform. Each tab process counts its heap and limits it to 1 GiB: past the
 limit an allocation fails, which the JavaScript engine reports as a RangeError
 for buffers and which otherwise stops the process. The limit does not cover
 memory that system libraries map themselves. Stronger OS sandboxing remains

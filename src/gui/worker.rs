@@ -56,10 +56,22 @@ const WORKER_ENVIRONMENT: &[&str] = &[
     "WINDIR",
 ];
 
-// Apple deprecates sandbox-exec. Keep this initial macOS policy narrow: it
-// blocks filesystem writes and leaves reads and network access available.
+// Apple deprecates sandbox-exec. The policy denies everything a tab process
+// does not need, on top of Apple's baseline for system processes: no writes,
+// programs, other processes, local sockets, or system services beyond the
+// baseline's. Tab processes still read files and reach websites for page
+// resources, and the keychain service provides root certificates for them.
 #[cfg(target_os = "macos")]
-const MACOS_TAB_SANDBOX_PROFILE: &str = "(version 1)\n(allow default)\n(deny file-write*)\n";
+const MACOS_TAB_SANDBOX_PROFILE: &str = r#"(version 1)
+(deny default)
+(import "system.sb")
+(allow process-exec (literal (param "WORKER")))
+(allow signal (target self))
+(allow file-read*)
+(allow system-socket (socket-domain AF_INET) (socket-domain AF_INET6) (socket-domain AF_UNIX))
+(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))
+(allow mach-lookup (global-name "com.apple.SecurityServer"))
+"#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptPolicy {
@@ -128,6 +140,9 @@ pub enum Command {
         width: f32,
         height: f32,
     },
+    /// Make one sandbox test attempt instead of rendering a document.
+    #[cfg(feature = "sandbox-probe")]
+    Probe(Probe),
 }
 #[derive(Serialize, Deserialize)]
 pub enum Event {
@@ -135,6 +150,27 @@ pub enum Event {
     Updated(Box<PageUpdate>),
     ResourcesUpdated(Box<PageUpdate>),
     Error(String),
+    /// How a sandbox test attempt went.
+    #[cfg(feature = "sandbox-probe")]
+    Probed(Result<(), String>),
+}
+
+/// Something sandbox tests ask a tab process to attempt. Each must fail
+/// unless the sandbox deliberately allows it.
+#[cfg(feature = "sandbox-probe")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Probe {
+    Read(std::path::PathBuf),
+    Write(std::path::PathBuf),
+    /// Start a shell.
+    Execute,
+    Connect(std::net::SocketAddr),
+    /// Connect to a Unix socket, such as an SSH agent's.
+    #[cfg(unix)]
+    ConnectLocal(std::path::PathBuf),
+    /// Check whether another process could be sent a signal.
+    #[cfg(unix)]
+    Signal(u32),
 }
 #[derive(Serialize)]
 enum InitialEvent<'a> {
@@ -176,32 +212,7 @@ impl Worker {
         request: Request,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
-        let mut command = tab_worker_command(executable);
-        command.stdin(Stdio::piped()).stdout(Stdio::piped());
-        #[cfg(all(windows, test))]
-        command.stderr(Stdio::inherit());
-        #[cfg(not(all(windows, test)))]
-        command.stderr(Stdio::null());
-        command.arg(WORKER_ARG);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW: workers have no console/window.
-        }
-        let mut child = command.spawn().map_err(|e| {
-            #[cfg(target_os = "macos")]
-            {
-                format!("Could not start tab worker in the macOS sandbox: {e}")
-            }
-            #[cfg(target_os = "windows")]
-            {
-                format!("Could not start tab worker in the Windows sandbox: {e}")
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            {
-                format!("Could not start tab process: {e}")
-            }
-        })?;
+        let mut child = start_process(executable)?;
         let mut input = child.stdin.take().ok_or("Tab process has no input pipe")?;
         let mut output = child
             .stdout
@@ -252,6 +263,8 @@ impl Worker {
                                     Some((&update.page, &update.reading))
                                 }
                                 Event::Error(_) => None,
+                                #[cfg(feature = "sandbox-probe")]
+                                Event::Probed(_) => None,
                             };
                             if let Some((page, reading)) = pages {
                                 page.validate()
@@ -319,6 +332,8 @@ impl Worker {
                 CLICK_TIMEOUT
             }
             Command::Resize { .. } => CLICK_TIMEOUT,
+            #[cfg(feature = "sandbox-probe")]
+            Command::Probe(_) => return Err("Probes run in a tab process of their own.".into()),
         };
         self.sender
             .as_ref()
@@ -389,6 +404,8 @@ impl Worker {
                 (&mut update.base, &mut update.cookie_updates)
             }
             Event::Error(_) => return Ok(event),
+            #[cfg(feature = "sandbox-probe")]
+            Event::Probed(_) => return Ok(event),
         };
         // The browser records its fetch before sending the document, so the
         // record is in by the time the worker's first page arrives.
@@ -498,14 +515,74 @@ fn fetch(request: Request, stopped: Arc<AtomicBool>) -> Result<(Fetched, Command
     Ok((fetched, command))
 }
 
+/// Start a tab process from `executable` in its sandbox, talking over pipes.
+fn start_process(executable: &Path) -> Result<Child, String> {
+    let mut command = tab_worker_command(executable);
+    command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    #[cfg(all(windows, test))]
+    command.stderr(Stdio::inherit());
+    #[cfg(not(all(windows, test)))]
+    command.stderr(Stdio::null());
+    command.arg(WORKER_ARG);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: workers have no console/window.
+    }
+    command.spawn().map_err(|e| {
+        #[cfg(target_os = "macos")]
+        {
+            format!("Could not start tab worker in the macOS sandbox: {e}")
+        }
+        #[cfg(target_os = "windows")]
+        {
+            format!("Could not start tab worker in the Windows sandbox: {e}")
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            format!("Could not start tab process: {e}")
+        }
+    })
+}
+
+/// Ask a fresh tab process from `executable` to make one `probe` attempt in
+/// its sandbox, and return how the attempt went.
+#[cfg(feature = "sandbox-probe")]
+pub fn probe_at(executable: &Path, probe: Probe) -> Result<Result<(), String>, String> {
+    let mut child = start_process(executable)?;
+    let mut input = child.stdin.take().ok_or("Tab process has no input pipe")?;
+    let mut output = child
+        .stdout
+        .take()
+        .ok_or("Tab process has no output pipe")?;
+    let reply = write_frame(&mut input, &Command::Probe(probe), MAX_COMMAND_BYTES)
+        .and_then(|()| read_frame::<Event>(&mut output, MAX_EVENT_BYTES))
+        .map_err(|e| e.to_string());
+    let _ = child.kill();
+    let _ = child.wait();
+    match reply? {
+        Event::Probed(result) => Ok(result),
+        Event::Error(error) => Err(error),
+        _ => Err("The tab process sent an unexpected reply.".into()),
+    }
+}
+
 fn tab_worker_command(executable: &Path) -> ProcessCommand {
     #[cfg(target_os = "macos")]
     let mut command = {
+        // The profile allows starting exactly this file, by its real path.
+        let executable = executable
+            .canonicalize()
+            .unwrap_or_else(|_| executable.to_path_buf());
+        let mut parameter = OsString::from("WORKER=");
+        parameter.push(&executable);
         let mut command = ProcessCommand::new("/usr/bin/sandbox-exec");
         command
             .arg("-p")
             .arg(MACOS_TAB_SANDBOX_PROFILE)
-            .arg(executable);
+            .arg("-D")
+            .arg(parameter)
+            .arg(&executable);
         command
     };
     #[cfg(windows)]
@@ -575,9 +652,9 @@ pub fn run() -> io::Result<()> {
         return Err(io::Error::other(error));
     }
     #[cfg(target_os = "linux")]
-    if let Err(error) = restrict_linux_worker_writes() {
+    if let Err(error) = linux_sandbox::restrict() {
         report_start_error(format!(
-            "Could not start tab worker in the Linux filesystem sandbox: {error}"
+            "Could not start tab worker in the Linux sandbox: {error}"
         ));
         return Err(io::Error::other(error));
     }
@@ -637,6 +714,8 @@ pub fn run() -> io::Result<()> {
                     }
                 }
             }
+            #[cfg(feature = "sandbox-probe")]
+            Command::Probe(probe) => Event::Probed(probe::attempt(probe)),
         };
         write_frame(&mut output, &event, MAX_EVENT_BYTES)?;
     }
@@ -726,14 +805,15 @@ fn render(
     })
 }
 
-#[cfg(target_os = "linux")]
-fn restrict_linux_worker_writes() -> Result<(), String> {
-    linux_sandbox::restrict_writes()
-}
-
 #[allow(unsafe_code)]
 #[path = "worker/heap.rs"]
 mod heap;
+
+// Sending a test signal on Unix goes through libc.
+#[cfg(feature = "sandbox-probe")]
+#[allow(unsafe_code)]
+#[path = "worker/probe.rs"]
+mod probe;
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]

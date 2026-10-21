@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.11.0 — Tighter tab sandboxes
+
+- macOS: tab processes now run under a Seatbelt profile that denies everything
+  by default on top of Apple's baseline for system processes, instead of
+  allowing everything but writes. They can no longer start programs or other
+  processes, signal other processes, connect to local Unix sockets such as SSH
+  agents or Docker, or reach Launch Services, Apple Events, the pasteboard and
+  other system services. File reads, outbound connections, DNS and the keychain
+  service for root certificates remain for page resources.
+- Linux: a seccomp filter joins Landlock. Tab processes can create threads but
+  not processes, and cannot start programs, debug or signal other processes,
+  enter namespaces, mount filesystems, open Unix sockets, inject terminal
+  input, or use io_uring, BPF, perf events, userfaultfd, keyrings or kernel
+  modules. On kernels that support them, Landlock also denies TCP listening,
+  device ioctls, and abstract Unix sockets and signals outside the sandbox.
+- Windows: the tab job allows one process, caps committed memory at 2 GiB, and
+  denies the clipboard, desktop, global atoms and other processes' windows. The
+  worker inherits only its pipes, cannot create child processes, and starts
+  with strict handle checks and without extension-point DLLs, non-system fonts
+  or remote and low-integrity images.
+- Sandbox tests: with the new `sandbox-probe` feature, tests ask real tab
+  processes to write files, start programs, connect to local sockets and signal
+  their parent, and expect each attempt to fail on every platform. A filter
+  test runs the Linux seccomp program against each rule.
+
 ## 1.10.0 — A stricter tab boundary
 
 - Fetch each document in the browser, then hand it to a fresh tab process to

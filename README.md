@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.10.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.11.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -492,9 +492,11 @@ pass.
 
 Input, script, CSS, DOM, and preview work are bounded. These limits protect the
 viewer from oversized or pathological documents. Tab processes contain document
-crashes and have operation deadlines. The macOS and Linux worker sandboxes block
-filesystem writes; Windows uses a low-integrity token to block writes to
-medium- and higher-integrity objects. Workers can still read files and use the
+crashes and have operation deadlines. On all three platforms, worker sandboxes
+block filesystem writes and starting programs or processes; Windows uses a
+low-integrity token, so writes to medium- and higher-integrity objects fail. On
+macOS and Linux workers also cannot connect to local Unix sockets, such as SSH
+agents, or signal other processes. Workers can still read files and use the
 network. Each worker starts without the browser's environment variables and
 limits its heap to 1 GiB; the browser itself has no memory ceiling. See
 [SECURITY.md](SECURITY.md) for the trust boundary and current limits.
@@ -520,7 +522,10 @@ independent JavaScript realms, kill a tab, suspend a tab (Unix), exercise watchd
 termination, close workers, and simulate a browser exiting during a blocked load.
 They also check that a worker cannot change the address the browser shows, set
 cookies for other sites, receive other sites' cookies or the browser's
-environment, or allocate past its heap limit.
+environment, or allocate past its heap limit. With the `sandbox-probe` feature
+(included in `--all-features`), sandbox tests ask real tab processes to write
+files, start programs, connect to local sockets and signal other processes,
+and expect each attempt to fail.
 
 ## License
 
