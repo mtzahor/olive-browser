@@ -370,25 +370,7 @@ impl Worker {
             .name("olive-tab-output".into())
             .spawn(move || {
                 loop {
-                    let event = read_frame::<Event>(&mut output, MAX_EVENT_BYTES)
-                        .and_then(|event| {
-                            let pages = match &event {
-                                Event::Loaded(page) => Some((&page.page, &page.reading)),
-                                Event::Updated(update) => Some((&update.page, &update.reading)),
-                                Event::ResourcesUpdated(update) => {
-                                    Some((&update.page, &update.reading))
-                                }
-                                Event::Error(_) | Event::Fetch { .. } => None,
-                                #[cfg(feature = "sandbox-probe")]
-                                Event::Probed(_) => None,
-                            };
-                            if let Some((page, reading)) = pages {
-                                page.validate()
-                                    .and_then(|()| reading.validate())
-                                    .map_err(io::Error::other)?;
-                            }
-                            Ok(event)
-                        })
+                    let event = read_event(&mut output)
                         .map_err(|e| format!("Tab process stopped or sent invalid data: {e}"));
                     // Resource requests are the browser's to answer, not the UI's.
                     let event = match event {
@@ -662,6 +644,27 @@ fn fetch(
         viewport,
     };
     Ok((fetched, command))
+}
+
+/// Read and check one message from a tab process: the browser's whole
+/// handling of untrusted tab output before it reaches the UI.
+pub fn read_event(reader: &mut impl Read) -> io::Result<Event> {
+    let event = read_frame::<Event>(reader, MAX_EVENT_BYTES)?;
+    let pages = match &event {
+        Event::Loaded(page) => Some((&page.page, &page.reading)),
+        Event::Updated(update) | Event::ResourcesUpdated(update) => {
+            Some((&update.page, &update.reading))
+        }
+        Event::Error(_) | Event::Fetch { .. } => None,
+        #[cfg(feature = "sandbox-probe")]
+        Event::Probed(_) => None,
+    };
+    if let Some((page, reading)) = pages {
+        page.validate()
+            .and_then(|()| reading.validate())
+            .map_err(io::Error::other)?;
+    }
+    Ok(event)
 }
 
 /// Answers a tab process's resource requests in the browser.
@@ -1148,8 +1151,13 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read, limit: usize) -> 
     if size == 0 || size > limit {
         return Err(io::Error::other("Invalid tab message size"));
     }
-    let mut bytes = vec![0; size];
-    reader.read_exact(&mut bytes)?;
+    // Grow with what arrives, so a sender cannot reserve the whole limit
+    // with a four-byte prefix.
+    let mut bytes = Vec::with_capacity(size.min(1024 * 1024));
+    reader.take(size as u64).read_to_end(&mut bytes)?;
+    if bytes.len() < size {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
     let invalid = || io::Error::other("Invalid tab message");
     let (length, rest) = bytes.split_first_chunk::<4>().ok_or_else(invalid)?;
     let length = u32::from_le_bytes(*length) as usize;

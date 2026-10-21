@@ -1,0 +1,3 @@
+a=1; Path=/docs; HttpOnly
+wide=2; Domain=example.com; Max-Age=60
+__Host-x=1; Secure; Path=/

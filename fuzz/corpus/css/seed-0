@@ -1,0 +1,1 @@
+div.b > p:not(.x) span[lang|=en] { color: rgb(1 2 3 / 50%); margin: 1em auto }

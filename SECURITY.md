@@ -1,4 +1,4 @@
-# Security boundary in 1.12.0
+# Security boundary in 1.13.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -341,6 +341,22 @@ The network process is exposed to websites' HTTP and TLS. A compromised network
 process sees the cookies sent with requests and can forge responses and cookie
 changes, but on macOS and Linux it cannot read the user's files, including the
 browser profile, or start programs.
+
+Each build runs a smoke test that feeds the fuzz targets their seeds and
+thousands of fixed-seed mutations: the browser's reading of tab and network
+process messages, picture decoding, HTML and CSS parsing, cookie parsing and
+address handling. A nightly workflow fuzzes each target for ten minutes with
+cargo-fuzz and AddressSanitizer, starting from the seeds in `fuzz/corpus`.
+Message reading grows its buffer with the bytes that arrive, so a four-byte
+length prefix cannot reserve the whole message limit. `cargo deny` checks
+RustSec advisories, licenses, crate sources and version wildcards on every
+build, and advisories nightly; `deny.toml` lists, with reasons, the advisories
+accepted for eframe's Linux accessibility bridge, which handles no web content.
+Release builds check arithmetic overflow, so an overflow stops the process
+instead of wrapping. The macOS app bundle is signed with the hardened runtime,
+ad hoc unless a Developer ID is configured, which keeps other processes from
+injecting code into the browser or reading its memory and keeps it from
+loading libraries that are not Apple's or its own.
 
 Beyond the tab and network process heap limits, these controls do not provide a
 hard memory ceiling for the browser process or a per-process CPU quota.

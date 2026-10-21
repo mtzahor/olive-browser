@@ -1,0 +1,50 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "src/fuzzing.rs"
+      - ".github/workflows/nightly.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # New advisories appear without code changes.
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny --locked check advisories
+
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [tab_message, network_message, image, html, css, cookies, location]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      # Ten minutes per target nightly; one when a pull request changes them.
+      - run: >-
+          cargo fuzz run --sanitizer address ${{ matrix.target }} --
+          -max_total_time=${{ github.event_name == 'pull_request' && 60 || 600 }}
+          -max_len=262144
+          -rss_limit_mb=4096
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

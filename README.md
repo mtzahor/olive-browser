@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.12.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.13.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -517,7 +517,23 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 cargo build --release --locked --all-features
 cargo doc --locked --no-deps --all-features
+cargo deny --locked check
 ```
+
+`cargo deny` (`cargo install cargo-deny --locked`) applies `deny.toml`:
+security advisories, licenses and crate sources. To fuzz a target, such as the
+browser's reading of tab process messages, install cargo-fuzz and run it with a
+nightly toolchain:
+
+```sh
+cargo install cargo-fuzz --locked
+cargo +nightly fuzz run tab_message
+```
+
+The targets are `tab_message`, `network_message`, `image`, `html`, `css`,
+`cookies` and `location`; their seeds are in `fuzz/corpus`, and
+`cargo test --all-features write_fuzz_corpus -- --ignored` regenerates them.
+Release builds keep arithmetic overflow checks.
 
 The test suite covers HTML recovery and conformance fixtures, CSS cascade and
 layout, JavaScript execution and DOM limits, CLI behavior, GUI rendering,
