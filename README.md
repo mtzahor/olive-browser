@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.9.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.10.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -8,7 +8,8 @@ CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
 reload the current page with scripting. Tab workers use partial OS sandboxes on
 macOS, Linux, and Windows: they can still read local files and use the network.
-Enable JavaScript only for pages you trust.
+Each holds only the cookies of the site it shows. Enable JavaScript only for
+pages you trust.
 **Disable JavaScript** reloads without scripts.
 To opt in for future pages, select **Browser menu → Settings → Browsing → Enable
 JavaScript by default on page loads**. This saved setting starts off and applies to
@@ -74,8 +75,8 @@ checked choices, selected options and the activated submit button. Explicit
 `form` ownership and submit-button overrides are supported. HTTPS forms cannot
 submit or redirect to HTTP, and form actions must use HTTP(S).
 
-Submission starts a new tab worker and leaves the previous page and edits available
-if the request fails. Responses use the saved JavaScript default (off unless enabled
+The browser sends the submission, then a new tab worker shows the response; the
+previous page and edits stay available if the request fails. Responses use the saved JavaScript default (off unless enabled
 in Settings). POST redirects
 301/302/303 become GET; 307/308 preserve the body. **Reload, Back and Forward use
 GET and never resend a POST body.** POST bodies are not stored in browsing history;
@@ -104,9 +105,12 @@ alerts, form edits, find queries, Focus settings and document scroll position.
 Switching tabs does not
 reload pages or add history visits. Saved browsing history is shared across tabs.
 
-Each loaded document has a dedicated child process for networking, HTML/CSS,
-JavaScript and image decoding. A full navigation starts a fresh process; the
-previous document remains available until the new load succeeds.
+The browser fetches each document, following redirects with the whole cookie
+jar, and hands it to a dedicated child process for HTML/CSS, resource loading,
+JavaScript and image decoding. That process receives only the cookies of the
+document's site, and the browser shows the address it fetched, not one the
+process reports. A full navigation starts a fresh process; the previous
+document remains available until the new load succeeds.
 Tab failures leave other tab processes and the browser controls running. Use
 **Reload tab** after a crash, or **Stop** / **Escape** to cancel pending work.
 A stalled load is terminated after 60 seconds; a stalled click after 10 seconds.
@@ -229,7 +233,9 @@ Bookmarks, settings and the session profile are stored beside history in `profil
 Set `OLIVE_PROFILE_DIR` to use an isolated profile directory. The **Bookmarks**,
 **Downloads** and **Settings** windows are available in the browser menu. Page zoom ranges
 from 50% to 200% with `Cmd/Ctrl`+`+`, `-` and `0`; downloads are bounded to 100 MiB
-and use a temporary file before publishing the completed result.
+and use a temporary file before publishing the completed result. Downloads from
+websites carry the system's internet mark (quarantine on macOS, Mark of the Web
+on Windows), so the system checks them before they open.
 
 Documents load independently in their tab processes. Redirects update the displayed URL;
 failed loads retain the previous page and history. HTTP error pages such as 404
@@ -247,7 +253,8 @@ images, and linked/embedded/inline styles. `<object>` elements show their fallba
 content. SVG and CSS background images and HTTP authentication are not implemented. Downloads,
 bookmarks, page zoom, persistent settings and restoring tabs across launches are supported.
 Cookies are shared in memory between tabs and
-discarded when the browser closes. Domain/path scoping, Secure, HttpOnly, SameSite,
+discarded when the browser closes. Cross-site images, stylesheets and scripts
+neither send nor store cookies. Domain/path scoping, Secure, HttpOnly, SameSite,
 Max-Age and Expires are supported, with a 256-cookie / 64 KiB jar limit and a 4 KiB
 per-cookie limit. Public-suffix domains and invalid secure cookie prefixes are rejected.
 Sites that require a full DOM, CSS layout engine, or browser JavaScript APIs will
@@ -488,7 +495,8 @@ viewer from oversized or pathological documents. Tab processes contain document
 crashes and have operation deadlines. The macOS and Linux worker sandboxes block
 filesystem writes; Windows uses a low-integrity token to block writes to
 medium- and higher-integrity objects. Workers can still read files and use the
-network, and no platform has a hard memory ceiling. See
+network. Each worker starts without the browser's environment variables and
+limits its heap to 1 GiB; the browser itself has no memory ceiling. See
 [SECURITY.md](SECURITY.md) for the trust boundary and current limits.
 
 ## Development
@@ -510,6 +518,9 @@ history search, restart persistence, deletion, storage failures and size limits.
 Process integration tests launch the real GUI executable without a window, verify
 independent JavaScript realms, kill a tab, suspend a tab (Unix), exercise watchdog
 termination, close workers, and simulate a browser exiting during a blocked load.
+They also check that a worker cannot change the address the browser shows, set
+cookies for other sites, receive other sites' cookies or the browser's
+environment, or allocate past its heap limit.
 
 ## License
 

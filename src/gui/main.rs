@@ -3,6 +3,10 @@
 use eframe::egui;
 use olive_html::gui::{app, icon, worker};
 
+// Counts allocations so tab processes, which run this executable, can limit their heap.
+#[global_allocator]
+static HEAP: worker::CountedHeap = worker::CountedHeap;
+
 fn main() -> eframe::Result {
     #[cfg(windows)]
     if std::env::args_os().nth(1).as_deref()

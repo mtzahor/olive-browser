@@ -6,7 +6,10 @@ use reqwest::{blocking::Client, header, redirect};
 use std::{
     fs::File,
     io::Read,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 pub use url::Url;
@@ -40,12 +43,28 @@ pub struct LoadedResource {
     pub bytes: Vec<u8>,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoadedDocument {
     /// Final address after redirects, including the navigation fragment.
     pub location: Location,
+    /// The document decoded to UTF-8. Serialized documents carry it as text.
+    #[cfg_attr(feature = "serde", serde(with = "utf8_text"))]
     pub bytes: Vec<u8>,
     pub status: Option<u16>,
     pub plain_text: bool,
+}
+
+#[cfg(feature = "serde")]
+mod utf8_text {
+    use serde::{Deserialize, Deserializer, Serializer, ser::Error as _};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(std::str::from_utf8(bytes).map_err(S::Error::custom)?)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        String::deserialize(deserializer).map(String::into_bytes)
+    }
 }
 
 impl LoadedDocument {
@@ -87,6 +106,24 @@ pub struct DocumentLoader {
     cookies: Arc<Mutex<CookieJar>>,
     cookie_updates: Arc<Mutex<Vec<CookieUpdate>>>,
     cookie_initiator: Option<Location>,
+    stopped: Arc<AtomicBool>,
+}
+
+const STOPPED: &str = "Loading stopped.";
+
+/// A response body that ends with an error once its load is stopped.
+struct Stoppable<'a, R> {
+    body: R,
+    stopped: &'a AtomicBool,
+}
+
+impl<R: Read> Read for Stoppable<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other(STOPPED));
+        }
+        self.body.read(buffer)
+    }
 }
 
 pub const MAX_FORM_BYTES: usize = 64 * 1024;
@@ -125,6 +162,7 @@ impl DocumentLoader {
                 cookies: Arc::new(Mutex::new(cookies)),
                 cookie_updates: Arc::new(Mutex::new(Vec::new())),
                 cookie_initiator: None,
+                stopped: Arc::new(AtomicBool::new(false)),
             })
             .map_err(|e| format!("Could not initialize HTTP: {e}"))
     }
@@ -138,6 +176,14 @@ impl DocumentLoader {
     /// The document initiating a top-level navigation, for SameSite filtering.
     pub fn with_cookie_initiator(mut self, initiator: Option<Location>) -> Self {
         self.cookie_initiator = initiator;
+        self
+    }
+
+    /// Stop loads once `stopped` is set: before each request, and while
+    /// reading a response. A request already waiting for its response still
+    /// waits until the response begins or the timeout passes.
+    pub fn with_stop(mut self, stopped: Arc<AtomicBool>) -> Self {
+        self.stopped = stopped;
         self
     }
 
@@ -256,6 +302,9 @@ impl DocumentLoader {
         let started = Instant::now();
         let mut redirects = 0;
         let response = loop {
+            if self.stopped.load(Ordering::Relaxed) {
+                return Err(STOPPED.into());
+            }
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 return Err("The website took too long to respond. Try again.".into());
@@ -268,9 +317,16 @@ impl DocumentLoader {
             } else {
                 self.client.get(location.url().clone())
             };
-            let request = if let Some(cookie) = self.cookies.lock().ok().and_then(|mut cookies| {
-                cookies.cookie_header_for(&location, same_site, kind.is_none(), body.is_none())
-            }) {
+            // Cross-site resources neither send nor store cookies: tab
+            // processes hold only their own site's cookies.
+            let first_party = kind.is_none() || same_site;
+            let cookie = first_party
+                .then(|| self.cookies.lock().ok())
+                .flatten()
+                .and_then(|mut cookies| {
+                    cookies.cookie_header_for(&location, same_site, kind.is_none(), body.is_none())
+                });
+            let request = if let Some(cookie) = cookie {
                 request.header(header::COOKIE, cookie)
             } else {
                 request
@@ -290,17 +346,9 @@ impl DocumentLoader {
                 )
                 .send()
                 .map_err(request_error)?;
-            for value in response.headers().get_all(header::SET_COOKIE) {
+            let set_cookies = response.headers().get_all(header::SET_COOKIE);
+            for value in set_cookies.iter().filter(|_| first_party) {
                 let Ok(value) = value.to_str() else { continue };
-                if kind.is_some()
-                    && !same_site
-                    && cookie::Cookie::parse(value)
-                        .ok()
-                        .and_then(|cookie| cookie.same_site())
-                        != Some(cookie::SameSite::None)
-                {
-                    continue;
-                }
                 if self
                     .cookies
                     .lock()
@@ -415,7 +463,13 @@ impl DocumentLoader {
         {
             return Err(limit_error(max_bytes));
         }
-        let raw = read_limit(response, max_bytes)?;
+        let raw = read_limit(
+            Stoppable {
+                body: response,
+                stopped: &self.stopped,
+            },
+            max_bytes,
+        )?;
         let bytes = match kind {
             Some(ResourceKind::Image) => raw,
             Some(ResourceKind::Stylesheet | ResourceKind::Script) => {

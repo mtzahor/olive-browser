@@ -1,4 +1,4 @@
-# Security boundary in 1.1.0
+# Security boundary in 1.10.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -37,7 +37,8 @@ display limit. Table cells are boxes, so once 70% of the text-block or box limit
 is used, further cells render inline, one line per row, instead of exhausting it.
 Flex, float and table content measurement share one 250,000-step budget per
 rendered frame, tables lay out at most 64 columns, and each container tracks at
-most 64 active floats. Each document loads and executes in a dedicated child process.
+most 64 active floats. The browser fetches each document and a dedicated child
+process parses, styles and executes it.
 On macOS, the GUI launches that process through `/usr/bin/sandbox-exec` with a
 Seatbelt profile denying `file-write*`. Linux workers apply a Landlock ruleset
 before starting any threads; it denies filesystem write operations and requires
@@ -72,7 +73,11 @@ Back/Forward stack at 256 entries.
 One navigation load runs per tab. Starting another navigation cancels that tab's
 pending load. Other tabs continue loading and responding independently.
 Cookies are shared in memory between tabs, with at most 256 cookies and 64 KiB of
-stored data, 4 KiB per cookie, and 256 pending mutations per worker event. Domain/path,
+stored data, 4 KiB per cookie, and 256 pending mutations per worker event. The
+browser keeps the jar; each tab process receives a copy of only its document's
+site cookies (the registrable domain, or the IP address), without those marked
+Secure on HTTP pages. Local documents receive none. Cross-site resources neither
+send nor store cookies. Domain/path,
 Secure, HttpOnly, SameSite, Max-Age and Expires are enforced. Public-suffix domains
 and invalid secure prefixes are rejected; scripts cannot read or overwrite HttpOnly
 cookies, and insecure responses cannot overwrite overlapping secure cookies.
@@ -80,17 +85,23 @@ Cookies are not persisted to disk. HTTP authentication,
 automatic Referer headers, persistent network cache and automatic document
 navigation are not enabled. User-initiated downloads are capped at 100 MiB and
 published from a temporary file without replacing existing files or symlinks,
-including when concurrent downloads use the same filename.
+including when concurrent downloads use the same filename. Before publishing, a
+download from a website receives the system's internet mark: the
+`com.apple.quarantine` attribute on macOS, so Gatekeeper checks it, and a
+`Zone.Identifier` stream with zone 3 (Internet) and the address on Windows.
+Marking is best effort; filesystems that cannot hold the mark save the file
+without it, and Linux has no such mark.
 The client honors HTTP(S) proxy environment variables. Loopback and private-network
 addresses are allowed, including for subresources; this is not an SSRF-filtering API.
 
-Native forms submit only after user activation, through a fresh document worker.
+Native forms submit only after user activation. The browser sends the
+submission and a fresh document worker renders the response.
 Only UTF-8 URL-encoded HTTP(S) GET/POST is supported, with a 64 KiB encoded-body
 limit and the existing 8 KiB URL limit. HTTPS form targets and redirects must stay
 HTTPS. The loader bounds POST responses exactly like GET responses. Redirects
 301/302/303 change POST to GET; 307/308 retain its body. Cookie selection accounts
 for the initiating site, method and redirects. No HTTP authentication or Referer
-is added. POST data lives only in memory/worker pipes for the request and is not
+is added. POST data lives only in browser memory for the request and is not
 saved to history. Reload and history traversal fetch URLs with GET, without replaying
 POST. A stopped or failed request might already have reached the server.
 Native password widgets mask their display; entered values are not encrypted in memory.
@@ -142,7 +153,7 @@ incorrect CSS/JavaScript MIME types are rejected. HTTPS pages cannot load HTTP
 resources, and web pages cannot load files, including via redirects or base href.
 Local documents can load local and remote sources. Cross-origin classic scripts
 and stylesheets are allowed. Cookies follow domain/path, Secure and SameSite rules;
-cross-site subresources can use only cookies marked SameSite=None; Secure.
+cross-site subresources send and store no cookies.
 No HTTP authentication or Referer is sent. Nonempty integrity
 attributes are rejected because integrity verification is not implemented. HTML
 encoding prescans examine only the first 1,024 bytes for `<meta charset>` declarations.
@@ -213,10 +224,13 @@ operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents and enable web
 JavaScript only for pages and their script providers you trust. Web scripting is
 an explicit experimental opt-in, not safe execution of untrusted code. The worker
-policies do not restrict reads, outbound network access, or memory use. Linux
-workers can create processes; Windows keeps worker descendants in a job that is
-terminated with the tab. Enforceable memory limits and stronger OS sandboxing
-remain required before automatic execution of untrusted remote JavaScript. Tab
+policies do not restrict reads or outbound network access. Linux workers can
+create processes; Windows keeps worker descendants in a job that is terminated
+with the tab. Each tab process counts its heap and limits it to 1 GiB: past the
+limit an allocation fails, which the JavaScript engine reports as a RangeError
+for buffers and which otherwise stops the process. The limit does not cover
+memory that system libraries map themselves. Stronger OS sandboxing remains
+required before automatic execution of untrusted remote JavaScript. Tab
 processes provide fault isolation and partial containment, not a complete
 security boundary against compromised native code.
 
@@ -229,8 +243,9 @@ thread is stuck. The same executable enters worker mode before creating any
 window or reading browser history.
 
 IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
-files. Messages have a four-byte length prefix: commands are limited to 1 MiB,
-presentation responses to 128 MiB. A message is JSON followed by the raw RGBA
+files. Messages have a four-byte length prefix: commands are limited to 64 MiB,
+enough for an 8 MiB document as escaped JSON text, and presentation responses
+to 128 MiB. A message is JSON followed by the raw RGBA
 pixels of the pictures it refers to, each picture once per message. The browser
 checks each picture's dimensions, pixel budget and length and runs no image
 decoder on tab data. Pipe reads, writes, JSON decoding, image validation and
@@ -243,13 +258,29 @@ text layout, GPU uploads and window composition, so faults in that common UI
 code can still affect the application. The protocol assumes the bundled worker
 executable; it is not a hardened interface to compromised native code.
 
-These controls do not provide a hard memory ceiling or per-process CPU quota.
+A tab process that runs page content is treated as untrusted. The browser does
+not take its word for security-relevant state: the page address, HTTP status
+and scripting state come from the browser's own fetch; a web page's reported
+base address that points at a local file is replaced with the page address, so
+links from it still cannot open files; cookie changes are applied only for the
+document's own site, with receipt times limited to the process's lifetime; and
+click commands carry only the site's cookies. A compromised tab process still
+holds its own site's cookies, including HttpOnly ones, and can set HttpOnly
+cookies for that site. Tab processes start in the executable's directory with
+an empty environment apart from proxy, certificate, `HOME`, `PATH` and Windows
+system-directory variables, so tokens and other secrets in the browser's
+environment do not reach them. Stopping a tab or replacing its navigation stops
+the browser's fetch before its next request or body read; a request already
+waiting for its response may continue until the response starts or times out.
+
+Beyond the tab heap limit, these controls do not provide a hard memory ceiling
+for the browser process or a per-process CPU quota.
 DOM construction expands input, parser recovery can be expensive, allocations
 can fail, and dependencies can contain defects and unsafe code. OS-wide memory
 exhaustion can still affect the browser and other applications. The parser has
 not undergone an independent security audit. Browsing remains experimental;
-stronger OS sandboxing and enforceable memory/CPU budgets remain necessary
-hardening work.
+stronger OS sandboxing and enforceable CPU budgets remain necessary hardening
+work.
 
 ## Reporting
 

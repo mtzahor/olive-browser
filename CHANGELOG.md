@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.10.0 — A stricter tab boundary
+
+- Fetch each document in the browser, then hand it to a fresh tab process to
+  render. The browser follows redirects with the whole cookie jar, so the tab
+  process never needs other sites' cookies, and the address bar, history and
+  bookmarks show the address the browser fetched rather than one the tab
+  process reports.
+- Give each tab process only the cookies of the site it shows, without the
+  site's Secure cookies on HTTP pages and with none for local files. Clicks
+  refresh only those cookies.
+- Apply a tab process's cookie changes only for its own site, with receipt
+  times limited to the process's lifetime. A web page's reported base address
+  can no longer point at local files.
+- Stop sending and storing cookies for cross-site images, stylesheets, scripts
+  and site icons.
+- Start tab processes without the browser's environment variables, keeping only
+  proxy, certificate, `HOME`, `PATH` and Windows system-directory settings, so
+  tokens in the environment stay in the browser.
+- Limit each tab process's heap to 1 GiB. Past it, a JavaScript buffer
+  allocation fails with a RangeError and other allocations stop the tab, instead
+  of one page exhausting the computer's memory. Heavy news sites with scripts
+  peaked at about 190 MiB.
+- Mark downloads from websites as coming from the internet: the quarantine
+  attribute on macOS and the Mark of the Web on Windows, so the system checks
+  them before they open.
+- Stopping a tab or starting another navigation also stops the browser's fetch
+  of the replaced document.
+- Library: `LoadedDocument` serializes with the `serde` feature,
+  `DocumentLoader::with_stop` stops loads, `CookieJar::for_document` copies one
+  site's cookies and `CookieUpdate::confine` holds an update to a document's
+  site. The GUI's `worker::Request` replaces the `Load` and `Submit` worker
+  commands, and `Worker::spawn_command_at` is now `Worker::spawn_at`.
+
 ## 1.9.0 — Faster loading and real liquid glass
 
 - Make the liquid glass real. Pages now fill the window and scroll beneath the

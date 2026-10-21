@@ -1,4 +1,7 @@
 use crate::net::download::suggested_name;
+// The macOS quarantine attribute is set through libc.
+#[allow(unsafe_code)]
+mod origin;
 use crate::net::{DocumentLoader, Location};
 use eframe::egui;
 use std::{
@@ -77,6 +80,7 @@ impl Downloads {
         let flag = cancel.clone();
         let tx = self.tx.clone();
         let url = location.as_str().to_owned();
+        let remote = location.is_remote();
         let dir = directory.unwrap_or_else(default_directory);
         self.items.push(DownloadItem {
             id,
@@ -105,6 +109,11 @@ impl Downloads {
                 })?;
                 file.sync_all().map_err(|e| e.to_string())?;
                 drop(file);
+                // Mark the file before it takes its name. Best effort: some
+                // filesystems cannot hold the mark.
+                if remote {
+                    let _ = origin::mark(temp.as_file(), temp.path(), &url);
+                }
                 let destination = publish_download(temp, &destination)?;
                 Ok((destination, bytes))
             })();
@@ -225,6 +234,37 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new_in(dir).unwrap();
         file.write_all(bytes).unwrap();
         file
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn downloaded_files_keep_their_mark_of_the_internet_when_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = completed_file(dir.path(), b"<p>Page</p>");
+        origin::mark(file.as_file(), file.path(), "https://example.com/page.html").unwrap();
+        let published = publish_download(file, &dir.path().join("page.html")).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            let output = std::process::Command::new("/usr/bin/xattr")
+                .args(["-p", "com.apple.quarantine"])
+                .arg(&published)
+                .output()
+                .unwrap();
+            let value = String::from_utf8(output.stdout).unwrap();
+            assert!(value.starts_with("0081;"), "{value}");
+            assert!(value.trim_end().ends_with(";Olive Browser;"), "{value}");
+        }
+        #[cfg(windows)]
+        {
+            let mut stream = published.into_os_string();
+            stream.push(":Zone.Identifier");
+            let zone = fs::read_to_string(stream).unwrap();
+            assert!(zone.contains("ZoneId=3"), "{zone}");
+            assert!(
+                zone.contains("HostUrl=https://example.com/page.html"),
+                "{zone}"
+            );
+        }
     }
 
     #[test]

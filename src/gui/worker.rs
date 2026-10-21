@@ -1,27 +1,60 @@
 //! Private, framed pipe protocol and independently supervised document processes.
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
+//!
+//! The browser fetches each document itself, with the whole cookie jar, and a
+//! fresh tab process renders it holding only that site's cookies. What a tab
+//! process reports about its page's address, base and cookies is held to what
+//! the browser fetched for it.
 use crate::gui::document::{
     ClickRequest, LoadedPage, PageUpdate, PreparedPage, prepare_page_preview,
     prepare_page_with_parsed,
 };
-use crate::net::{CookieJar, DocumentLoader, FormRequest, Location};
+use crate::net::{CookieJar, CookieUpdate, DocumentLoader, FormRequest, LoadedDocument, Location};
 use eframe::egui;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
+    ffi::OsString,
     io::{self, Read, Write},
     path::Path,
     process::{Child, Command as ProcessCommand, Stdio},
-    sync::mpsc::{self, Receiver, SyncSender, TryRecvError},
-    time::{Duration, Instant},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError},
+    },
+    time::{Duration, Instant, SystemTime},
 };
+
+pub use heap::CountedHeap;
 
 pub const WORKER_ARG: &str = "--olive-tab-worker";
 #[cfg(windows)]
 pub const WINDOWS_LAUNCHER_ARG: &str = "--olive-launch-restricted-worker";
-const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+// A document of up to 8 MiB crosses as JSON text, where escaping can expand
+// control characters sixfold.
+const MAX_COMMAND_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 128 * 1024 * 1024;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
+/// The most heap a tab process may use. Past it, allocation fails and the
+/// process stops, so one page cannot exhaust the computer's memory.
+pub const MAX_WORKER_HEAP_BYTES: usize = 1024 * 1024 * 1024;
+/// The environment a tab process keeps, compared without regard to case:
+/// proxy and certificate settings for its resource requests, and what the OS
+/// needs to start it. Everything else, such as tokens, stays in the browser.
+const WORKER_ENVIRONMENT: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HOME",
+    "PATH",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+];
 
 // Apple deprecates sandbox-exec. Keep this initial macOS policy narrow: it
 // blocks filesystem writes and leaves reads and network access available.
@@ -53,27 +86,40 @@ impl ScriptPolicy {
     }
 }
 
-/// Parent-to-worker messages. A worker performs exactly one `Load` or `Submit`,
-/// as its first command; later commands act on that document.
+/// A tab's one full navigation. The browser fetches the document, then a
+/// fresh tab process renders it.
+pub struct Request {
+    pub target: Target,
+    pub scripting: ScriptPolicy,
+    /// The browser's whole jar, for fetching the document. The tab process
+    /// receives only the cookies of the site it renders.
+    pub cookies: CookieJar,
+    /// The page that started the navigation, for SameSite cookie rules.
+    pub initiator: Option<Location>,
+    /// The tab's CSS viewport, when known, so responsive pages arrive laid
+    /// out for it rather than reflowing after they load.
+    pub viewport: Option<(f32, f32)>,
+}
+
+/// What a navigation fetches: an address, or a form submission.
+pub enum Target {
+    Load(Location),
+    Submit(FormRequest),
+}
+
+/// Browser-to-worker messages. A worker renders exactly one document, sent
+/// first; later commands act on that document.
 #[derive(Serialize, Deserialize)]
 pub enum Command {
-    /// `viewport` is the tab's CSS viewport, when known, so responsive pages
-    /// arrive laid out for it rather than reflowing after they load.
-    Load {
-        location: Location,
-        scripting: ScriptPolicy,
+    /// The document the browser fetched, with the cookies of its site.
+    Render {
+        document: LoadedDocument,
+        scripting: bool,
         cookies: CookieJar,
-        initiator: Option<Location>,
         viewport: Option<(f32, f32)>,
     },
-    Submit {
-        request: FormRequest,
-        scripting: ScriptPolicy,
-        cookies: CookieJar,
-        initiator: Option<Location>,
-        viewport: Option<(f32, f32)>,
-    },
-    /// Carries the browser's current cookies, refreshed before the handler runs.
+    /// Carries the browser's current cookies for the page's site, refreshed
+    /// before the handler runs.
     Click {
         click: ClickRequest,
         cookies: CookieJar,
@@ -100,18 +146,34 @@ pub struct Worker {
     sender: Option<SyncSender<Command>>,
     events: Receiver<Result<Event, String>>,
     deadline: Option<Instant>,
+    fetched: Receiver<Fetched>,
+    /// The browser's record of the document this worker renders, once fetched.
+    document: Option<Fetched>,
+    started: SystemTime,
+    /// Stops the browser's fetch of the document when the tab stops.
+    stopped: Arc<AtomicBool>,
+}
+
+/// What the browser knows of the document a worker renders, independently of
+/// what the worker reports.
+struct Fetched {
+    location: Location,
+    status: Option<u16>,
+    scripting: bool,
+    /// Cookies set while fetching the document, delivered with the page.
+    cookie_updates: Vec<CookieUpdate>,
 }
 
 impl Worker {
-    /// Start a tab process from this executable with its initial `Load` or `Submit`.
-    pub fn spawn(initial: Command, ctx: &egui::Context) -> Result<Self, String> {
+    /// Fetch the document of `request` and render it in a fresh tab process.
+    pub fn spawn(request: Request, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_command_at(&executable, initial, ctx)
+        Self::spawn_at(&executable, request, ctx)
     }
 
-    pub fn spawn_command_at(
+    pub fn spawn_at(
         executable: &Path,
-        initial: Command,
+        request: Request,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
         let mut command = tab_worker_command(executable);
@@ -147,12 +209,19 @@ impl Worker {
             .ok_or("Tab process has no output pipe")?;
         let (sender, commands) = mpsc::sync_channel(1);
         let (events_tx, events) = mpsc::sync_channel(1);
-        let mut worker = Self {
+        let (fetched_tx, fetched) = mpsc::sync_channel(1);
+        let render = sender.clone();
+        let worker = Self {
             child: Some(child),
             sender: Some(sender),
             events,
-            deadline: None,
+            deadline: Some(Instant::now() + LOAD_TIMEOUT),
+            fetched,
+            document: None,
+            started: SystemTime::now(),
+            stopped: Arc::new(AtomicBool::new(false)),
         };
+        let stopped = worker.stopped.clone();
         let ctx_write = ctx.clone();
         let errors = events_tx.clone();
         std::thread::Builder::new()
@@ -167,6 +236,8 @@ impl Worker {
                 }
             })
             .map_err(|e| format!("Could not start tab input: {e}"))?;
+        let ctx_fetch = ctx.clone();
+        let fetch_errors = events_tx.clone();
         let ctx_read = ctx.clone();
         std::thread::Builder::new()
             .name("olive-tab-output".into())
@@ -201,7 +272,22 @@ impl Worker {
                 }
             })
             .map_err(|e| format!("Could not start tab output: {e}"))?;
-        worker.send(initial)?;
+        // The tab process starts while the browser fetches its document.
+        std::thread::Builder::new()
+            .name("olive-tab-fetch".into())
+            .spawn(move || match fetch(request, stopped) {
+                Ok((document, command)) => {
+                    // The browser's record arrives before the worker can answer.
+                    if fetched_tx.send(document).is_ok() {
+                        let _ = render.send(command);
+                    }
+                }
+                Err(error) => {
+                    let _ = fetch_errors.send(Ok(Event::Error(error)));
+                    ctx_fetch.request_repaint();
+                }
+            })
+            .map_err(|e| format!("Could not start loading: {e}"))?;
         Ok(worker)
     }
 
@@ -216,13 +302,23 @@ impl Worker {
         self.deadline = Some(Instant::now() + LOAD_TIMEOUT);
     }
 
-    pub fn send(&mut self, command: Command) -> Result<(), String> {
+    pub fn send(&mut self, mut command: Command) -> Result<(), String> {
         if self.busy() {
             return Err("The tab is still working. Stop or reload it to continue.".into());
         }
-        let timeout = match command {
-            Command::Load { .. } | Command::Submit { .. } => LOAD_TIMEOUT,
-            Command::Click { .. } | Command::Resize { .. } => CLICK_TIMEOUT,
+        let timeout = match &mut command {
+            Command::Render { .. } => {
+                return Err("A tab renders only the document the browser fetched for it.".into());
+            }
+            Command::Click { cookies, .. } => {
+                *cookies = self
+                    .document
+                    .as_ref()
+                    .map(|document| cookies.for_document(&document.location))
+                    .unwrap_or_default();
+                CLICK_TIMEOUT
+            }
+            Command::Resize { .. } => CLICK_TIMEOUT,
         };
         self.sender
             .as_ref()
@@ -241,7 +337,7 @@ impl Worker {
                 {
                     self.deadline = None;
                 }
-                match event {
+                match event.and_then(|event| self.confine(event)) {
                     Ok(event) => return Some(Ok(event)),
                     Err(error) => {
                         if let Some(child) = &mut self.child {
@@ -283,7 +379,46 @@ impl Worker {
         None
     }
 
+    /// Hold a worker's report to the document the browser fetched for it: the
+    /// address, status and scripting state are the browser's own, a web page's
+    /// base stays on the web, and cookie changes stay on the page's site.
+    fn confine(&mut self, mut event: Event) -> Result<Event, String> {
+        let (base, updates) = match &mut event {
+            Event::Loaded(page) => (&mut page.base, &mut page.cookie_updates),
+            Event::Updated(update) | Event::ResourcesUpdated(update) => {
+                (&mut update.base, &mut update.cookie_updates)
+            }
+            Event::Error(_) => return Ok(event),
+        };
+        // The browser records its fetch before sending the document, so the
+        // record is in by the time the worker's first page arrives.
+        if self.document.is_none() {
+            self.document = self.fetched.try_recv().ok();
+        }
+        let document = self
+            .document
+            .as_mut()
+            .ok_or("The tab process sent a page before its document was fetched.")?;
+        if document.location.is_remote() && !base.is_remote() {
+            *base = document.location.clone();
+        }
+        *updates = std::mem::take(updates)
+            .into_iter()
+            .filter_map(|update| update.confine(&document.location, self.started))
+            .collect();
+        if let Event::Loaded(page) = &mut event {
+            page.location = document.location.clone();
+            page.status = document.status;
+            page.scripting_enabled = document.scripting;
+            let mut cookie_updates = std::mem::take(&mut document.cookie_updates);
+            cookie_updates.append(&mut page.cookie_updates);
+            page.cookie_updates = cookie_updates;
+        }
+        Ok(event)
+    }
+
     fn terminate(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
         self.sender = None;
         self.deadline = None;
         if let Some(mut child) = self.child.take() {
@@ -300,38 +435,107 @@ impl Worker {
     #[cfg(test)]
     pub fn mock() -> (Self, SyncSender<Result<Event, String>>) {
         let (sender, events) = mpsc::sync_channel(1);
+        let (_, fetched) = mpsc::sync_channel(1);
         (
             Self {
                 child: None,
                 sender: None,
                 events,
                 deadline: None,
+                fetched,
+                document: None,
+                started: SystemTime::now(),
+                stopped: Arc::new(AtomicBool::new(false)),
             },
             sender,
         )
     }
+
+    /// A mock worker that the browser trusts to render `page`.
+    #[cfg(test)]
+    pub fn mock_rendering(page: &LoadedPage) -> (Self, SyncSender<Result<Event, String>>) {
+        let (mut worker, sender) = Self::mock();
+        worker.document = Some(Fetched {
+            location: page.location.clone(),
+            status: page.status,
+            scripting: page.scripting_enabled,
+            cookie_updates: Vec::new(),
+        });
+        (worker, sender)
+    }
+}
+
+/// Fetch a navigation's document in the browser, with the whole cookie jar,
+/// and prepare the worker's command to render it.
+fn fetch(request: Request, stopped: Arc<AtomicBool>) -> Result<(Fetched, Command), String> {
+    let Request {
+        target,
+        scripting,
+        cookies,
+        initiator,
+        viewport,
+    } = request;
+    let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
+        .with_cookie_initiator(initiator)
+        .with_stop(stopped);
+    let (requested, document) = match target {
+        Target::Load(location) => (location.clone(), loader.load(location)?),
+        Target::Submit(form) => (form.location.clone(), loader.submit(form)?),
+    };
+    let scripting = scripting.enabled_for(&requested, &document.location);
+    let fetched = Fetched {
+        location: document.location.clone(),
+        status: document.status,
+        scripting,
+        cookie_updates: loader.take_cookie_updates(),
+    };
+    let command = Command::Render {
+        cookies: loader.cookies().for_document(&document.location),
+        document,
+        scripting,
+        viewport,
+    };
+    Ok((fetched, command))
 }
 
 fn tab_worker_command(executable: &Path) -> ProcessCommand {
     #[cfg(target_os = "macos")]
-    {
+    let mut command = {
         let mut command = ProcessCommand::new("/usr/bin/sandbox-exec");
         command
             .arg("-p")
             .arg(MACOS_TAB_SANDBOX_PROFILE)
             .arg(executable);
         command
-    }
+    };
     #[cfg(windows)]
-    {
+    let mut command = {
         let mut command = ProcessCommand::new(executable);
         command.arg(WINDOWS_LAUNCHER_ARG);
         command
-    }
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        ProcessCommand::new(executable)
+    let mut command = ProcessCommand::new(executable);
+    command
+        .env_clear()
+        .envs(worker_environment(std::env::vars_os()));
+    if let Some(directory) = executable.parent().filter(|path| path.is_dir()) {
+        command.current_dir(directory);
     }
+    command
+}
+
+/// The variables of `environment` that a tab process keeps.
+fn worker_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> impl Iterator<Item = (OsString, OsString)> {
+    environment.into_iter().filter(|(name, _)| {
+        name.to_str().is_some_and(|name| {
+            WORKER_ENVIRONMENT
+                .iter()
+                .any(|kept| kept.eq_ignore_ascii_case(name))
+        })
+    })
 }
 
 #[cfg(windows)]
@@ -348,7 +552,6 @@ pub fn run_windows_launcher() -> u32 {
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
 fn report_start_error(message: String) {
     let _ = write_frame(
         &mut io::stdout().lock(),
@@ -366,6 +569,11 @@ impl Drop for Worker {
 // Workers read commands on a separate thread so EOF kills even a stuck parser/VM.
 // Closing the parent process closes its pipes; no orphaned document work remains.
 pub fn run() -> io::Result<()> {
+    if !heap::limit(MAX_WORKER_HEAP_BYTES) {
+        let error = "this executable does not count its heap, so no memory limit can apply";
+        report_start_error(format!("Could not start tab worker: {error}"));
+        return Err(io::Error::other(error));
+    }
     #[cfg(target_os = "linux")]
     if let Err(error) = restrict_linux_worker_writes() {
         report_start_error(format!(
@@ -394,39 +602,18 @@ pub fn run() -> io::Result<()> {
     let mut prepared: Option<PreparedPage> = None;
     for command in commands {
         let event = match command {
-            Command::Load {
-                location,
+            Command::Render {
+                document,
                 scripting,
                 cookies,
-                initiator,
                 viewport,
-            } => navigate(
+            } => render(
                 &mut output,
                 &mut prepared,
-                Navigation {
-                    location,
-                    form: None,
+                document,
+                Rendering {
                     scripting,
                     cookies,
-                    initiator,
-                    viewport,
-                },
-            )?,
-            Command::Submit {
-                request,
-                scripting,
-                cookies,
-                initiator,
-                viewport,
-            } => navigate(
-                &mut output,
-                &mut prepared,
-                Navigation {
-                    location: request.location.clone(),
-                    form: Some(request),
-                    scripting,
-                    cookies,
-                    initiator,
                     viewport,
                 },
             )?,
@@ -456,47 +643,36 @@ pub fn run() -> io::Result<()> {
     Ok(())
 }
 
-/// A tab's single full navigation: an address load or a form submission.
-struct Navigation {
-    location: Location,
-    form: Option<FormRequest>,
-    scripting: ScriptPolicy,
+/// How a worker renders its document.
+struct Rendering {
+    scripting: bool,
     cookies: CookieJar,
-    initiator: Option<Location>,
     viewport: Option<(f32, f32)>,
 }
 
-/// Fetch the document and stream its preview and, once its stylesheets are
-/// in, its styled page; then load the remaining resources and run scripts.
-/// Every full navigation gets a fresh process and document realm.
-fn navigate(
+/// Stream the document's preview and, once its stylesheets are in, its styled
+/// page; then load the remaining resources and run scripts. Every full
+/// navigation gets a fresh process and document realm.
+fn render(
     output: &mut impl Write,
     prepared: &mut Option<PreparedPage>,
-    navigation: Navigation,
+    source: LoadedDocument,
+    rendering: Rendering,
 ) -> io::Result<Event> {
     if prepared.is_some() {
-        return Err(io::Error::other("Unexpected second load"));
+        return Err(io::Error::other("Unexpected second document"));
     }
-    let Navigation {
-        location,
-        form,
+    let Rendering {
         scripting,
         cookies,
-        initiator,
         viewport,
-    } = navigation;
+    } = rendering;
     let viewport = viewport.map_or(crate::css::DEFAULT_VIEWPORT, |(width, height)| {
         (width.clamp(1.0, 10_000.0), height.clamp(1.0, 10_000.0))
     });
     let mut preview = None;
     let result = (|| {
-        let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
-            .with_cookie_initiator(initiator);
-        let source = match form {
-            Some(request) => loader.submit(request)?,
-            None => loader.load(location.clone())?,
-        };
-        let scripting = scripting.enabled_for(&location, &source.location);
+        let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?;
         let (preview_page, parsed) = prepare_page_preview(&source, scripting, viewport)?;
         write_frame(
             output,
@@ -554,6 +730,10 @@ fn navigate(
 fn restrict_linux_worker_writes() -> Result<(), String> {
     linux_sandbox::restrict_writes()
 }
+
+#[allow(unsafe_code)]
+#[path = "worker/heap.rs"]
+mod heap;
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -869,5 +1049,197 @@ mod tests {
                 .contains("stopped responding")
         );
         assert!(!worker.busy());
+    }
+
+    fn page(url: &str, html: &[u8]) -> LoadedPage {
+        let source = LoadedDocument {
+            location: Location::from_input(url).unwrap(),
+            bytes: html.to_vec(),
+            status: Some(200),
+            plain_text: false,
+        };
+        crate::gui::document::prepare_page_with_loader(
+            source,
+            &DocumentLoader::new().unwrap(),
+            false,
+        )
+        .unwrap()
+        .loaded
+    }
+
+    #[test]
+    fn reports_are_held_to_the_document_the_browser_fetched() {
+        let fetched = page("https://www.example.com/page", b"<p>Fetched</p>");
+        let bank = Location::from_input("https://bank.example/").unwrap();
+        let local = Location::from_path(std::env::current_dir().unwrap().join("secret/")).unwrap();
+        let (mut worker, events) = Worker::mock_rendering(&fetched);
+        worker.document.as_mut().unwrap().cookie_updates = vec![CookieUpdate::from_script(
+            fetched.location.clone(),
+            "fetched=1".into(),
+        )];
+
+        let mut spoofed = page("https://bank.example/account", b"<p>Spoofed</p>");
+        spoofed.base = local.clone();
+        spoofed.status = Some(500);
+        spoofed.scripting_enabled = true;
+        spoofed.cookie_updates = vec![
+            CookieUpdate::from_script(bank.clone(), "stolen=1; Path=/".into()),
+            CookieUpdate::from_script(
+                Location::from_input("https://cdn.example.com/").unwrap(),
+                "own=1".into(),
+            ),
+        ];
+        events.send(Ok(Event::Loaded(Box::new(spoofed)))).unwrap();
+        let Some(Ok(Event::Loaded(loaded))) = worker.poll() else {
+            panic!("expected the page");
+        };
+        assert_eq!(loaded.location, fetched.location);
+        assert_eq!(loaded.base, fetched.location);
+        assert_eq!(loaded.status, Some(200));
+        assert!(!loaded.scripting_enabled);
+        let cookies: Vec<_> = loaded
+            .cookie_updates
+            .iter()
+            .map(|update| update.set_cookie.as_str())
+            .collect();
+        assert_eq!(cookies, ["fetched=1", "own=1"]);
+
+        // Later updates are held to the same document, so a web page's links
+        // still cannot reach local files.
+        let mut update = page("https://bank.example/", b"").into_update();
+        update.base = local;
+        update.cookie_updates = vec![CookieUpdate::from_script(bank, "later=1".into())];
+        events.send(Ok(Event::Updated(Box::new(update)))).unwrap();
+        let Some(Ok(Event::Updated(update))) = worker.poll() else {
+            panic!("expected an update");
+        };
+        assert_eq!(update.base, fetched.location);
+        assert!(update.cookie_updates.is_empty());
+        assert!(update.base.resolve("secret.html").unwrap().is_remote());
+    }
+
+    #[test]
+    fn a_page_sent_before_its_document_was_fetched_is_rejected() {
+        let (mut worker, events) = Worker::mock();
+        let early = page("https://example.com/", b"<p>Early</p>");
+        events.send(Ok(Event::Loaded(Box::new(early)))).unwrap();
+        assert!(worker.poll().unwrap().is_err());
+    }
+
+    #[test]
+    fn clicks_carry_only_the_page_sites_cookies() {
+        let fetched = page("https://www.example.com/page", b"<p>Fetched</p>");
+        let other = Location::from_input("https://bank.example/").unwrap();
+        let (mut worker, _events) = Worker::mock_rendering(&fetched);
+        let (sender, commands) = mpsc::sync_channel(1);
+        worker.sender = Some(sender);
+        let mut jar = CookieJar::default();
+        assert!(jar.set_document_cookie(&fetched.location, "own=1"));
+        assert!(jar.set_document_cookie(&other, "bank=1"));
+        let target = crate::parse("<p>").unwrap().document.root();
+        let click = |cookies| Command::Click {
+            click: ClickRequest { target, href: None },
+            cookies,
+        };
+        worker.send(click(jar)).unwrap();
+        let Ok(Command::Click { mut cookies, .. }) = commands.try_recv() else {
+            panic!("expected a click");
+        };
+        assert_eq!(cookies.document_cookie(&fetched.location), "own=1");
+        assert_eq!(cookies.document_cookie(&other), "");
+        // A worker renders only the document the browser fetched for it.
+        worker.deadline = None;
+        let document = LoadedDocument {
+            location: other,
+            bytes: Vec::new(),
+            status: None,
+            plain_text: false,
+        };
+        let render = Command::Render {
+            document,
+            scripting: false,
+            cookies: CookieJar::default(),
+            viewport: None,
+        };
+        assert!(worker.send(render).is_err());
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_browser_fetches_the_document_and_hands_over_only_its_sites_cookies() {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let start = format!("http://{}/start", listener.local_addr().unwrap());
+        let start = Location::from_input(&start).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut headers = String::new();
+            while !headers.ends_with("\r\n\r\n") {
+                reader.read_line(&mut headers).unwrap();
+            }
+            let body = "<title>Fetched</title>";
+            write!(
+                reader.get_mut(),
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nSet-Cookie: fresh=2; Path=/\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            headers.to_ascii_lowercase()
+        });
+        let other = Location::from_input("http://localhost:9/").unwrap();
+        let mut jar = CookieJar::default();
+        assert!(jar.set_document_cookie(&start, "own=1; Path=/"));
+        assert!(jar.set_document_cookie(&other, "other=1"));
+        let request = Request {
+            target: Target::Load(start.clone()),
+            scripting: ScriptPolicy::Page,
+            cookies: jar,
+            initiator: None,
+            viewport: Some((800.0, 600.0)),
+        };
+        let (fetched, command) = fetch(request, Arc::default()).unwrap();
+        assert!(server.join().unwrap().contains("cookie: own=1"));
+        assert_eq!(fetched.location, start);
+        assert!(fetched.scripting);
+        assert_eq!(fetched.cookie_updates.len(), 1);
+        let Command::Render {
+            document,
+            scripting,
+            mut cookies,
+            viewport,
+        } = command
+        else {
+            panic!("expected a document");
+        };
+        assert!(scripting);
+        assert_eq!(viewport, Some((800.0, 600.0)));
+        assert_eq!(document.bytes, b"<title>Fetched</title>");
+        assert_eq!(
+            cookies.cookie_header(&start).as_deref(),
+            Some("own=1; fresh=2")
+        );
+        assert_eq!(cookies.cookie_header(&other), None);
+    }
+
+    #[test]
+    fn tab_processes_keep_only_proxy_certificate_and_system_variables() {
+        let kept: Vec<_> = worker_environment(
+            [
+                ("https_proxy", "http://proxy.example:3128"),
+                ("SSL_CERT_FILE", "/etc/ssl/cert.pem"),
+                ("SystemRoot", "C:\\Windows"),
+                ("PATH", "/usr/bin"),
+                ("GITHUB_TOKEN", "secret"),
+                ("AWS_SECRET_ACCESS_KEY", "secret"),
+                ("OLIVE_PROFILE_DIR", "/tmp/profile"),
+                ("LD_PRELOAD", "/tmp/library.so"),
+                ("DYLD_INSERT_LIBRARIES", "/tmp/library.dylib"),
+            ]
+            .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        )
+        .map(|(name, _)| name.into_string().unwrap())
+        .collect();
+        assert_eq!(kept, ["https_proxy", "SSL_CERT_FILE", "SystemRoot", "PATH"]);
     }
 }

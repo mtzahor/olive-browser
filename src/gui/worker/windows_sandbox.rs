@@ -68,7 +68,7 @@ fn launch_restricted_worker() -> io::Result<u32> {
     let mut command_line = worker_command_line(executable.as_os_str());
 
     // The inherited standard handles are the private protocol pipes created by
-    // Worker::spawn_command_at. Keep them on the child so the broker can wait
+    // Worker::spawn_at. Keep them on the child so the broker can wait
     // for its lifetime while the parent communicates directly with the worker.
     let mut startup = STARTUPINFOW::default();
     startup.cb = size_of::<STARTUPINFOW>() as u32;
