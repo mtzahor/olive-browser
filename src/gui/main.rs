@@ -1,7 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use eframe::egui;
-use olive_html::gui::{app, icon, worker};
+use olive_html::gui::{app, icon, network, worker};
 
 // Counts allocations so tab processes, which run this executable, can limit their heap.
 #[global_allocator]
@@ -17,6 +17,13 @@ fn main() -> eframe::Result {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(worker::WORKER_ARG)) {
         if let Err(error) = worker::run() {
             eprintln!("Tab worker failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(network::NETWORK_ARG)) {
+        if let Err(error) = network::run() {
+            eprintln!("Network process failed: {error}");
             std::process::exit(1);
         }
         return Ok(());

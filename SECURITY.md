@@ -1,4 +1,4 @@
-# Security boundary in 1.11.0
+# Security boundary in 1.12.0
 
 Olive's HTML parser accepts local or stdin UTF-8 HTML and produces an inert DOM.
 The optional GUI renders text, bounded PNG/JPEG/WebP images, and linked/embedded/inline CSS.
@@ -18,65 +18,91 @@ executes HTML. The `olive` DOM inspector remains inert; `olive-js` explicitly ru
 standalone JavaScript. The optional `net` feature explicitly loads HTTP(S)
 documents, and is included in the GUI. Parsing itself never performs networking.
 The viewer explicitly fetches supported CSS/JS/image resources; Olive does not enforce CSP.
-**The parser is not an HTML sanitizer. GUI tab workers have partial OS
-containment on macOS, Linux, and Windows. Standalone JavaScript execution is not
-OS-sandboxed.**
+**The parser is not an HTML sanitizer. GUI tab workers and the network process
+have partial OS containment on macOS, Linux, and Windows. Standalone JavaScript
+execution is not OS-sandboxed.**
 
 The GUI and CLI URL loader accept at most 8 MiB per document. The parser-only
 library default and CLI file/stdin paths remain at 1 MiB. Library callers can configure this limit.
 Recovery diagnostics are capped at 64 by default and 512 bytes per message.
 Tree output escapes terminal control characters and limits indentation.
 Olive's flat arena avoids ownership cycles and recursive DOM drop. Unsafe code is
-denied projectwide, with narrow Linux and Windows exceptions for Landlock and
-Win32 worker setup, and one for the OpenGL calls that draw the browser frame's
-glass. Those copy the browser's own rendered window into a texture and draw it
-blurred; they run in the browser process and read no tab data.
+denied projectwide, with narrow exceptions for the Linux Landlock and seccomp
+setup, the Win32 sandbox launcher, the counted heap allocator, the macOS
+quarantine attribute on downloads, the sandbox tests' signal probe, and the
+OpenGL calls that draw the browser frame's glass. Those copy the browser's own
+rendered window into a texture and draw it blurred; they run in the browser
+process and read no tab data.
 
 The GUI adds a 200,000-character / 5,000-text-block / 2,048-image / 10,000-box
 display limit. Table cells are boxes, so once 70% of the text-block or box limit
 is used, further cells render inline, one line per row, instead of exhausting it.
 Flex, float and table content measurement share one 250,000-step budget per
 rendered frame, tables lay out at most 64 columns, and each container tracks at
-most 64 active floats. The browser fetches each document and a dedicated child
-process parses, styles and executes it.
-On macOS, the GUI launches that process through `/usr/bin/sandbox-exec` with a
+most 64 active floats. The browser fetches each document through its network
+process, or reads a local document itself, and a dedicated child process
+parses, styles and executes it. Tab processes have no network or file access of
+their own: they ask the browser for each page resource, and the browser checks
+the request against its own record of the document before passing it to the
+network process or, for a local document's local resource, reading the file.
+
+The network process is one sandboxed child of the browser, started on first use
+and again after it stops. It makes every HTTP(S) request of the GUI: documents,
+form submissions, page resources, site icons and downloads. It shares one
+connection pool between tabs, runs at most 64 requests at once, limits its heap
+to 2 GiB, and holds no cookies of its own; the browser sends each request the
+cookies it needs. It parses responses from websites, so it is sandboxed like a
+tab process, except that it may open outbound connections.
+
+On macOS, the GUI launches each process through `/usr/bin/sandbox-exec` with a
 Seatbelt profile that denies everything by default, on top of Apple's
-`system.sb` baseline for system processes. It allows starting only the
-browser's own executable, signals only to itself, file reads, socket creation,
-outbound IP connections and the DNS daemon's socket, and the keychain service
-that supplies root certificates. Writes, other programs and processes, signals
-to other processes, local Unix sockets (such as SSH agents or Docker) and
-system services beyond the baseline's, including Launch Services, Apple Events
-and the pasteboard, are denied. `sandbox-exec` is deprecated by Apple, so this
-is a containment layer rather than an App Sandbox integration.
+`system.sb` baseline for system processes. Both profiles allow starting only
+the browser's own executable and signals only to the process itself. Tab
+processes get nothing more: no file reads beyond the baseline's system paths
+and no network. The network process may also create sockets, connect to IP
+addresses and the DNS daemon's socket, read `/Library/Keychains`, and reach the
+keychain service, so root certificates, including administrator-installed
+ones, load; it cannot read the user's files. Writes, other programs and
+processes, signals to other processes, local Unix sockets (such as SSH agents
+or Docker) and system services beyond the baseline's, including Launch
+Services, Apple Events and the pasteboard, are denied. `sandbox-exec` is
+deprecated by Apple, so this is a containment layer rather than an App Sandbox
+integration.
 
-Linux workers apply a Landlock ruleset and a seccomp filter before starting any
-threads. Landlock denies filesystem writes and requires ABI v3 so truncate
-operations are covered; on kernels that support them it also denies TCP
-listening (ABI v4), device ioctls (v5), and abstract Unix sockets and signals
-reaching outside the sandbox (v6). The seccomp filter, for x86_64 and aarch64,
-denies starting programs and processes (only threads may be created), debugging
-or reading other processes, signals to other processes, namespaces and mounts,
-Unix sockets, terminal input injection (`TIOCSTI` and `TIOCLINUX`), io_uring,
-BPF, perf events, userfaultfd, keyrings and kernel modules. Other architectures
-fail closed.
+On Linux, tab and network processes apply a Landlock ruleset and a seccomp
+filter before starting any threads. Landlock requires ABI v3 and denies
+filesystem writes, including truncation. Tab processes may read no files; the
+network process may read only `/etc`, `/usr`, `/lib*`, the resolver's `/run`
+directories and configured certificate paths, for name resolution, after
+loading root certificates. On kernels that support them, Landlock also denies
+TCP listening and, for tab processes, TCP connections (ABI v4), device ioctls
+(v5), and abstract Unix sockets and signals reaching outside the sandbox (v6).
+The seccomp filter, for x86_64 and aarch64, denies starting programs and
+processes (only threads may be created), debugging or reading other processes,
+signals to other processes, namespaces and mounts, terminal input injection
+(`TIOCSTI` and `TIOCLINUX`), io_uring, BPF, perf events, userfaultfd, keyrings
+and kernel modules. Tab processes may open no sockets; the network process may
+open no Unix sockets. Other architectures fail closed.
 
-Windows launches a second copy of the browser with a low-integrity LUA token in
-a job that allows one process, limits its committed memory to 2 GiB, stops it on
-an unhandled exception or when the tab closes, and denies the clipboard, the
-desktop, global atoms, display and system settings, and other processes' user
-handles. The worker inherits only its three pipe handles, cannot create child
+Windows launches a second copy of the browser for each process with a
+low-integrity LUA token in a job that allows one process, limits its committed
+memory to 2 GiB (3 GiB for the network process), stops it on an unhandled
+exception or when its owner closes, and denies the clipboard, the desktop,
+global atoms, display and system settings, and other processes' user handles. The worker inherits only its three pipe handles, cannot create child
 processes, and starts with strict handle checks and without legacy extension
 points such as AppInit DLLs, non-system fonts, or images from remote shares or
 with a low integrity label. Windows Mandatory Integrity Control blocks writes to
 medium- and higher-integrity objects; low-integrity targets can remain writable.
 
-All three policies preserve local file reads and outbound network connections,
-which tab processes still need for page resources. Worker startup fails closed
-on every platform if its restriction cannot be established. Sandbox tests, built
-with the `sandbox-probe` feature, ask real tab processes started like the
-browser's to write files and start programs, and on Unix to connect to a local
-socket and signal their parent, and expect each attempt to fail.
+A low-integrity token cannot deny reads of the user's files or network
+connections, so on Windows a compromised tab or network process can still read
+files and connect to the network directly; denying them needs an AppContainer.
+Startup fails closed on every platform if a restriction cannot be established.
+Sandbox tests, built with the `sandbox-probe` feature, ask real tab and network
+processes started like the browser's to write files, start programs, read a
+file in the user's temporary directory and, for tab processes, connect to a
+local web server, and on Unix to connect to a local socket and signal their
+parent, and expect each attempt to fail where the platform denies it.
 The previous page and its process remain available if a new document cannot be read.
 Up to 32 tabs are open at once; a tab can temporarily own an old document process
 and a pending replacement. Empty tabs do not start a process.
@@ -100,17 +126,22 @@ One navigation load runs per tab. Starting another navigation cancels that tab's
 pending load. Other tabs continue loading and responding independently.
 Cookies are shared in memory between tabs, with at most 256 cookies and 64 KiB of
 stored data, 4 KiB per cookie, and 256 pending mutations per worker event. The
-browser keeps the jar; each tab process receives a copy of only its document's
-site cookies (the registrable domain, or the IP address), without those marked
-Secure on HTTP pages. Local documents receive none. Cross-site resources neither
-send nor store cookies. Domain/path,
+browser keeps the jar. The network process receives the whole jar with each
+document or form request, which may redirect across sites, and only the
+document site's cookies with each resource request; cookie changes from
+responses return to the browser. A tab process receives only the cookies its
+page's scripts may read: those of its document's site (the registrable domain,
+or the IP address), without HttpOnly cookies and, on HTTP pages, without Secure
+ones. Local documents receive none. Cross-site resources neither send nor store
+cookies. Domain/path,
 Secure, HttpOnly, SameSite, Max-Age and Expires are enforced. Public-suffix domains
 and invalid secure prefixes are rejected; scripts cannot read or overwrite HttpOnly
 cookies, and insecure responses cannot overwrite overlapping secure cookies.
 Cookies are not persisted to disk. HTTP authentication,
 automatic Referer headers, persistent network cache and automatic document
-navigation are not enabled. User-initiated downloads are capped at 100 MiB and
-published from a temporary file without replacing existing files or symlinks,
+navigation are not enabled. User-initiated downloads from websites stream from
+the network process to the browser, which writes them; local files are copied
+directly. Downloads are capped at 100 MiB and published from a temporary file without replacing existing files or symlinks,
 including when concurrent downloads use the same filename. Before publishing, a
 download from a website receives the system's internet mark: the
 `com.apple.quarantine` attribute on macOS, so Gatekeeper checks it, and a
@@ -149,8 +180,8 @@ not the current document or in-memory Back/Forward stack. There is no private
 browsing mode. Storage locations and the `OLIVE_HISTORY_FILE` override are
 documented in README.md; multiple instances sharing a file use last-writer wins.
 
-Site icons are fetched by the tab process with the page's resource rules and
-cookies: at most two requests (the declared raster icon, then `/favicon.ico` for
+Site icons are requested by the tab process and fetched like its other page
+resources: at most two requests (the declared raster icon, then `/favicon.ico` for
 websites), each capped at 1 MiB and the icon deadline of 1.5 seconds after the page
 starts loading its resources. Icons decode in the tab process with the image limits
 below and are scaled to at most 32×32 pixels before reaching the browser. The
@@ -161,6 +192,9 @@ history deletes them all.
 
 Page resources resolve against the final document URL and first base href, with
 at most 256 attempts and a shared 30-second network deadline after document loading.
+The browser accepts at most 264 resource requests from a tab process, 32 at a
+time, each bounded to 30 seconds and 8 MiB, and applies the rules below with its
+own record of the document rather than the one the tab names.
 Each resource request is capped at two seconds and the remaining shared time, with
 at most 16 requests in flight. Elements that use the same address for the same
 kind of resource share one request; each still counts toward the attempt limit
@@ -249,13 +283,15 @@ inside native built-ins such as regular expressions and large string/array
 operations. Scripts can still consume excessive memory/CPU or trigger dependency
 defects, including process-aborting failures. Use local documents and enable web
 JavaScript only for pages and their script providers you trust. Web scripting is
-an explicit experimental opt-in, not safe execution of untrusted code. The worker
-policies do not restrict reads or outbound network access. Tab processes
-cannot create processes on any platform. Each tab process counts its heap and limits it to 1 GiB: past the
+an explicit experimental opt-in, not safe execution of untrusted code. On macOS
+and Linux, a tab process can neither read files nor open network connections,
+so a compromised one can send data only through the browser's checked resource
+requests; on Windows it still can do both. Tab processes cannot create
+processes on any platform. Each tab process counts its heap and limits it to 1 GiB: past the
 limit an allocation fails, which the JavaScript engine reports as a RangeError
 for buffers and which otherwise stops the process. The limit does not cover
-memory that system libraries map themselves. Stronger OS sandboxing remains
-required before automatic execution of untrusted remote JavaScript. Tab
+memory that system libraries map themselves. An AppContainer sandbox on Windows
+remains required before automatic execution of untrusted remote JavaScript. Tab
 processes provide fault isolation and partial containment, not a complete
 security boundary against compromised native code.
 
@@ -270,7 +306,9 @@ window or reading browser history.
 IPC uses inherited stdin/stdout pipes, no network listener or shared temporary
 files. Messages have a four-byte length prefix: commands are limited to 64 MiB,
 enough for an 8 MiB document as escaped JSON text, and presentation responses
-to 128 MiB. A message is JSON followed by the raw RGBA
+to 128 MiB. Resource bytes cross as base64 text; network process requests are
+limited to 1 MiB and its responses to 32 MiB, and requests and answers carry ids
+so concurrent ones are matched. A message is JSON followed by the raw RGBA
 pixels of the pictures it refers to, each picture once per message. The browser
 checks each picture's dimensions, pixel budget and length and runs no image
 decoder on tab data. Pipe reads, writes, JSON decoding, image validation and
@@ -289,23 +327,29 @@ and scripting state come from the browser's own fetch; a web page's reported
 base address that points at a local file is replaced with the page address, so
 links from it still cannot open files; cookie changes are applied only for the
 document's own site, with receipt times limited to the process's lifetime; and
-click commands carry only the site's cookies. A compromised tab process still
-holds its own site's cookies, including HttpOnly ones, and can set HttpOnly
-cookies for that site. Tab processes start in the executable's directory with
-an empty environment apart from proxy, certificate, `HOME`, `PATH` and Windows
-system-directory variables, so tokens and other secrets in the browser's
-environment do not reach them. Stopping a tab or replacing its navigation stops
-the browser's fetch before its next request or body read; a request already
-waiting for its response may continue until the response starts or times out.
+click commands carry only the cookies the page's scripts may read. Tab processes
+see no responses, so every cookie change they report counts as a script's: they
+never hold or set HttpOnly cookies. Tab and network processes start in the
+executable's directory with an empty environment apart from proxy,
+certificate, `HOME`, `PATH` and Windows system-directory variables, so tokens
+and other secrets in the browser's environment do not reach them. Stopping a
+tab or replacing its navigation cancels its requests in the network process
+before their next request or body read; a request already waiting for its
+response may continue until the response starts or times out.
 
-Beyond the tab heap limit, these controls do not provide a hard memory ceiling
-for the browser process or a per-process CPU quota.
+The network process is exposed to websites' HTTP and TLS. A compromised network
+process sees the cookies sent with requests and can forge responses and cookie
+changes, but on macOS and Linux it cannot read the user's files, including the
+browser profile, or start programs.
+
+Beyond the tab and network process heap limits, these controls do not provide a
+hard memory ceiling for the browser process or a per-process CPU quota.
 DOM construction expands input, parser recovery can be expensive, allocations
 can fail, and dependencies can contain defects and unsafe code. OS-wide memory
 exhaustion can still affect the browser and other applications. The parser has
 not undergone an independent security audit. Browsing remains experimental;
-stronger OS sandboxing and enforceable CPU budgets remain necessary hardening
-work.
+an AppContainer sandbox on Windows and enforceable CPU budgets remain necessary
+hardening work.
 
 ## Reporting
 

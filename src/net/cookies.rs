@@ -91,11 +91,13 @@ impl CookieUpdate {
 
     /// Keep an update from the tab process rendering `document` only when it
     /// is for that document's own site, received no earlier than `since` (when
-    /// the process started) and no later than now.
+    /// the process started) and no later than now. Tab processes see no
+    /// responses, so the update is a script's and cannot set HttpOnly cookies.
     pub fn confine(mut self, document: &Location, since: SystemTime) -> Option<Self> {
         if !same_cookie_site(document, &self.location) {
             return None;
         }
+        self.from_script = true;
         let now = now_seconds();
         let since = since
             .duration_since(UNIX_EPOCH)
@@ -112,6 +114,16 @@ impl CookieJar {
     /// Other sites' cookies, and every cookie for a local document, stay in
     /// the browser.
     pub fn for_document(&self, document: &Location) -> Self {
+        self.site_cookies(document, true)
+    }
+
+    /// The cookies a script in `document` may read: those of
+    /// [`Self::for_document`] without HttpOnly cookies.
+    pub fn for_script(&self, document: &Location) -> Self {
+        self.site_cookies(document, false)
+    }
+
+    fn site_cookies(&self, document: &Location, http_only: bool) -> Self {
         let url = document.url();
         let site = match url.scheme() {
             "http" | "https" => url.host_str().map(cookie_site),
@@ -123,7 +135,9 @@ impl CookieJar {
                 .cookies
                 .iter()
                 .filter(|cookie| {
-                    site == Some(cookie_site(&cookie.domain)) && (https || !cookie.secure)
+                    site == Some(cookie_site(&cookie.domain))
+                        && (https || !cookie.secure)
+                        && (http_only || !cookie.http_only)
                 })
                 .cloned()
                 .collect(),
@@ -700,6 +714,9 @@ mod tests {
         );
         let local = Location::from_path(std::env::current_dir().unwrap().join("a.html")).unwrap();
         assert!(jar.for_document(&local).cookies.is_empty());
+        // Scripts never receive HttpOnly cookies.
+        let mut scoped = jar.for_script(&page);
+        assert_eq!(names(&mut scoped, &page), "wide=2");
     }
 
     #[test]
@@ -717,6 +734,8 @@ mod tests {
             .confine(&page, since)
             .unwrap();
         assert_eq!(kept.received_at, started + 1);
+        // A tab process cannot claim a response's right to set HttpOnly.
+        assert!(kept.from_script);
         for rejected in [
             "https://example.net/",
             "http://www.example.com/",

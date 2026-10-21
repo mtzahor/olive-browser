@@ -57,6 +57,8 @@ use windows_sys::Win32::{
 /// The most memory a tab process may commit. Its counted heap stops at 1 GiB;
 /// this also covers stacks, libraries and memory that system code allocates.
 const MAX_COMMITTED_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// The network process's counted heap stops at 2 GiB.
+const MAX_NETWORK_COMMITTED_BYTES: usize = 3 * 1024 * 1024 * 1024;
 
 // PROCESS_CREATION_MITIGATION_POLICY_*_ALWAYS_ON flags from winbase.h, which
 // windows-sys does not export: strict handle checks (bit 24), no legacy
@@ -67,23 +69,30 @@ const MITIGATION_POLICY: u64 = (1 << 24) | (1 << 32) | (1 << 48) | (1 << 52) | (
 const CHILD_PROCESS_RESTRICTED: u32 = 0x01;
 
 pub(super) fn launch_worker() -> Result<u32, String> {
-    validate_launcher_arguments()?;
-    launch_restricted_worker().map_err(|error| error.to_string())
+    let role = launcher_role()?;
+    launch_restricted_worker(role).map_err(|error| error.to_string())
 }
 
-fn validate_launcher_arguments() -> Result<(), String> {
+/// The role the launcher was asked to start: its only argument after the
+/// launcher flag.
+fn launcher_role() -> Result<super::Role, String> {
     let mut args = std::env::args_os();
     let _executable = args.next();
-    if args.next().as_deref() != Some(OsStr::new(super::WINDOWS_LAUNCHER_ARG))
-        || args.next().as_deref() != Some(OsStr::new(super::WORKER_ARG))
-        || args.next().is_some()
-    {
-        return Err("invalid restricted-worker launcher arguments".into());
+    let invalid = || "invalid restricted-worker launcher arguments".to_string();
+    if args.next().as_deref() != Some(OsStr::new(super::WINDOWS_LAUNCHER_ARG)) {
+        return Err(invalid());
     }
-    Ok(())
+    let role = args
+        .next()
+        .and_then(|argument| super::Role::from_argument(&argument))
+        .ok_or_else(invalid)?;
+    if args.next().is_some() {
+        return Err(invalid());
+    }
+    Ok(role)
 }
 
-fn launch_restricted_worker() -> io::Result<u32> {
+fn launch_restricted_worker(role: super::Role) -> io::Result<u32> {
     let executable = std::env::current_exe()?;
     let current_directory = executable
         .parent()
@@ -91,7 +100,7 @@ fn launch_restricted_worker() -> io::Result<u32> {
         .unwrap_or_else(|| Path::new("C:\\Windows\\System32"));
     let executable_wide = wide_nul(executable.as_os_str());
     let current_directory_wide = wide_nul(current_directory.as_os_str());
-    let mut command_line = worker_command_line(executable.as_os_str());
+    let mut command_line = worker_command_line(executable.as_os_str(), role);
 
     // The inherited standard handles are the private protocol pipes created by
     // Worker::spawn_at. Keep them on the child so the broker can wait
@@ -117,7 +126,7 @@ fn launch_restricted_worker() -> io::Result<u32> {
     startup.lpAttributeList = attributes.list();
 
     let restricted_token = create_low_integrity_token(process_token.0)?;
-    let job = create_worker_job()?;
+    let job = create_worker_job(role)?;
 
     let mut process_info = PROCESS_INFORMATION::default();
     // SAFETY: all pointers refer to live NUL-terminated buffers or initialized
@@ -261,7 +270,7 @@ fn set_low_integrity_level(token: HANDLE) -> io::Result<()> {
     Ok(())
 }
 
-fn create_worker_job() -> io::Result<OwnedHandle> {
+fn create_worker_job(role: super::Role) -> io::Result<OwnedHandle> {
     // SAFETY: null security attributes create a non-inheritable unnamed job.
     let raw_job = unsafe { CreateJobObjectW(null(), null()) };
     let job = OwnedHandle::new(raw_job, "worker job")?;
@@ -272,7 +281,10 @@ fn create_worker_job() -> io::Result<OwnedHandle> {
         | JOB_OBJECT_LIMIT_PROCESS_MEMORY
         | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
-    limits.ProcessMemoryLimit = MAX_COMMITTED_BYTES;
+    limits.ProcessMemoryLimit = match role {
+        super::Role::Tab => MAX_COMMITTED_BYTES,
+        super::Role::Network => MAX_NETWORK_COMMITTED_BYTES,
+    };
     // SAFETY: limits has the exact structure size required for this information
     // class and remains alive throughout the call.
     if unsafe {
@@ -456,11 +468,11 @@ fn restore_inherit_flags(handles: &[(HANDLE, u32)]) {
     }
 }
 
-fn worker_command_line(executable: &OsStr) -> Vec<u16> {
+fn worker_command_line(executable: &OsStr, role: super::Role) -> Vec<u16> {
     let mut command_line = quote_windows_argument(executable);
     command_line.pop(); // Remove the first argument's terminating NUL.
     command_line.push(b' ' as u16);
-    command_line.extend(quote_windows_argument(OsStr::new(super::WORKER_ARG)));
+    command_line.extend(quote_windows_argument(OsStr::new(role.argument())));
     command_line
 }
 

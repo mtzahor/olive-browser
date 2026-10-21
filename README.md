@@ -1,15 +1,16 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.11.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.12.0** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
 CSS and page images load automatically.
 Web JavaScript starts disabled; click **Enable JavaScript** in the status bar to
-reload the current page with scripting. Tab workers use partial OS sandboxes on
-macOS, Linux, and Windows: they can still read local files and use the network.
-Each holds only the cookies of the site it shows. Enable JavaScript only for
-pages you trust.
+reload the current page with scripting. Tab workers use OS sandboxes on macOS,
+Linux, and Windows; a separate, sandboxed network process makes every request.
+On macOS and Linux tab workers cannot read files or use the network themselves;
+on Windows they still can. Each holds only the cookies its page's scripts may
+read. Enable JavaScript only for pages you trust.
 **Disable JavaScript** reloads without scripts.
 To opt in for future pages, select **Browser menu → Settings → Browsing → Enable
 JavaScript by default on page loads**. This saved setting starts off and applies to
@@ -105,12 +106,16 @@ alerts, form edits, find queries, Focus settings and document scroll position.
 Switching tabs does not
 reload pages or add history visits. Saved browsing history is shared across tabs.
 
-The browser fetches each document, following redirects with the whole cookie
-jar, and hands it to a dedicated child process for HTML/CSS, resource loading,
-JavaScript and image decoding. That process receives only the cookies of the
-document's site, and the browser shows the address it fetched, not one the
+The browser fetches each document through its network process, following
+redirects with the whole cookie jar, and hands it to a dedicated child process
+for HTML/CSS, JavaScript and image decoding. That process asks the browser for
+each stylesheet, script, image and site icon; the browser checks the request
+against the document and has the network process fetch it, or reads a local
+document's local file itself. The tab receives only the cookies its page's
+scripts may read, and the browser shows the address it fetched, not one the
 process reports. A full navigation starts a fresh process; the previous
-document remains available until the new load succeeds.
+document remains available until the new load succeeds. The network process
+starts with the first request, is shared by all tabs, and restarts if it stops.
 Tab failures leave other tab processes and the browser controls running. Use
 **Reload tab** after a crash, or **Stop** / **Escape** to cancel pending work.
 A stalled load is terminated after 60 seconds; a stalled click after 10 seconds.
@@ -492,13 +497,16 @@ pass.
 
 Input, script, CSS, DOM, and preview work are bounded. These limits protect the
 viewer from oversized or pathological documents. Tab processes contain document
-crashes and have operation deadlines. On all three platforms, worker sandboxes
-block filesystem writes and starting programs or processes; Windows uses a
-low-integrity token, so writes to medium- and higher-integrity objects fail. On
-macOS and Linux workers also cannot connect to local Unix sockets, such as SSH
-agents, or signal other processes. Workers can still read files and use the
-network. Each worker starts without the browser's environment variables and
-limits its heap to 1 GiB; the browser itself has no memory ceiling. See
+crashes and have operation deadlines. On all three platforms, the tab and
+network process sandboxes block filesystem writes and starting programs or
+processes; Windows uses a low-integrity token, so writes to medium- and
+higher-integrity objects fail. On macOS and Linux, tab workers cannot read files
+or open network connections, the network process cannot read the user's files,
+and neither can connect to local Unix sockets, such as SSH agents, or signal
+other processes. On Windows both can still read files and use the network. Each
+starts without the browser's environment variables; tab workers limit their
+heap to 1 GiB and the network process to 2 GiB, and the browser itself has no
+memory ceiling. See
 [SECURITY.md](SECURITY.md) for the trust boundary and current limits.
 
 ## Development
@@ -523,9 +531,11 @@ termination, close workers, and simulate a browser exiting during a blocked load
 They also check that a worker cannot change the address the browser shows, set
 cookies for other sites, receive other sites' cookies or the browser's
 environment, or allocate past its heap limit. With the `sandbox-probe` feature
-(included in `--all-features`), sandbox tests ask real tab processes to write
-files, start programs, connect to local sockets and signal other processes,
-and expect each attempt to fail.
+(included in `--all-features`), sandbox tests ask real tab and network
+processes to write files, start programs, read the user's files, connect to
+websites and local sockets, and signal other processes, and check that each
+platform denies what it should. Network process tests fetch documents, stream
+and cancel downloads, and stop a request mid-flight.
 
 ## License
 

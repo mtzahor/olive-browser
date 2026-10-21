@@ -18,6 +18,7 @@ mod history;
 mod history_ui;
 pub mod icon;
 mod navigation;
+pub mod network;
 mod new_tab;
 mod profile;
 mod render;

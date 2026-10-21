@@ -29,6 +29,7 @@ pub const MAX_URL_BYTES: usize = 8192;
 pub const MAX_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
 /// Resource types the viewer can explicitly request. No recursive fetching occurs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ResourceKind {
     Stylesheet,
     Script,
@@ -99,9 +100,61 @@ impl LoadedDocument {
     }
 }
 
+/// A page resource request, as a loader without network access passes it on.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ResourceRequest {
+    pub document: Location,
+    pub location: Location,
+    pub kind: ResourceKind,
+    pub timeout: Duration,
+    pub max_bytes: usize,
+}
+
+/// Loads a resource for a loader without network or file access, such as
+/// through the process that has them. The response's bytes are the
+/// resource's: decoded UTF-8 text for stylesheets and scripts, or the
+/// original bytes of an image.
+pub type RemoteFetch = dyn Fn(ResourceRequest) -> Result<LoadedDocument, String> + Send + Sync;
+
+/// A pool of HTTP connections with verified TLS. Loaders sharing one reuse
+/// its connections; each request still carries its own timeout.
+#[derive(Clone)]
+pub struct HttpClient(Client);
+
+impl HttpClient {
+    pub fn new() -> Result<Self, String> {
+        Self::with_connect_timeout(Duration::from_secs(10))
+    }
+
+    fn with_connect_timeout(connect_timeout: Duration) -> Result<Self, String> {
+        Client::builder()
+            .user_agent(concat!("OliveBrowser/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(connect_timeout)
+            .referer(false)
+            // Resolve redirects ourselves before sending them. This preserves
+            // URL fragments and validates credentials/schemes before HTTP URI
+            // conversion, which can discard parts of a Location header.
+            .redirect(redirect::Policy::none())
+            .build()
+            .map(Self)
+            .map_err(|e| format!("Could not initialize HTTP: {e}"))
+    }
+}
+
+/// How a loader reaches what it loads.
+#[derive(Clone)]
+enum Transport {
+    Http(Client),
+    /// Local files only.
+    Local,
+    /// Page resources only, through another process.
+    Remote(Arc<RemoteFetch>),
+}
+
 /// Reusable HTTP client with verified TLS, limited redirects and bounded reads.
 pub struct DocumentLoader {
-    client: Client,
+    transport: Transport,
     timeout: Duration,
     cookies: Arc<Mutex<CookieJar>>,
     cookie_updates: Arc<Mutex<Vec<CookieUpdate>>>,
@@ -146,25 +199,35 @@ impl DocumentLoader {
     }
 
     pub fn with_timeout_and_cookies(timeout: Duration, cookies: CookieJar) -> Result<Self, String> {
-        Client::builder()
-            .user_agent(concat!("OliveBrowser/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(timeout.min(Duration::from_secs(10)))
-            .timeout(timeout)
-            .referer(false)
-            // Resolve redirects ourselves before sending them. This preserves
-            // URL fragments and validates credentials/schemes before HTTP URI
-            // conversion, which can discard parts of a Location header.
-            .redirect(redirect::Policy::none())
-            .build()
-            .map(|client| Self {
-                client,
-                timeout,
-                cookies: Arc::new(Mutex::new(cookies)),
-                cookie_updates: Arc::new(Mutex::new(Vec::new())),
-                cookie_initiator: None,
-                stopped: Arc::new(AtomicBool::new(false)),
-            })
-            .map_err(|e| format!("Could not initialize HTTP: {e}"))
+        let client = HttpClient::with_connect_timeout(timeout.min(Duration::from_secs(10)))?;
+        Ok(Self::with_client(&client, timeout, cookies))
+    }
+
+    /// A loader sharing `client`'s connections.
+    pub fn with_client(client: &HttpClient, timeout: Duration, cookies: CookieJar) -> Self {
+        Self::with_transport(Transport::Http(client.0.clone()), timeout, cookies)
+    }
+
+    /// A loader for local files only. It makes no network requests.
+    pub fn local(timeout: Duration) -> Self {
+        Self::with_transport(Transport::Local, timeout, CookieJar::default())
+    }
+
+    /// A loader for a process without network or file access: it loads page
+    /// resources only, each through `fetch`, and holds `cookies` for scripts.
+    pub fn remote(fetch: Arc<RemoteFetch>, timeout: Duration, cookies: CookieJar) -> Self {
+        Self::with_transport(Transport::Remote(fetch), timeout, cookies)
+    }
+
+    fn with_transport(transport: Transport, timeout: Duration, cookies: CookieJar) -> Self {
+        Self {
+            transport,
+            timeout,
+            cookies: Arc::new(Mutex::new(cookies)),
+            cookie_updates: Arc::new(Mutex::new(Vec::new())),
+            cookie_initiator: None,
+            stopped: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn cookies(&self) -> CookieJar {
@@ -185,6 +248,15 @@ impl DocumentLoader {
     pub fn with_stop(mut self, stopped: Arc<AtomicBool>) -> Self {
         self.stopped = stopped;
         self
+    }
+
+    fn client(&self) -> Result<&Client, String> {
+        match &self.transport {
+            Transport::Http(client) => Ok(client),
+            Transport::Local | Transport::Remote(_) => {
+                Err("This process has no network access.".into())
+            }
+        }
     }
 
     pub fn take_cookie_updates(&self) -> Vec<CookieUpdate> {
@@ -229,14 +301,34 @@ impl DocumentLoader {
         timeout: Duration,
         max_bytes: usize,
     ) -> Result<LoadedResource, String> {
-        let loaded = self.load_kind(
-            location,
-            Some(kind),
-            Some(document),
-            timeout.min(self.timeout),
-            max_bytes.min(MAX_RESOURCE_BYTES),
-            None,
-        )?;
+        let timeout = timeout.min(self.timeout);
+        let max_bytes = max_bytes.min(MAX_RESOURCE_BYTES);
+        let loaded = if let Transport::Remote(fetch) = &self.transport {
+            check_resource_target(document, &location)?;
+            if timeout.is_zero() {
+                return Err("Resource loading deadline reached.".into());
+            }
+            let loaded = fetch(ResourceRequest {
+                document: document.clone(),
+                location,
+                kind,
+                timeout,
+                max_bytes,
+            })?;
+            if loaded.bytes.len() > max_bytes {
+                return Err(limit_error(max_bytes));
+            }
+            loaded
+        } else {
+            self.load_kind(
+                location,
+                Some(kind),
+                Some(document),
+                timeout,
+                max_bytes,
+                None,
+            )?
+        };
         let bytes = loaded.bytes;
         let source = if kind == ResourceKind::Image {
             String::new()
@@ -265,6 +357,9 @@ impl DocumentLoader {
         if timeout.is_zero() {
             return Err("Resource loading deadline reached.".into());
         }
+        if let Transport::Remote(_) = self.transport {
+            return Err("This process loads only page resources.".into());
+        }
         if let Some(path) = location.file_path() {
             if !path
                 .metadata()
@@ -291,6 +386,7 @@ impl DocumentLoader {
                 plain_text: false,
             });
         }
+        let client = self.client()?;
         let initiator = if kind.is_some() {
             document
         } else {
@@ -310,12 +406,12 @@ impl DocumentLoader {
                 return Err("The website took too long to respond. Try again.".into());
             }
             let request = if let Some(body) = &body {
-                self.client
+                client
                     .post(location.url().clone())
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(body.clone())
             } else {
-                self.client.get(location.url().clone())
+                client.get(location.url().clone())
             };
             // Cross-site resources neither send nor store cookies: tab
             // processes hold only their own site's cookies.

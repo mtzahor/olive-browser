@@ -12,12 +12,13 @@ use crate::gui::{
     history_ui::HistoryWindow,
     icon,
     navigation::{History, Navigation},
+    network::Network,
     new_tab,
     profile::{MAX_TABS, MAX_ZOOM, MIN_ZOOM, Profile, SavedTab, Session},
     render::{ImageTextureCache, Page},
     theme::{DOCUMENT_PAPER, Palette, Theme},
     ui_icons::{self, Icon, IconButton},
-    worker::{Command, Event, Request, ScriptPolicy, Target, Worker},
+    worker::{Command, Event, Request, ScriptPolicy, Services, Target, Worker},
     zoom,
 };
 use crate::net::{CookieJar, Location};
@@ -36,7 +37,8 @@ struct Shared {
     icon: egui::TextureHandle,
     browsing_history: BrowsingHistory,
     history_window: HistoryWindow,
-    cookies: CookieJar,
+    /// The cookie jar and network process the tabs share.
+    services: Services,
     profile: Profile,
     downloads: Downloads,
     daily_windows: DailyWindows,
@@ -335,10 +337,10 @@ impl Tab {
                             shared.profile.data.settings.javascript_by_default,
                             true,
                         ),
-                        cookies: shared.cookies.clone(),
                         initiator: Some(loaded.location.clone()),
                         viewport: viewport.map(|(width, height)| (width as f32, height as f32)),
                     },
+                    &shared.services,
                     ctx,
                 ) {
                     Ok(worker) => {
@@ -470,10 +472,10 @@ impl Tab {
                     scripting,
                     shared.profile.data.settings.javascript_by_default,
                 ),
-                cookies: shared.cookies.clone(),
                 initiator,
                 viewport: viewport.map(|(width, height)| (width as f32, height as f32)),
             },
+            &shared.services,
             ctx,
         ) {
             Ok(worker) => {
@@ -499,7 +501,6 @@ impl Tab {
                 Ok(Event::Loaded(mut loaded)) => {
                     let keep_worker = loaded.scripting_enabled || loaded.resources.pending;
                     let resources_pending = loaded.resources.pending;
-                    shared.cookies.apply_updates(&loaded.cookie_updates);
                     self.history
                         .commit(loaded.location.clone(), pending.navigation);
                     shared
@@ -546,7 +547,6 @@ impl Tab {
         let event = self.worker.as_mut().and_then(Worker::poll);
         match event {
             Some(Ok(Event::ResourcesUpdated(mut update))) => {
-                shared.cookies.apply_updates(&update.cookie_updates);
                 // A styled page arrives first while images are still loading.
                 let keep_worker = update.resources.pending || update.presentation_available;
                 if let (Some(icon), Some(loaded)) = (&update.favicon, &self.loaded) {
@@ -572,7 +572,6 @@ impl Tab {
                 }
             }
             Some(Ok(Event::Updated(mut update))) => {
-                shared.cookies.apply_updates(&update.cookie_updates);
                 let activation = self.pending_form.take().filter(|_| update.default_allowed);
                 if let Some(loaded) = &mut self.loaded {
                     loaded.apply_update(&mut update);
@@ -1715,7 +1714,7 @@ impl Tab {
                                                     target,
                                                     href: actions.link.take(),
                                                 },
-                                                cookies: shared.cookies.clone(),
+                                                cookies: CookieJar::default(),
                                             }) {
                                                 self.error = Some(error);
                                                 self.pending_form = None;
@@ -1810,6 +1809,7 @@ impl Tab {
                 shared.downloads.start(
                     loaded.location.clone(),
                     shared.profile.data.settings.download_directory.clone(),
+                    shared.services.network.clone(),
                 );
                 shared.downloads.open = true;
             }
@@ -1956,7 +1956,9 @@ impl OliveApp {
                 icon,
                 browsing_history: BrowsingHistory::load_default(),
                 history_window: HistoryWindow::default(),
-                cookies: CookieJar::default(),
+                services: Services::new(
+                    Network::for_current_executable().unwrap_or_else(|_| Network::new("olive-gui")),
+                ),
                 profile,
                 downloads: Downloads::default(),
                 daily_windows: DailyWindows::default(),
@@ -2497,7 +2499,7 @@ mod tests {
             ),
             browsing_history: BrowsingHistory::default(),
             history_window: HistoryWindow::default(),
-            cookies: CookieJar::default(),
+            services: Services::new(Network::new("olive-network-test")),
             profile: Profile::default(),
             downloads: Downloads::default(),
             daily_windows: DailyWindows::default(),

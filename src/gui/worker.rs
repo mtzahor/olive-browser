@@ -1,25 +1,33 @@
 //! Private, framed pipe protocol and independently supervised document processes.
 //! Pipe I/O and deserialization never block the UI. No listener or shared temp files.
 //!
-//! The browser fetches each document itself, with the whole cookie jar, and a
-//! fresh tab process renders it holding only that site's cookies. What a tab
-//! process reports about its page's address, base and cookies is held to what
-//! the browser fetched for it.
+//! The browser fetches each document through its network process, keeping the
+//! cookie jar to itself, and a fresh tab process renders it. Tab processes
+//! have no network or file access: they ask the browser for each resource,
+//! and the browser checks the request against the document it fetched. What a
+//! tab process reports about its page's address, base and cookies is held to
+//! that document too.
 use crate::gui::document::{
     ClickRequest, LoadedPage, PageUpdate, PreparedPage, prepare_page_preview,
     prepare_page_with_parsed,
 };
-use crate::net::{CookieJar, CookieUpdate, DocumentLoader, FormRequest, LoadedDocument, Location};
+use crate::gui::network::{Fetch, NETWORK_ARG, Network};
+use crate::net::{
+    CookieJar, DocumentLoader, FormRequest, LoadedDocument, Location, MAX_RESOURCE_BYTES,
+    RemoteFetch, ResourceRequest,
+};
+use crate::resources::{MAX_RESOURCES, RESOURCE_TIMEOUT};
 use eframe::egui;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    ffi::OsString,
+    collections::HashMap,
+    ffi::{OsStr, OsString},
     io::{self, Read, Write},
     path::Path,
     process::{Child, Command as ProcessCommand, Stdio},
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
     },
     time::{Duration, Instant, SystemTime},
@@ -39,9 +47,16 @@ const CLICK_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most heap a tab process may use. Past it, allocation fails and the
 /// process stops, so one page cannot exhaust the computer's memory.
 pub const MAX_WORKER_HEAP_BYTES: usize = 1024 * 1024 * 1024;
-/// The environment a tab process keeps, compared without regard to case:
-/// proxy and certificate settings for its resource requests, and what the OS
-/// needs to start it. Everything else, such as tokens, stays in the browser.
+/// Resources a tab process may request: its page's and its site icons.
+const MAX_TAB_REQUESTS: usize = MAX_RESOURCES + 8;
+/// Resource requests of one tab in flight at once.
+const MAX_TAB_REQUESTS_IN_FLIGHT: usize = 32;
+/// How long a tab process waits past a request's own deadline for the browser.
+const FETCH_GRACE: Duration = Duration::from_secs(10);
+/// The environment a sandboxed process keeps, compared without regard to
+/// case: proxy and certificate settings for the network process, and what
+/// the OS needs to start it. Everything else, such as tokens, stays in the
+/// browser.
 const WORKER_ENVIRONMENT: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -56,22 +71,94 @@ const WORKER_ENVIRONMENT: &[&str] = &[
     "WINDIR",
 ];
 
-// Apple deprecates sandbox-exec. The policy denies everything a tab process
-// does not need, on top of Apple's baseline for system processes: no writes,
-// programs, other processes, local sockets, or system services beyond the
-// baseline's. Tab processes still read files and reach websites for page
-// resources, and the keychain service provides root certificates for them.
+// Apple deprecates sandbox-exec. Both policies deny everything a process does
+// not need on top of Apple's baseline for system processes: no writes,
+// programs, other processes or system services beyond the baseline's.
 #[cfg(target_os = "macos")]
-const MACOS_TAB_SANDBOX_PROFILE: &str = r#"(version 1)
-(deny default)
-(import "system.sb")
-(allow process-exec (literal (param "WORKER")))
-(allow signal (target self))
-(allow file-read*)
-(allow system-socket (socket-domain AF_INET) (socket-domain AF_INET6) (socket-domain AF_UNIX))
-(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))
-(allow mach-lookup (global-name "com.apple.SecurityServer"))
-"#;
+macro_rules! macos_profile {
+    ($($rules:literal)*) => {
+        concat!(
+            "(version 1)\n(deny default)\n(import \"system.sb\")\n",
+            "(allow process-exec (literal (param \"WORKER\")))\n",
+            "(allow signal (target self))\n",
+            $($rules, "\n",)*
+        )
+    };
+}
+/// Tab processes read no files and open no connections.
+#[cfg(target_os = "macos")]
+const MACOS_TAB_SANDBOX_PROFILE: &str = macos_profile!();
+/// The network process reaches websites, DNS, and the system keychain and
+/// keychain service for root certificates, but no user files.
+#[cfg(target_os = "macos")]
+const MACOS_NETWORK_SANDBOX_PROFILE: &str = macos_profile!(
+    "(allow system-socket (socket-domain AF_INET) (socket-domain AF_INET6) (socket-domain AF_UNIX))"
+    "(allow network-outbound (remote ip) (literal \"/private/var/run/mDNSResponder\"))"
+    "(allow mach-lookup (global-name \"com.apple.SecurityServer\"))"
+    "(allow file-read* (subpath \"/Library/Keychains\"))"
+);
+
+/// What a sandboxed child process of the browser does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Renders one document.
+    Tab,
+    /// Makes the browser's HTTP(S) requests.
+    Network,
+}
+
+impl Role {
+    pub fn argument(self) -> &'static str {
+        match self {
+            Self::Tab => WORKER_ARG,
+            Self::Network => NETWORK_ARG,
+        }
+    }
+
+    pub fn from_argument(argument: &OsStr) -> Option<Self> {
+        [Self::Tab, Self::Network]
+            .into_iter()
+            .find(|role| OsStr::new(role.argument()) == argument)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tab => "tab worker",
+            Self::Network => "network process",
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_profile(self) -> &'static str {
+        match self {
+            Self::Tab => MACOS_TAB_SANDBOX_PROFILE,
+            Self::Network => MACOS_NETWORK_SANDBOX_PROFILE,
+        }
+    }
+}
+
+/// What the browser shares with its tab processes: the cookie jar, which
+/// stays in the browser, and the network process that fetches for them.
+#[derive(Clone)]
+pub struct Services {
+    pub cookies: Arc<Mutex<CookieJar>>,
+    pub network: Arc<Network>,
+}
+
+impl Services {
+    pub fn new(network: Network) -> Self {
+        Self {
+            cookies: Arc::default(),
+            network: Arc::new(network),
+        }
+    }
+
+    pub fn jar(&self) -> MutexGuard<'_, CookieJar> {
+        self.cookies
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptPolicy {
@@ -103,9 +190,6 @@ impl ScriptPolicy {
 pub struct Request {
     pub target: Target,
     pub scripting: ScriptPolicy,
-    /// The browser's whole jar, for fetching the document. The tab process
-    /// receives only the cookies of the site it renders.
-    pub cookies: CookieJar,
     /// The page that started the navigation, for SameSite cookie rules.
     pub initiator: Option<Location>,
     /// The tab's CSS viewport, when known, so responsive pages arrive laid
@@ -119,19 +203,27 @@ pub enum Target {
     Submit(FormRequest),
 }
 
+/// A resource the browser fetched for a tab process.
+#[derive(Serialize, Deserialize)]
+pub struct FetchedResource {
+    pub location: Location,
+    #[serde(with = "crate::gui::network::base64_bytes")]
+    pub bytes: Vec<u8>,
+}
+
 /// Browser-to-worker messages. A worker renders exactly one document, sent
 /// first; later commands act on that document.
 #[derive(Serialize, Deserialize)]
 pub enum Command {
-    /// The document the browser fetched, with the cookies of its site.
+    /// The document the browser fetched, with the cookies its scripts may read.
     Render {
         document: LoadedDocument,
         scripting: bool,
         cookies: CookieJar,
         viewport: Option<(f32, f32)>,
     },
-    /// Carries the browser's current cookies for the page's site, refreshed
-    /// before the handler runs.
+    /// `Worker::send` fills in the cookies the page's scripts may read,
+    /// refreshed before the handler runs.
     Click {
         click: ClickRequest,
         cookies: CookieJar,
@@ -139,6 +231,11 @@ pub enum Command {
     Resize {
         width: f32,
         height: f32,
+    },
+    /// The answer to the worker's resource request `id`.
+    Fetched {
+        id: u64,
+        result: Result<FetchedResource, String>,
     },
     /// Make one sandbox test attempt instead of rendering a document.
     #[cfg(feature = "sandbox-probe")]
@@ -150,13 +247,18 @@ pub enum Event {
     Updated(Box<PageUpdate>),
     ResourcesUpdated(Box<PageUpdate>),
     Error(String),
+    /// A page resource the worker asks the browser for.
+    Fetch {
+        id: u64,
+        request: ResourceRequest,
+    },
     /// How a sandbox test attempt went.
     #[cfg(feature = "sandbox-probe")]
     Probed(Result<(), String>),
 }
 
-/// Something sandbox tests ask a tab process to attempt. Each must fail
-/// unless the sandbox deliberately allows it.
+/// Something sandbox tests ask a tab or network process to attempt. Each
+/// must fail unless the sandbox deliberately allows it.
 #[cfg(feature = "sandbox-probe")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Probe {
@@ -186,8 +288,9 @@ pub struct Worker {
     /// The browser's record of the document this worker renders, once fetched.
     document: Option<Fetched>,
     started: SystemTime,
-    /// Stops the browser's fetch of the document when the tab stops.
+    /// Stops the browser's fetches for the tab when the tab stops.
     stopped: Arc<AtomicBool>,
+    services: Services,
 }
 
 /// What the browser knows of the document a worker renders, independently of
@@ -196,43 +299,55 @@ struct Fetched {
     location: Location,
     status: Option<u16>,
     scripting: bool,
-    /// Cookies set while fetching the document, delivered with the page.
-    cookie_updates: Vec<CookieUpdate>,
 }
 
 impl Worker {
     /// Fetch the document of `request` and render it in a fresh tab process.
-    pub fn spawn(request: Request, ctx: &egui::Context) -> Result<Self, String> {
+    pub fn spawn(
+        request: Request,
+        services: &Services,
+        ctx: &egui::Context,
+    ) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        Self::spawn_at(&executable, request, ctx)
+        Self::spawn_at(&executable, request, services, ctx)
     }
 
     pub fn spawn_at(
         executable: &Path,
         request: Request,
+        services: &Services,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
-        let mut child = start_process(executable)?;
+        let mut child = start_process(executable, Role::Tab)?;
         let mut input = child.stdin.take().ok_or("Tab process has no input pipe")?;
         let mut output = child
             .stdout
             .take()
             .ok_or("Tab process has no output pipe")?;
-        let (sender, commands) = mpsc::sync_channel(1);
+        // Answers to resource requests share the channel with commands.
+        let (sender, commands) = mpsc::sync_channel(MAX_TAB_REQUESTS_IN_FLIGHT);
         let (events_tx, events) = mpsc::sync_channel(1);
         let (fetched_tx, fetched) = mpsc::sync_channel(1);
         let render = sender.clone();
         let worker = Self {
             child: Some(child),
-            sender: Some(sender),
+            sender: Some(sender.clone()),
             events,
             deadline: Some(Instant::now() + LOAD_TIMEOUT),
             fetched,
             document: None,
             started: SystemTime::now(),
             stopped: Arc::new(AtomicBool::new(false)),
+            services: services.clone(),
         };
-        let stopped = worker.stopped.clone();
+        let resources = Arc::new(TabResources {
+            services: services.clone(),
+            document: OnceLock::new(),
+            answers: sender,
+            stopped: worker.stopped.clone(),
+            requested: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
+        });
         let ctx_write = ctx.clone();
         let errors = events_tx.clone();
         std::thread::Builder::new()
@@ -250,6 +365,7 @@ impl Worker {
         let ctx_fetch = ctx.clone();
         let fetch_errors = events_tx.clone();
         let ctx_read = ctx.clone();
+        let serving = resources.clone();
         std::thread::Builder::new()
             .name("olive-tab-output".into())
             .spawn(move || {
@@ -262,7 +378,7 @@ impl Worker {
                                 Event::ResourcesUpdated(update) => {
                                     Some((&update.page, &update.reading))
                                 }
-                                Event::Error(_) => None,
+                                Event::Error(_) | Event::Fetch { .. } => None,
                                 #[cfg(feature = "sandbox-probe")]
                                 Event::Probed(_) => None,
                             };
@@ -274,6 +390,14 @@ impl Worker {
                             Ok(event)
                         })
                         .map_err(|e| format!("Tab process stopped or sent invalid data: {e}"));
+                    // Resource requests are the browser's to answer, not the UI's.
+                    let event = match event {
+                        Ok(Event::Fetch { id, request }) => {
+                            serving.serve(id, request);
+                            continue;
+                        }
+                        event => event,
+                    };
                     let failed = event.is_err();
                     if events_tx.send(event).is_err() {
                         break;
@@ -286,11 +410,14 @@ impl Worker {
             })
             .map_err(|e| format!("Could not start tab output: {e}"))?;
         // The tab process starts while the browser fetches its document.
+        let (services, stopped) = (services.clone(), worker.stopped.clone());
         std::thread::Builder::new()
             .name("olive-tab-fetch".into())
-            .spawn(move || match fetch(request, stopped) {
+            .spawn(move || match fetch(request, &services, &stopped) {
                 Ok((document, command)) => {
-                    // The browser's record arrives before the worker can answer.
+                    // The browser's record is in place before the worker
+                    // can answer or ask for resources.
+                    let _ = resources.document.set(document.location.clone());
                     if fetched_tx.send(document).is_ok() {
                         let _ = render.send(command);
                     }
@@ -320,14 +447,14 @@ impl Worker {
             return Err("The tab is still working. Stop or reload it to continue.".into());
         }
         let timeout = match &mut command {
-            Command::Render { .. } => {
-                return Err("A tab renders only the document the browser fetched for it.".into());
+            Command::Render { .. } | Command::Fetched { .. } => {
+                return Err("The browser sends a tab its document and resources itself.".into());
             }
             Command::Click { cookies, .. } => {
                 *cookies = self
                     .document
                     .as_ref()
-                    .map(|document| cookies.for_document(&document.location))
+                    .map(|document| self.services.jar().for_script(&document.location))
                     .unwrap_or_default();
                 CLICK_TIMEOUT
             }
@@ -396,7 +523,8 @@ impl Worker {
 
     /// Hold a worker's report to the document the browser fetched for it: the
     /// address, status and scripting state are the browser's own, a web page's
-    /// base stays on the web, and cookie changes stay on the page's site.
+    /// base stays on the web, and its scripts' cookie changes, applied here,
+    /// stay on the page's site.
     fn confine(&mut self, mut event: Event) -> Result<Event, String> {
         let (base, updates) = match &mut event {
             Event::Loaded(page) => (&mut page.base, &mut page.cookie_updates),
@@ -404,6 +532,7 @@ impl Worker {
                 (&mut update.base, &mut update.cookie_updates)
             }
             Event::Error(_) => return Ok(event),
+            Event::Fetch { .. } => return Err("The tab process sent an unexpected request.".into()),
             #[cfg(feature = "sandbox-probe")]
             Event::Probed(_) => return Ok(event),
         };
@@ -414,22 +543,20 @@ impl Worker {
         }
         let document = self
             .document
-            .as_mut()
+            .as_ref()
             .ok_or("The tab process sent a page before its document was fetched.")?;
         if document.location.is_remote() && !base.is_remote() {
             *base = document.location.clone();
         }
-        *updates = std::mem::take(updates)
+        let confined: Vec<_> = std::mem::take(updates)
             .into_iter()
             .filter_map(|update| update.confine(&document.location, self.started))
             .collect();
+        self.services.jar().apply_updates(&confined);
         if let Event::Loaded(page) = &mut event {
             page.location = document.location.clone();
             page.status = document.status;
             page.scripting_enabled = document.scripting;
-            let mut cookie_updates = std::mem::take(&mut document.cookie_updates);
-            cookie_updates.append(&mut page.cookie_updates);
-            page.cookie_updates = cookie_updates;
         }
         Ok(event)
     }
@@ -463,6 +590,7 @@ impl Worker {
                 document: None,
                 started: SystemTime::now(),
                 stopped: Arc::new(AtomicBool::new(false)),
+                services: Services::new(Network::new("olive-network-mock")),
             },
             sender,
         )
@@ -476,38 +604,59 @@ impl Worker {
             location: page.location.clone(),
             status: page.status,
             scripting: page.scripting_enabled,
-            cookie_updates: Vec::new(),
         });
         (worker, sender)
     }
 }
 
-/// Fetch a navigation's document in the browser, with the whole cookie jar,
-/// and prepare the worker's command to render it.
-fn fetch(request: Request, stopped: Arc<AtomicBool>) -> Result<(Fetched, Command), String> {
+/// Fetch a navigation's document, through the network process with the whole
+/// cookie jar or from a local file, and prepare the worker's command to
+/// render it.
+fn fetch(
+    request: Request,
+    services: &Services,
+    stopped: &Arc<AtomicBool>,
+) -> Result<(Fetched, Command), String> {
     let Request {
         target,
         scripting,
-        cookies,
         initiator,
         viewport,
     } = request;
-    let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?
-        .with_cookie_initiator(initiator)
-        .with_stop(stopped);
-    let (requested, document) = match target {
-        Target::Load(location) => (location.clone(), loader.load(location)?),
-        Target::Submit(form) => (form.location.clone(), loader.submit(form)?),
+    let (requested, fetch) = match target {
+        Target::Load(location) if !location.is_remote() => {
+            let document = DocumentLoader::local(LOAD_TIMEOUT).load(location.clone())?;
+            (location, Err(document))
+        }
+        Target::Load(location) => (
+            location.clone(),
+            Ok(Fetch::Document {
+                location,
+                initiator,
+            }),
+        ),
+        Target::Submit(request) => (
+            request.location.clone(),
+            Ok(Fetch::Form { request, initiator }),
+        ),
+    };
+    let document = match fetch {
+        Ok(fetch) => {
+            let jar = services.jar().clone();
+            let response = services.network.fetch(fetch, jar, LOAD_TIMEOUT, stopped)?;
+            services.jar().apply_updates(&response.cookie_updates);
+            response.into_document()
+        }
+        Err(local) => local,
     };
     let scripting = scripting.enabled_for(&requested, &document.location);
     let fetched = Fetched {
         location: document.location.clone(),
         status: document.status,
         scripting,
-        cookie_updates: loader.take_cookie_updates(),
     };
     let command = Command::Render {
-        cookies: loader.cookies().for_document(&document.location),
+        cookies: services.jar().for_script(&document.location),
         document,
         scripting,
         viewport,
@@ -515,15 +664,99 @@ fn fetch(request: Request, stopped: Arc<AtomicBool>) -> Result<(Fetched, Command
     Ok((fetched, command))
 }
 
-/// Start a tab process from `executable` in its sandbox, talking over pipes.
-fn start_process(executable: &Path) -> Result<Child, String> {
-    let mut command = tab_worker_command(executable);
+/// Answers a tab process's resource requests in the browser.
+struct TabResources {
+    services: Services,
+    /// The document the browser fetched for the tab, once it has.
+    document: OnceLock<Location>,
+    answers: SyncSender<Command>,
+    stopped: Arc<AtomicBool>,
+    requested: AtomicUsize,
+    in_flight: AtomicUsize,
+}
+
+impl TabResources {
+    fn serve(self: &Arc<Self>, id: u64, request: ResourceRequest) {
+        // The input thread drains answers independently, so waiting here for
+        // room cannot stall it.
+        let refuse = |error: &str| {
+            let _ = self.answers.send(Command::Fetched {
+                id,
+                result: Err(error.into()),
+            });
+        };
+        let Some(document) = self.document.get().cloned() else {
+            return refuse("The tab has no document to load resources for.");
+        };
+        if self.requested.fetch_add(1, Ordering::Relaxed) >= MAX_TAB_REQUESTS {
+            return refuse("The page requested too many resources.");
+        }
+        if self.in_flight.fetch_add(1, Ordering::Relaxed) >= MAX_TAB_REQUESTS_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+            return refuse("The page requested too many resources at once.");
+        }
+        let this = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("olive-tab-resource".into())
+            .spawn(move || {
+                let result = fetch_resource(&this.services, &document, request, &this.stopped);
+                this.in_flight.fetch_sub(1, Ordering::Relaxed);
+                let _ = this.answers.send(Command::Fetched { id, result });
+            });
+        if spawned.is_err() {
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+            refuse("Could not start loading the resource.");
+        }
+    }
+}
+
+/// Load a tab's resource with the browser's record of its document: through
+/// the network process with the document site's cookies, or from a local file
+/// for a local document. The tab's word for its document is not taken.
+fn fetch_resource(
+    services: &Services,
+    document: &Location,
+    request: ResourceRequest,
+    stopped: &AtomicBool,
+) -> Result<FetchedResource, String> {
+    let timeout = request.timeout.min(RESOURCE_TIMEOUT);
+    let max_bytes = request.max_bytes.min(MAX_RESOURCE_BYTES);
+    if request.location.is_remote() {
+        let cookies = services.jar().for_document(document);
+        let request = ResourceRequest {
+            document: document.clone(),
+            timeout,
+            max_bytes,
+            ..request
+        };
+        let response =
+            services
+                .network
+                .fetch(Fetch::Resource(request), cookies, timeout, stopped)?;
+        services.jar().apply_updates(&response.cookie_updates);
+        Ok(FetchedResource {
+            location: response.location,
+            bytes: response.bytes,
+        })
+    } else {
+        DocumentLoader::local(timeout)
+            .load_resource(document, request.location, request.kind, timeout, max_bytes)
+            .map(|resource| FetchedResource {
+                location: resource.location,
+                bytes: resource.bytes,
+            })
+    }
+}
+
+/// Start a sandboxed `role` process from `executable`, talking over pipes.
+pub(crate) fn start_process(executable: &Path, role: Role) -> Result<Child, String> {
+    let mut command = sandboxed_command(executable, role);
     command.stdin(Stdio::piped()).stdout(Stdio::piped());
     #[cfg(all(windows, test))]
     command.stderr(Stdio::inherit());
     #[cfg(not(all(windows, test)))]
     command.stderr(Stdio::null());
-    command.arg(WORKER_ARG);
+    command.arg(role.argument());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -532,15 +765,18 @@ fn start_process(executable: &Path) -> Result<Child, String> {
     command.spawn().map_err(|e| {
         #[cfg(target_os = "macos")]
         {
-            format!("Could not start tab worker in the macOS sandbox: {e}")
+            format!("Could not start {} in the macOS sandbox: {e}", role.name())
         }
         #[cfg(target_os = "windows")]
         {
-            format!("Could not start tab worker in the Windows sandbox: {e}")
+            format!(
+                "Could not start {} in the Windows sandbox: {e}",
+                role.name()
+            )
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            format!("Could not start tab process: {e}")
+            format!("Could not start {}: {e}", role.name())
         }
     })
 }
@@ -549,7 +785,7 @@ fn start_process(executable: &Path) -> Result<Child, String> {
 /// its sandbox, and return how the attempt went.
 #[cfg(feature = "sandbox-probe")]
 pub fn probe_at(executable: &Path, probe: Probe) -> Result<Result<(), String>, String> {
-    let mut child = start_process(executable)?;
+    let mut child = start_process(executable, Role::Tab)?;
     let mut input = child.stdin.take().ok_or("Tab process has no input pipe")?;
     let mut output = child
         .stdout
@@ -567,7 +803,12 @@ pub fn probe_at(executable: &Path, probe: Probe) -> Result<Result<(), String>, S
     }
 }
 
-fn tab_worker_command(executable: &Path) -> ProcessCommand {
+#[cfg(feature = "sandbox-probe")]
+pub(crate) fn attempt_probe(probe: Probe) -> Result<(), String> {
+    probe::attempt(probe)
+}
+
+fn sandboxed_command(executable: &Path, role: Role) -> ProcessCommand {
     #[cfg(target_os = "macos")]
     let mut command = {
         // The profile allows starting exactly this file, by its real path.
@@ -579,7 +820,7 @@ fn tab_worker_command(executable: &Path) -> ProcessCommand {
         let mut command = ProcessCommand::new("/usr/bin/sandbox-exec");
         command
             .arg("-p")
-            .arg(MACOS_TAB_SANDBOX_PROFILE)
+            .arg(role.macos_profile())
             .arg("-D")
             .arg(parameter)
             .arg(&executable);
@@ -587,12 +828,16 @@ fn tab_worker_command(executable: &Path) -> ProcessCommand {
     };
     #[cfg(windows)]
     let mut command = {
+        let _ = role;
         let mut command = ProcessCommand::new(executable);
         command.arg(WINDOWS_LAUNCHER_ARG);
         command
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let mut command = ProcessCommand::new(executable);
+    let mut command = {
+        let _ = role;
+        ProcessCommand::new(executable)
+    };
     command
         .env_clear()
         .envs(worker_environment(std::env::vars_os()));
@@ -602,7 +847,7 @@ fn tab_worker_command(executable: &Path) -> ProcessCommand {
     command
 }
 
-/// The variables of `environment` that a tab process keeps.
+/// The variables of `environment` that a sandboxed process keeps.
 fn worker_environment(
     environment: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> impl Iterator<Item = (OsString, OsString)> {
@@ -620,7 +865,7 @@ pub fn run_windows_launcher() -> u32 {
     match windows_sandbox::launch_worker() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            eprintln!("Could not start tab worker in the Windows sandbox: {error}");
+            eprintln!("Could not start a restricted process in the Windows sandbox: {error}");
             report_start_error(format!(
                 "Could not start tab worker in the Windows sandbox: {error}"
             ));
@@ -637,10 +882,69 @@ fn report_start_error(message: String) {
     );
 }
 
+/// Limit this process's counted heap to `bytes`; false when the executable
+/// does not count its heap.
+pub(crate) fn limit_heap(bytes: usize) -> bool {
+    heap::limit(bytes)
+}
+
+/// Apply the Linux sandbox for `role` to this process.
+#[cfg(target_os = "linux")]
+pub(crate) fn restrict_linux(role: Role) -> Result<(), String> {
+    linux_sandbox::restrict(role)
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         self.terminate();
     }
+}
+
+/// The worker's output pipe, shared by its main thread and its resource
+/// requests.
+#[derive(Clone)]
+struct Output(Arc<Mutex<io::Stdout>>);
+
+impl Output {
+    fn send(&self, message: &impl Serialize) -> io::Result<()> {
+        let mut output = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("tab output failed"))?;
+        write_frame(&mut *output, message, MAX_EVENT_BYTES)
+    }
+}
+
+/// Where answers to the worker's resource requests go, by request.
+type Waiting = Arc<Mutex<HashMap<u64, SyncSender<Result<FetchedResource, String>>>>>;
+
+/// Ask the browser for page resources over the worker's pipes.
+fn remote_fetch(output: Output, waiting: Waiting) -> Arc<RemoteFetch> {
+    let next = AtomicU64::new(1);
+    Arc::new(move |request: ResourceRequest| {
+        let id = next.fetch_add(1, Ordering::Relaxed);
+        let (answer, answered) = mpsc::sync_channel(1);
+        waiting
+            .lock()
+            .map_err(|_| "Resource requests failed.")?
+            .insert(id, answer);
+        let wait = request.timeout + FETCH_GRACE;
+        let sent = output.send(&Event::Fetch { id, request });
+        let result = sent.map_err(|error| error.to_string()).and_then(|()| {
+            answered
+                .recv_timeout(wait)
+                .map_err(|_| "The browser did not answer in time.".to_string())
+        });
+        if let Ok(mut waiting) = waiting.lock() {
+            waiting.remove(&id);
+        }
+        result?.map(|resource| LoadedDocument {
+            location: resource.location,
+            bytes: resource.bytes,
+            status: None,
+            plain_text: false,
+        })
+    })
 }
 
 // Workers read commands on a separate thread so EOF kills even a stuck parser/VM.
@@ -652,20 +956,32 @@ pub fn run() -> io::Result<()> {
         return Err(io::Error::other(error));
     }
     #[cfg(target_os = "linux")]
-    if let Err(error) = linux_sandbox::restrict() {
+    if let Err(error) = linux_sandbox::restrict(Role::Tab) {
         report_start_error(format!(
             "Could not start tab worker in the Linux sandbox: {error}"
         ));
         return Err(io::Error::other(error));
     }
 
+    let waiting: Waiting = Arc::default();
     let (sender, commands) = mpsc::sync_channel(1);
+    let answers = waiting.clone();
     std::thread::Builder::new()
         .name("olive-parent-watch".into())
         .spawn(move || {
             let mut input = io::stdin().lock();
             loop {
                 match read_frame::<Command>(&mut input, MAX_COMMAND_BYTES) {
+                    Ok(Command::Fetched { id, result }) => {
+                        let answer = answers
+                            .lock()
+                            .ok()
+                            .and_then(|mut waiting| waiting.remove(&id));
+                        // A request that gave up waiting has no answer route.
+                        if let Some(answer) = answer {
+                            let _ = answer.send(result);
+                        }
+                    }
                     Ok(command) => {
                         if sender.try_send(command).is_err() {
                             std::process::exit(1);
@@ -675,7 +991,7 @@ pub fn run() -> io::Result<()> {
                 }
             }
         })?;
-    let mut output = io::stdout().lock();
+    let output = Output(Arc::new(Mutex::new(io::stdout())));
     let mut prepared: Option<PreparedPage> = None;
     for command in commands {
         let event = match command {
@@ -685,12 +1001,16 @@ pub fn run() -> io::Result<()> {
                 cookies,
                 viewport,
             } => render(
-                &mut output,
+                &output,
                 &mut prepared,
                 document,
                 Rendering {
                     scripting,
-                    cookies,
+                    loader: DocumentLoader::remote(
+                        remote_fetch(output.clone(), waiting.clone()),
+                        LOAD_TIMEOUT,
+                        cookies,
+                    ),
                     viewport,
                 },
             )?,
@@ -714,10 +1034,11 @@ pub fn run() -> io::Result<()> {
                     }
                 }
             }
+            Command::Fetched { .. } => continue,
             #[cfg(feature = "sandbox-probe")]
             Command::Probe(probe) => Event::Probed(probe::attempt(probe)),
         };
-        write_frame(&mut output, &event, MAX_EVENT_BYTES)?;
+        output.send(&event)?;
     }
     Ok(())
 }
@@ -725,7 +1046,7 @@ pub fn run() -> io::Result<()> {
 /// How a worker renders its document.
 struct Rendering {
     scripting: bool,
-    cookies: CookieJar,
+    loader: DocumentLoader,
     viewport: Option<(f32, f32)>,
 }
 
@@ -733,7 +1054,7 @@ struct Rendering {
 /// page; then load the remaining resources and run scripts. Every full
 /// navigation gets a fresh process and document realm.
 fn render(
-    output: &mut impl Write,
+    output: &Output,
     prepared: &mut Option<PreparedPage>,
     source: LoadedDocument,
     rendering: Rendering,
@@ -743,7 +1064,7 @@ fn render(
     }
     let Rendering {
         scripting,
-        cookies,
+        loader,
         viewport,
     } = rendering;
     let viewport = viewport.map_or(crate::css::DEFAULT_VIEWPORT, |(width, height)| {
@@ -751,24 +1072,17 @@ fn render(
     });
     let mut preview = None;
     let result = (|| {
-        let loader = DocumentLoader::with_timeout_and_cookies(LOAD_TIMEOUT, cookies)?;
         let (preview_page, parsed) = prepare_page_preview(&source, scripting, viewport)?;
-        write_frame(
-            output,
-            &InitialEvent::Loaded(&preview_page),
-            MAX_EVENT_BYTES,
-        )
-        .map_err(|error| error.to_string())?;
+        output
+            .send(&InitialEvent::Loaded(&preview_page))
+            .map_err(|error| error.to_string())?;
         preview = Some(preview_page);
         let mut progress_error = None;
         let mut progress = |update: PageUpdate| {
             if progress_error.is_none() {
-                progress_error = write_frame(
-                    output,
-                    &Event::ResourcesUpdated(Box::new(update)),
-                    MAX_EVENT_BYTES,
-                )
-                .err();
+                progress_error = output
+                    .send(&Event::ResourcesUpdated(Box::new(update)))
+                    .err();
             }
         };
         let page = prepare_page_with_parsed(
@@ -1149,25 +1463,23 @@ mod tests {
 
     #[test]
     fn reports_are_held_to_the_document_the_browser_fetched() {
+        use crate::net::CookieUpdate;
         let fetched = page("https://www.example.com/page", b"<p>Fetched</p>");
         let bank = Location::from_input("https://bank.example/").unwrap();
+        let cdn = Location::from_input("https://cdn.example.com/").unwrap();
         let local = Location::from_path(std::env::current_dir().unwrap().join("secret/")).unwrap();
         let (mut worker, events) = Worker::mock_rendering(&fetched);
-        worker.document.as_mut().unwrap().cookie_updates = vec![CookieUpdate::from_script(
-            fetched.location.clone(),
-            "fetched=1".into(),
-        )];
 
         let mut spoofed = page("https://bank.example/account", b"<p>Spoofed</p>");
         spoofed.base = local.clone();
         spoofed.status = Some(500);
         spoofed.scripting_enabled = true;
+        let mut response = CookieUpdate::from_script(cdn.clone(), "forged=1; HttpOnly".into());
+        response.from_script = false;
         spoofed.cookie_updates = vec![
             CookieUpdate::from_script(bank.clone(), "stolen=1; Path=/".into()),
-            CookieUpdate::from_script(
-                Location::from_input("https://cdn.example.com/").unwrap(),
-                "own=1".into(),
-            ),
+            CookieUpdate::from_script(cdn.clone(), "own=1".into()),
+            response,
         ];
         events.send(Ok(Event::Loaded(Box::new(spoofed)))).unwrap();
         let Some(Ok(Event::Loaded(loaded))) = worker.poll() else {
@@ -1177,24 +1489,24 @@ mod tests {
         assert_eq!(loaded.base, fetched.location);
         assert_eq!(loaded.status, Some(200));
         assert!(!loaded.scripting_enabled);
-        let cookies: Vec<_> = loaded
-            .cookie_updates
-            .iter()
-            .map(|update| update.set_cookie.as_str())
-            .collect();
-        assert_eq!(cookies, ["fetched=1", "own=1"]);
+        // The browser applies the page's own script cookies itself. Tab
+        // processes see no responses, so they cannot set HttpOnly cookies.
+        assert!(loaded.cookie_updates.is_empty());
+        let mut jar = worker.services.jar().clone();
+        assert_eq!(jar.cookie_header(&cdn).as_deref(), Some("own=1"));
+        assert_eq!(jar.cookie_header(&bank), None);
 
         // Later updates are held to the same document, so a web page's links
         // still cannot reach local files.
         let mut update = page("https://bank.example/", b"").into_update();
         update.base = local;
-        update.cookie_updates = vec![CookieUpdate::from_script(bank, "later=1".into())];
+        update.cookie_updates = vec![CookieUpdate::from_script(bank.clone(), "later=1".into())];
         events.send(Ok(Event::Updated(Box::new(update)))).unwrap();
         let Some(Ok(Event::Updated(update))) = worker.poll() else {
             panic!("expected an update");
         };
         assert_eq!(update.base, fetched.location);
-        assert!(update.cookie_updates.is_empty());
+        assert_eq!(worker.services.jar().cookie_header(&bank), None);
         assert!(update.base.resolve("secret.html").unwrap().is_remote());
     }
 
@@ -1207,27 +1519,36 @@ mod tests {
     }
 
     #[test]
-    fn clicks_carry_only_the_page_sites_cookies() {
+    fn clicks_carry_only_the_cookies_the_pages_scripts_may_read() {
+        use crate::net::CookieUpdate;
         let fetched = page("https://www.example.com/page", b"<p>Fetched</p>");
         let other = Location::from_input("https://bank.example/").unwrap();
         let (mut worker, _events) = Worker::mock_rendering(&fetched);
         let (sender, commands) = mpsc::sync_channel(1);
         worker.sender = Some(sender);
-        let mut jar = CookieJar::default();
-        assert!(jar.set_document_cookie(&fetched.location, "own=1"));
-        assert!(jar.set_document_cookie(&other, "bank=1"));
+        let mut session =
+            CookieUpdate::from_script(fetched.location.clone(), "session=1; HttpOnly".into());
+        session.from_script = false;
+        worker.services.jar().apply_updates(&[
+            CookieUpdate::from_script(fetched.location.clone(), "own=1".into()),
+            CookieUpdate::from_script(other.clone(), "bank=1".into()),
+            session,
+        ]);
         let target = crate::parse("<p>").unwrap().document.root();
-        let click = |cookies| Command::Click {
+        let click = Command::Click {
             click: ClickRequest { target, href: None },
-            cookies,
+            cookies: CookieJar::default(),
         };
-        worker.send(click(jar)).unwrap();
+        worker.send(click).unwrap();
         let Ok(Command::Click { mut cookies, .. }) = commands.try_recv() else {
             panic!("expected a click");
         };
-        assert_eq!(cookies.document_cookie(&fetched.location), "own=1");
-        assert_eq!(cookies.document_cookie(&other), "");
-        // A worker renders only the document the browser fetched for it.
+        assert_eq!(
+            cookies.cookie_header(&fetched.location).as_deref(),
+            Some("own=1")
+        );
+        assert_eq!(cookies.cookie_header(&other), None);
+        // The browser alone sends a tab its document and resources.
         worker.deadline = None;
         let document = LoadedDocument {
             location: other,
@@ -1242,64 +1563,12 @@ mod tests {
             viewport: None,
         };
         assert!(worker.send(render).is_err());
+        let fetched = Command::Fetched {
+            id: 1,
+            result: Err("forged".into()),
+        };
+        assert!(worker.send(fetched).is_err());
         assert!(commands.try_recv().is_err());
-    }
-
-    #[test]
-    fn the_browser_fetches_the_document_and_hands_over_only_its_sites_cookies() {
-        use std::io::{BufRead, BufReader};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let start = format!("http://{}/start", listener.local_addr().unwrap());
-        let start = Location::from_input(&start).unwrap();
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut headers = String::new();
-            while !headers.ends_with("\r\n\r\n") {
-                reader.read_line(&mut headers).unwrap();
-            }
-            let body = "<title>Fetched</title>";
-            write!(
-                reader.get_mut(),
-                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nSet-Cookie: fresh=2; Path=/\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-            headers.to_ascii_lowercase()
-        });
-        let other = Location::from_input("http://localhost:9/").unwrap();
-        let mut jar = CookieJar::default();
-        assert!(jar.set_document_cookie(&start, "own=1; Path=/"));
-        assert!(jar.set_document_cookie(&other, "other=1"));
-        let request = Request {
-            target: Target::Load(start.clone()),
-            scripting: ScriptPolicy::Page,
-            cookies: jar,
-            initiator: None,
-            viewport: Some((800.0, 600.0)),
-        };
-        let (fetched, command) = fetch(request, Arc::default()).unwrap();
-        assert!(server.join().unwrap().contains("cookie: own=1"));
-        assert_eq!(fetched.location, start);
-        assert!(fetched.scripting);
-        assert_eq!(fetched.cookie_updates.len(), 1);
-        let Command::Render {
-            document,
-            scripting,
-            mut cookies,
-            viewport,
-        } = command
-        else {
-            panic!("expected a document");
-        };
-        assert!(scripting);
-        assert_eq!(viewport, Some((800.0, 600.0)));
-        assert_eq!(document.bytes, b"<title>Fetched</title>");
-        assert_eq!(
-            cookies.cookie_header(&start).as_deref(),
-            Some("own=1; fresh=2")
-        );
-        assert_eq!(cookies.cookie_header(&other), None);
     }
 
     #[test]

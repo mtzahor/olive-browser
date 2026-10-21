@@ -1,4 +1,5 @@
-use crate::net::download::suggested_name;
+use crate::gui::network::Network;
+use crate::net::download::{MAX_DOWNLOAD_BYTES, suggested_name};
 // The macOS quarantine attribute is set through libc.
 #[allow(unsafe_code)]
 mod origin;
@@ -6,6 +7,7 @@ use crate::net::{DocumentLoader, Location};
 use eframe::egui;
 use std::{
     fmt, fs,
+    io::Write,
     path::PathBuf,
     sync::{
         Arc,
@@ -14,6 +16,9 @@ use std::{
     },
     thread,
 };
+
+/// How long copying a local file may take, as for website downloads.
+const LOCAL_COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 enum Message {
     Progress(u64, Option<u64>),
@@ -72,7 +77,9 @@ impl Default for Downloads {
     }
 }
 impl Downloads {
-    pub fn start(&mut self, location: Location, directory: Option<PathBuf>) {
+    /// Download `location` into `directory` through `network`; local files
+    /// are copied directly.
+    pub fn start(&mut self, location: Location, directory: Option<PathBuf>, network: Arc<Network>) {
         let id = self.next;
         self.next += 1;
         let name = suggested_name(&location);
@@ -99,14 +106,28 @@ impl Downloads {
                 let temp = tempfile::NamedTempFile::new_in(&dir)
                     .map_err(|e| format!("Could not create download file: {e}"))?;
                 let mut file = temp.as_file().try_clone().map_err(|e| e.to_string())?;
-                let loader = DocumentLoader::new()?;
-                let bytes = loader.download(location, &mut file, |received, total| {
+                let progress = |received, total| {
                     if flag.load(Ordering::Relaxed) {
-                        return Err("Download cancelled.".into());
+                        return Err("Download cancelled.".to_string());
                     }
                     let _ = tx.send((id, Message::Progress(received, total)));
                     Ok(())
-                })?;
+                };
+                let bytes = if remote {
+                    let mut received = 0;
+                    network.download(location, |bytes, total| {
+                        progress(received, total)?;
+                        if received + bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+                            return Err("Download exceeds the 100 MiB limit.".into());
+                        }
+                        file.write_all(bytes).map_err(|e| e.to_string())?;
+                        received += bytes.len() as u64;
+                        Ok(())
+                    })?
+                } else {
+                    DocumentLoader::local(LOCAL_COPY_TIMEOUT)
+                        .download(location, &mut file, progress)?
+                };
                 file.sync_all().map_err(|e| e.to_string())?;
                 drop(file);
                 // Mark the file before it takes its name. Best effort: some
