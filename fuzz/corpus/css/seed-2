@@ -1,0 +1,1 @@
+:is(#a, .c) :where(td) { width: calc(100% - var(--x, 2px)); font: 12px/1.5 serif }

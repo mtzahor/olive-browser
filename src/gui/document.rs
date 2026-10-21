@@ -427,6 +427,16 @@ fn decode_images(
     images
 }
 
+/// Read a picture's size and decode it as a page image and as a site icon,
+/// as tab processes do, reporting only whether it decoded.
+#[doc(hidden)]
+pub fn check_image(bytes: &[u8]) -> Result<(), String> {
+    image_pixels(bytes)?;
+    decode_image(bytes)?;
+    decode_favicon(bytes).ok_or("not a site icon")?;
+    Ok(())
+}
+
 /// The pixel count a picture's header states, within the per-image limits.
 fn image_pixels(bytes: &[u8]) -> Result<u64, String> {
     let (width, height) = if bytes.starts_with(&[0xff, 0xd8]) {

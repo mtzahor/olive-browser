@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.13.0 — Fuzzing and dependency checks
+
+- Fuzz the code that handles untrusted input: the browser's reading of tab and
+  network process messages, picture decoding, HTML and CSS parsing, cookies and
+  addresses. Every build runs each target over its seeds and thousands of
+  mutations, and a nightly workflow fuzzes each for ten minutes with
+  cargo-fuzz and AddressSanitizer.
+- Read process messages into a buffer that grows with the bytes that arrive,
+  so a message's length prefix alone cannot make the browser reserve 128 MiB.
+- Check dependencies with `cargo deny` on every build and nightly: security
+  advisories, licenses, crate sources and version wildcards.
+- Update rustls to 0.23.46, rustls-webpki to 0.103.16 and webpki-roots to
+  1.0.10 for nine advisories, among them TLS 1.3 handshake messages accepted
+  across encryption levels, a downgrade to classical key exchange, and trust in
+  distrusted intermediates and roots.
+- Keep arithmetic overflow checks in release builds: an overflow stops the
+  process instead of wrapping.
+- Sign the macOS app with the hardened runtime, ad hoc or with the Developer ID
+  in `OLIVE_SIGNING_IDENTITY`. CI checks the signature.
+
 ## 1.12.0 — A separate network process
 
 - Make every HTTP(S) request in a sandboxed network process, a child of the

@@ -43,6 +43,8 @@ pub struct ExternalSource {
 }
 
 mod dom;
+#[doc(hidden)]
+pub mod fuzzing;
 mod parser;
 mod sink;
 mod text;

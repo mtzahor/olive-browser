@@ -38,4 +38,14 @@ cat > "$olive_bundle/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# Sign with the hardened runtime, which keeps other processes from injecting
+# code into the browser or reading its memory, and keeps it from loading
+# libraries that are not Apple's or its own. Without a Developer ID in
+# OLIVE_SIGNING_IDENTITY, the signature is ad hoc.
+if [ -n "${OLIVE_SIGNING_IDENTITY:-}" ]; then
+    codesign --force --options runtime --timestamp --sign "$OLIVE_SIGNING_IDENTITY" "$olive_bundle"
+else
+    codesign --force --options runtime --timestamp=none --sign - "$olive_bundle"
+fi
+codesign --verify --strict "$olive_bundle"
 printf 'Built %s/%s\n' "$PWD" "$olive_bundle"

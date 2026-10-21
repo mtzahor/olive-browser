@@ -36,6 +36,17 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      # Security advisories, licenses, crate sources and version wildcards.
+      - run: cargo deny --locked check
+
   package-macos:
     runs-on: macos-latest
     steps:
@@ -46,6 +57,8 @@ jobs:
       - run: ./scripts/build-macos-app.sh
       - run: test -x "target/Olive Browser.app/Contents/MacOS/olive-gui"
       - run: test -f "target/Olive Browser.app/Contents/Info.plist"
+      - run: codesign --verify --strict --verbose=2 "target/Olive Browser.app"
+      - run: codesign --display --verbose "target/Olive Browser.app" 2>&1 | grep -q 'flags=.*runtime'
 
   msrv:
     runs-on: ubuntu-latest

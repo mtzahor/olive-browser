@@ -323,6 +323,59 @@ impl Network {
     }
 }
 
+/// Read one message from the network process, which parses websites'
+/// responses and so is not fully trusted either.
+fn read_event(reader: &mut impl std::io::Read) -> io::Result<NetEvent> {
+    read_frame::<NetEvent>(reader, MAX_EVENT_BYTES)
+}
+
+/// Read a network process message and report only whether it was accepted.
+#[doc(hidden)]
+pub fn check_event(bytes: &[u8]) -> Result<(), String> {
+    read_event(&mut &bytes[..])
+        .map(drop)
+        .map_err(|error| error.to_string())
+}
+
+/// Encoded network process messages, as starting points for fuzzing.
+#[doc(hidden)]
+pub fn sample_events() -> Vec<Vec<u8>> {
+    let location = Location::from_input("https://example.com/page").unwrap();
+    let events = [
+        NetEvent::Fetched {
+            id: 1,
+            result: Ok(Response {
+                location: location.clone(),
+                bytes: b"<p>Hello</p>".to_vec(),
+                status: Some(200),
+                plain_text: false,
+                cookie_updates: vec![CookieUpdate::from_script(location, "a=1".into())],
+            }),
+        },
+        NetEvent::Fetched {
+            id: 2,
+            result: Err("Could not load the website".into()),
+        },
+        NetEvent::Chunk {
+            id: 3,
+            bytes: vec![0, 1, 2, 255],
+            total: Some(4),
+        },
+        NetEvent::Downloaded {
+            id: 3,
+            result: Ok(4),
+        },
+    ];
+    events
+        .iter()
+        .map(|event| {
+            let mut frame = Vec::new();
+            write_frame(&mut frame, event, MAX_EVENT_BYTES).unwrap();
+            frame
+        })
+        .collect()
+}
+
 /// Start a network process from `executable` in its sandbox.
 fn connect(executable: &Path) -> Result<Arc<Connection>, String> {
     let mut child = worker::start_process(executable, Role::Network)?;
@@ -359,7 +412,7 @@ fn connect(executable: &Path) -> Result<Arc<Connection>, String> {
     std::thread::Builder::new()
         .name("olive-network-output".into())
         .spawn(move || {
-            while let Ok(event) = read_frame::<NetEvent>(&mut output, MAX_EVENT_BYTES) {
+            while let Ok(event) = read_event(&mut output) {
                 let Some(connection) = reader.upgrade() else {
                     return;
                 };
