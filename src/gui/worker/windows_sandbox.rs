@@ -2,10 +2,13 @@
 //!
 //! The small Win32 boundary is kept in this module. The parent starts this
 //! executable as a broker; this function starts a second copy with a
-//! low-integrity token, preserving the inherited worker pipes.
+//! low-integrity token, preserving the inherited worker pipes. The copy runs
+//! in a job that allows one process, limits its memory and keeps it from the
+//! clipboard, desktop and other processes' windows, and it starts with
+//! process mitigation policies and no permission to create processes.
 
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, c_void},
     io,
     mem::size_of,
     os::windows::ffi::OsStrExt,
@@ -28,17 +31,40 @@ use windows_sys::Win32::{
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
         JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_UILIMIT_DESKTOP,
+            JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+            JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+            JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
+            JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
         },
         Threading::{
-            CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess,
-            GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
-            STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessAsUserW,
+            DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+            GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
+            LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken,
+            PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, PROCESS_INFORMATION, ResumeThread,
+            STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
+            UpdateProcThreadAttribute, WaitForSingleObject,
         },
     },
 };
+
+/// The most memory a tab process may commit. Its counted heap stops at 1 GiB;
+/// this also covers stacks, libraries and memory that system code allocates.
+const MAX_COMMITTED_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+// PROCESS_CREATION_MITIGATION_POLICY_*_ALWAYS_ON flags from winbase.h, which
+// windows-sys does not export: strict handle checks (bit 24), no legacy
+// extension points such as AppInit DLLs (32), no non-system fonts (48), and
+// no images from remote shares (52) or with a low integrity label (56).
+const MITIGATION_POLICY: u64 = (1 << 24) | (1 << 32) | (1 << 48) | (1 << 52) | (1 << 56);
+// PROCESS_CREATION_CHILD_PROCESS_RESTRICTED, from WindowsProgramming.
+const CHILD_PROCESS_RESTRICTED: u32 = 0x01;
 
 pub(super) fn launch_worker() -> Result<u32, String> {
     validate_launcher_arguments()?;
@@ -70,27 +96,35 @@ fn launch_restricted_worker() -> io::Result<u32> {
     // The inherited standard handles are the private protocol pipes created by
     // Worker::spawn_at. Keep them on the child so the broker can wait
     // for its lifetime while the parent communicates directly with the worker.
-    let mut startup = STARTUPINFOW::default();
-    startup.cb = size_of::<STARTUPINFOW>() as u32;
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = std_handle(STD_INPUT_HANDLE)?;
-    startup.hStdOutput = std_handle(STD_OUTPUT_HANDLE)?;
-    startup.hStdError = std_handle(STD_ERROR_HANDLE)?;
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = std_handle(STD_INPUT_HANDLE)?;
+    startup.StartupInfo.hStdOutput = std_handle(STD_OUTPUT_HANDLE)?;
+    startup.StartupInfo.hStdError = std_handle(STD_ERROR_HANDLE)?;
+    let protocol = [
+        startup.StartupInfo.hStdInput,
+        startup.StartupInfo.hStdOutput,
+        startup.StartupInfo.hStdError,
+    ];
     let process_token = open_current_process_token()?;
     // std::process may provide non-inheritable duplicates for this broker's
     // pipes. The nested worker needs these three protocol handles explicitly
-    // marked inheritable while CreateProcessAsUserW starts it.
-    let inherited_handles =
-        InheritableHandles::new([startup.hStdInput, startup.hStdOutput, startup.hStdError])?;
+    // marked inheritable while CreateProcessAsUserW starts it, and inherits
+    // only them.
+    let inherited_handles = InheritableHandles::new(protocol)?;
+    let mut attributes = ProcessAttributes::new(&protocol)?;
+    startup.lpAttributeList = attributes.list();
 
     let restricted_token = create_low_integrity_token(process_token.0)?;
-    let job = create_kill_on_close_job()?;
+    let job = create_worker_job()?;
 
     let mut process_info = PROCESS_INFORMATION::default();
     // SAFETY: all pointers refer to live NUL-terminated buffers or initialized
     // Win32 structures for the duration of the call. The token is a primary
-    // token derived from this process; only the three protocol stdio handles
-    // are marked for inheritance by the parent Rust process.
+    // token derived from this process; the attribute list limits inheritance
+    // to the three protocol stdio handles. STARTUPINFOEXW begins with the
+    // STARTUPINFOW that the call reads, and its size marks it as extended.
     let created = unsafe {
         CreateProcessAsUserW(
             restricted_token.0,
@@ -99,14 +133,15 @@ fn launch_restricted_worker() -> io::Result<u32> {
             null(),
             null(),
             1,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
             null(),
             current_directory_wide.as_ptr(),
-            &startup,
+            (&raw const startup).cast::<STARTUPINFOW>(),
             &mut process_info,
         )
     };
     let create_error = (created == 0).then(|| last_os_error("CreateProcessAsUserW"));
+    drop(attributes);
     drop(inherited_handles);
     if let Some(error) = create_error {
         return Err(error);
@@ -114,8 +149,8 @@ fn launch_restricted_worker() -> io::Result<u32> {
     let process = OwnedHandle::new(process_info.hProcess, "worker process")?;
     let thread = OwnedHandle::new(process_info.hThread, "worker thread")?;
 
-    // Assign before resuming so the worker and any descendants are always
-    // covered by the broker's kill-on-close job.
+    // Assign before resuming so the worker is always covered by the broker's
+    // kill-on-close job.
     // SAFETY: both handles are valid handles returned by successful Win32
     // calls, and the job is configured before the process is resumed.
     if unsafe { AssignProcessToJobObject(job.0, process.0) } == 0 {
@@ -226,12 +261,18 @@ fn set_low_integrity_level(token: HANDLE) -> io::Result<()> {
     Ok(())
 }
 
-fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
+fn create_worker_job() -> io::Result<OwnedHandle> {
     // SAFETY: null security attributes create a non-inheritable unnamed job.
     let raw_job = unsafe { CreateJobObjectW(null(), null()) };
     let job = OwnedHandle::new(raw_job, "worker job")?;
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // The worker is the job's one process; it stops with the broker.
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        | JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+    limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    limits.ProcessMemoryLimit = MAX_COMMITTED_BYTES;
     // SAFETY: limits has the exact structure size required for this information
     // class and remains alive throughout the call.
     if unsafe {
@@ -245,7 +286,121 @@ fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
     {
         return Err(last_os_error("SetInformationJobObject"));
     }
+    let restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: JOB_OBJECT_UILIMIT_DESKTOP
+            | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+            | JOB_OBJECT_UILIMIT_EXITWINDOWS
+            | JOB_OBJECT_UILIMIT_GLOBALATOMS
+            | JOB_OBJECT_UILIMIT_HANDLES
+            | JOB_OBJECT_UILIMIT_READCLIPBOARD
+            | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+            | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    };
+    // SAFETY: restrictions has the exact structure size required for this
+    // information class and remains alive throughout the call.
+    if unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectBasicUIRestrictions,
+            (&raw const restrictions).cast(),
+            size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+        )
+    } == 0
+    {
+        return Err(last_os_error("SetInformationJobObject(UI restrictions)"));
+    }
     Ok(job)
+}
+
+/// The worker's process attributes: the handles it inherits, its mitigation
+/// policies and its child process policy. Process creation reads the values
+/// through the list, so they stay in place until this is dropped.
+struct ProcessAttributes {
+    /// Pointer-aligned storage for the opaque attribute list.
+    buffer: Vec<usize>,
+    initialized: bool,
+    handles: Vec<HANDLE>,
+    mitigation: u64,
+    child_process: u32,
+}
+
+impl ProcessAttributes {
+    fn new(handles: &[HANDLE]) -> io::Result<Box<Self>> {
+        let mut handles = handles.to_vec();
+        // The same handle may serve more than one stdio stream; the list
+        // names each once.
+        handles.sort_unstable();
+        handles.dedup();
+        let mut size = 0;
+        // SAFETY: a null list asks only for the size of a three-attribute list.
+        unsafe { InitializeProcThreadAttributeList(null_mut(), 3, 0, &mut size) };
+        if size == 0 {
+            return Err(last_os_error("InitializeProcThreadAttributeList"));
+        }
+        let mut attributes = Box::new(Self {
+            buffer: vec![0; size.div_ceil(size_of::<usize>())],
+            initialized: false,
+            handles,
+            mitigation: MITIGATION_POLICY,
+            child_process: CHILD_PROCESS_RESTRICTED,
+        });
+        let list = attributes.list();
+        // SAFETY: the buffer holds at least `size` pointer-aligned bytes.
+        if unsafe { InitializeProcThreadAttributeList(list, 3, 0, &mut size) } == 0 {
+            return Err(last_os_error("InitializeProcThreadAttributeList"));
+        }
+        attributes.initialized = true;
+        let values: [(u32, *const c_void, usize); 3] = [
+            (
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                attributes.handles.as_ptr().cast(),
+                attributes.handles.len() * size_of::<HANDLE>(),
+            ),
+            (
+                PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+                (&raw const attributes.mitigation).cast(),
+                size_of::<u64>(),
+            ),
+            (
+                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+                (&raw const attributes.child_process).cast(),
+                size_of::<u32>(),
+            ),
+        ];
+        for (attribute, value, value_size) in values {
+            // SAFETY: the list is initialized for three attributes; each value
+            // points to `value_size` bytes owned by the boxed attributes, which
+            // neither move nor drop before process creation reads them.
+            if unsafe {
+                UpdateProcThreadAttribute(
+                    list,
+                    0,
+                    attribute as usize,
+                    value,
+                    value_size,
+                    null_mut(),
+                    null(),
+                )
+            } == 0
+            {
+                return Err(last_os_error("UpdateProcThreadAttribute"));
+            }
+        }
+        Ok(attributes)
+    }
+
+    fn list(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.buffer.as_mut_ptr().cast()
+    }
+}
+
+impl Drop for ProcessAttributes {
+    fn drop(&mut self) {
+        if self.initialized {
+            // SAFETY: the list was initialized by this value and is deleted once.
+            unsafe { DeleteProcThreadAttributeList(self.list()) };
+        }
+    }
 }
 
 fn std_handle(which: u32) -> io::Result<HANDLE> {
