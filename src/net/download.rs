@@ -17,6 +17,9 @@ impl DocumentLoader {
             check_resource_target(initiator, &location)?;
         }
         progress(0, None)?;
+        if let Transport::Remote(_) = self.transport {
+            return Err("This process loads only page resources.".into());
+        }
         if let Some(path) = location.file_path() {
             if !path.metadata().map_err(|e| e.to_string())?.is_file() {
                 return Err("Choose a regular file to download.".into());
@@ -28,6 +31,7 @@ impl DocumentLoader {
             }
             return transfer(file, destination, Some(metadata.len()), progress);
         }
+        let client = self.client()?;
         let initial = location.clone();
         let mut same_site = self
             .cookie_initiator
@@ -40,8 +44,7 @@ impl DocumentLoader {
             if remaining.is_zero() {
                 return Err("Download timed out.".into());
             }
-            let mut request = self
-                .client
+            let mut request = client
                 .get(location.url().clone())
                 .timeout(remaining)
                 .header(header::ACCEPT, "*/*");

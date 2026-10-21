@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.12.0 — A separate network process
+
+- Make every HTTP(S) request in a sandboxed network process, a child of the
+  browser started on first use and restarted if it stops: documents, form
+  submissions, page resources, site icons and downloads. The browser no longer
+  parses responses from websites, and tabs share one connection pool, so
+  repeat visits load faster (0.4–1.0 s instead of 1.2–2.6 s on ynet, Walla,
+  BBC News and Wikipedia).
+- Take network and file access away from tab processes. They ask the browser
+  for each resource; the browser checks the request against its own record of
+  the document and has the network process fetch it, or reads a local
+  document's local file itself. On macOS and Linux a tab process can now
+  neither read files nor open connections, so a compromised one cannot read
+  the user's files or send them anywhere.
+- Keep HttpOnly cookies out of tab processes. A tab receives only the cookies
+  its page's scripts may read, and every cookie change it reports counts as a
+  script's. The browser keeps the jar and hands the network process only the
+  cookies each request needs.
+- Sandbox the network process: on macOS and Linux it reaches websites, DNS and
+  root certificates but cannot read the user's files, write files, start
+  programs, or reach local sockets. On Windows it runs in the same restricted
+  job as tabs. Its heap is limited to 2 GiB.
+- On Windows, a low-integrity token cannot deny file reads or connections, so
+  tab and network processes keep both at the OS level; that needs an
+  AppContainer.
+- Library: `DocumentLoader::with_client` shares an `HttpClient`,
+  `DocumentLoader::local` reads files without network access, and
+  `DocumentLoader::remote` loads resources through a `RemoteFetch` callback.
+  `CookieJar::for_script` copies the cookies scripts may read. The GUI's
+  `worker::Services` holds the cookie jar and `network::Network`; `Request` no
+  longer carries cookies and `Worker::spawn_at` takes the services.
+
 ## 1.11.0 — Tighter tab sandboxes
 
 - macOS: tab processes now run under a Seatbelt profile that denies everything

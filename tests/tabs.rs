@@ -4,6 +4,7 @@
 use eframe::egui;
 use olive_html::gui::{
     document::{self, ClickRequest, LoadedPage},
+    network::Network,
     worker,
 };
 use olive_html::{
@@ -15,30 +16,38 @@ use std::{
     process::{Child, Command as ProcessCommand, Stdio},
     time::{Duration, Instant},
 };
-use worker::{Command, Event, Request, ScriptPolicy, Target, Worker};
+use worker::{Command, Event, Request, ScriptPolicy, Services, Target, Worker};
 
 const HTML: &str = "<!doctype html><title>Before</title><script>let count=1; document.title='Loaded '+count; function increment(){count++; document.title='Clicked '+count; alert(count)}</script><button id=increment onclick='increment(); return false'>Increment</button><p>A readable article.</p>";
 
-fn request(target: Target, scripting: ScriptPolicy, cookies: CookieJar) -> Request {
+fn request(target: Target, scripting: ScriptPolicy) -> Request {
     Request {
         target,
         scripting,
-        cookies,
         initiator: None,
         viewport: None,
     }
 }
-fn spawn(path: &Path) -> Worker {
+fn services() -> Services {
+    Services::new(Network::new(env!("CARGO_BIN_EXE_olive-gui")))
+}
+fn spawn_with(services: &Services, request: Request) -> Worker {
     Worker::spawn_at(
         Path::new(env!("CARGO_BIN_EXE_olive-gui")),
-        request(
-            Target::Load(Location::from_path(path).unwrap()),
-            ScriptPolicy::Page,
-            CookieJar::default(),
-        ),
+        request,
+        services,
         &egui::Context::default(),
     )
     .unwrap()
+}
+fn spawn(path: &Path) -> Worker {
+    spawn_with(
+        &services(),
+        request(
+            Target::Load(Location::from_path(path).unwrap()),
+            ScriptPolicy::Page,
+        ),
+    )
 }
 fn reply(worker: &mut Worker) -> Result<Event, String> {
     let until = Instant::now() + Duration::from_secs(20);
@@ -247,11 +256,8 @@ impl Drop for ChildGuard {
     }
 }
 #[test]
-fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_resource() {
+fn parent_pipe_closure_terminates_even_a_worker_waiting_for_a_resource() {
     use olive_html::net::LoadedDocument;
-    use std::net::TcpListener;
-    let server = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}/", server.local_addr().unwrap());
     let mut child = ChildGuard(
         ProcessCommand::new(env!("CARGO_BIN_EXE_olive-gui"))
             .arg(worker::WORKER_ARG)
@@ -262,11 +268,12 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_resource() {
             .unwrap(),
     );
     let mut input = child.0.stdin.take().unwrap();
+    let mut output = child.0.stdout.take().unwrap();
     worker::write_frame(
         &mut input,
         &Command::Render {
             document: LoadedDocument {
-                location: Location::from_input(&address).unwrap(),
+                location: Location::from_input("https://example.com/").unwrap(),
                 bytes: b"<link rel=stylesheet href=/stalled.css><p>Waiting</p>".to_vec(),
                 status: Some(200),
                 plain_text: false,
@@ -278,16 +285,26 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_resource() {
         32768,
     )
     .unwrap();
-    // Wait until the child really is blocked on a response, rather than only testing idle EOF.
-    server.set_nonblocking(true).unwrap();
-    let until = Instant::now() + Duration::from_secs(10);
-    let connection = loop {
-        if let Ok((connection, _)) = server.accept() {
-            break connection;
+    // Wait until the worker really is waiting for the browser's answer to its
+    // resource request, rather than only testing idle EOF.
+    let (requested, requests) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = worker::read_frame::<Event>(&mut output, 128 * 1024 * 1024) {
+            if let Event::Fetch { request, .. } = event {
+                let _ = requested.send(request.location.as_str().to_owned());
+            }
         }
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    });
+    // The stylesheet and the site icon are requested together.
+    let requested = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        [
+            "https://example.com/stalled.css",
+            "https://example.com/favicon.ico"
+        ]
+        .contains(&requested.as_str()),
+        "{requested}"
+    );
     drop(input);
     let until = Instant::now() + Duration::from_secs(5);
     while child.0.try_wait().unwrap().is_none() {
@@ -297,7 +314,6 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_resource() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    drop(connection);
 }
 
 #[test]
@@ -403,12 +419,7 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
             } else {
                 Target::Load(start)
             };
-            let mut worker = Worker::spawn_at(
-                Path::new(env!("CARGO_BIN_EXE_olive-gui")),
-                request(target, policy, CookieJar::default()),
-                &egui::Context::default(),
-            )
-            .unwrap();
+            let mut worker = spawn_with(&services(), request(target, policy));
             let page = match reply(&mut worker).unwrap() {
                 Event::Loaded(page) => page,
                 _ => panic!("expected redirected page"),
@@ -487,24 +498,18 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
         .submit(page.page.forms.controls[1].node, &page.location, &page.base)
         .unwrap();
     let body = request.body.clone().unwrap();
-    let executable = Path::new(env!("CARGO_BIN_EXE_olive-gui"));
-    let ctx = egui::Context::default();
-    let mut cookies = CookieJar::default();
-    cookies.set_document_cookie(&request.location, "session=one; Path=/");
+    let services = services();
+    services
+        .jar()
+        .set_document_cookie(&request.location, "session=one; Path=/");
     let initiator = Some(request.location.clone());
-    let mut submitted = Worker::spawn_at(
-        executable,
+    let mut submitted = spawn_with(
+        &services,
         Request {
             initiator,
-            ..self::request(
-                Target::Submit(request),
-                ScriptPolicy::Disabled,
-                cookies.clone(),
-            )
+            ..self::request(Target::Submit(request), ScriptPolicy::Disabled)
         },
-        &ctx,
-    )
-    .unwrap();
+    );
     assert_ne!(original.pid(), submitted.pid());
     let loaded = match reply(&mut submitted).unwrap() {
         Event::Loaded(page) => page,
@@ -512,28 +517,21 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     };
     assert_eq!(loaded.page.title, "Submitted");
     assert!(!loaded.scripting_enabled);
-    cookies.apply_updates(&loaded.cookie_updates);
+    // The browser keeps the response's HttpOnly cookie from scripts.
+    let mut jar = services.jar().clone();
     assert!(
-        cookies
-            .cookie_header(&loaded.location)
+        jar.cookie_header(&loaded.location)
             .unwrap()
             .contains("response=two")
     );
     assert!(
-        !cookies
-            .document_cookie(&loaded.location)
+        !jar.document_cookie(&loaded.location)
             .contains("response=two")
     );
-    let mut reloaded = Worker::spawn_at(
-        executable,
-        self::request(
-            Target::Load(loaded.location),
-            ScriptPolicy::Disabled,
-            cookies,
-        ),
-        &ctx,
-    )
-    .unwrap();
+    let mut reloaded = spawn_with(
+        &services,
+        self::request(Target::Load(loaded.location), ScriptPolicy::Disabled),
+    );
     assert!(matches!(reply(&mut reloaded).unwrap(), Event::Loaded(_)));
     let requests = server.join().unwrap();
     assert_eq!(
@@ -603,4 +601,66 @@ fn tab_processes_do_not_inherit_the_browsers_environment() {
         let name = String::from_utf8_lossy(entry.split(|&byte| byte == b'=').next().unwrap());
         assert!(!name.starts_with("CARGO"), "{name} reached the tab process");
     }
+}
+
+#[test]
+fn the_browser_fetches_documents_and_scripts_see_only_their_sites_readable_cookies() {
+    use olive_html::net::CookieUpdate;
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let start = format!("http://{}/start", listener.local_addr().unwrap());
+    let start = Location::from_input(&start).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut document_headers = String::new();
+        // The document, then the site icon that the page's tab asks for.
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut headers = String::new();
+            while !headers.ends_with("\r\n\r\n") {
+                reader.read_line(&mut headers).unwrap();
+            }
+            if headers.starts_with("GET /favicon.ico ") {
+                reader
+                    .get_mut()
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                    )
+                    .unwrap();
+                continue;
+            }
+            let body = "<title>Before</title><script>document.title = document.cookie</script>";
+            write!(
+                reader.get_mut(),
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nSet-Cookie: fresh=2; Path=/\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            document_headers = headers.to_ascii_lowercase();
+        }
+        document_headers
+    });
+    let services = services();
+    let other = Location::from_input("http://localhost:9/").unwrap();
+    let mut session = CookieUpdate::from_script(start.clone(), "secret=1; HttpOnly; Path=/".into());
+    session.from_script = false;
+    services.jar().apply_updates(&[
+        CookieUpdate::from_script(start.clone(), "own=1; Path=/".into()),
+        CookieUpdate::from_script(other, "other=1".into()),
+        session,
+    ]);
+    let mut worker = spawn_with(
+        &services,
+        request(Target::Load(start.clone()), ScriptPolicy::Page),
+    );
+    let Event::Loaded(page) = reply(&mut worker).unwrap() else {
+        panic!("expected the page");
+    };
+    // The network process sent the site's cookies, HttpOnly included...
+    let headers = server.join().unwrap();
+    assert!(headers.contains("cookie: own=1; secret=1"), "{headers}");
+    // ...while the page's scripts see only what they may read, including
+    // the cookie the response just set.
+    assert_eq!(page.page.title, "own=1; fresh=2");
+    assert_eq!(page.location, start);
 }

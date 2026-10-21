@@ -1,14 +1,23 @@
-//! Linux Landlock and seccomp setup for the tab worker.
+//! Linux Landlock and seccomp setup for tab and network processes.
 //!
-//! This code runs at the start of worker mode, before any Rust threads are
+//! This code runs at the start of each process, before any Rust threads are
 //! created. Landlock blocks filesystem writes and, where the kernel supports
 //! them, TCP listening, device ioctls, abstract Unix sockets and signals to
-//! processes outside the sandbox. A seccomp filter blocks starting programs
-//! and processes, debugging or signalling other processes, namespaces, Unix
-//! socket connections, terminal input injection and rarely needed kernel
-//! interfaces. Reads and outbound network connections remain available.
+//! processes outside the sandbox. Tab processes read no files and open no
+//! sockets; the network process reads only system directories, for name
+//! resolution, and opens no Unix sockets. A seccomp filter blocks starting
+//! programs and processes, debugging or signalling other processes,
+//! namespaces, terminal input injection and rarely needed kernel interfaces.
 
-use std::{io, mem::size_of, ptr::null};
+use super::Role;
+use std::{
+    fs::File,
+    io,
+    mem::size_of,
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    path::{Path, PathBuf},
+    ptr::null,
+};
 
 const LANDLOCK_CREATE_RULESET_VERSION: libc::c_long = 1;
 const LANDLOCK_RESTRICT_SELF_TSYNC: libc::c_long = 1;
@@ -28,8 +37,23 @@ const WRITE_RIGHTS_ABI_V3: u64 = (1 << 1) // WRITE_FILE
     | (1 << 12) // MAKE_SYM
     | (1 << 13) // REFER
     | (1 << 14); // TRUNCATE
+const READ_FILE: u64 = 1 << 2;
+const READ_DIR: u64 = 1 << 3;
 const IOCTL_DEV_ABI_V5: u64 = 1 << 15;
 const BIND_TCP_ABI_V4: u64 = 1 << 0;
+const CONNECT_TCP_ABI_V4: u64 = 1 << 1;
+const RULE_PATH_BENEATH: libc::c_long = 1;
+/// Where the network process may read: system configuration and libraries
+/// for name resolution. Certificates load before the restriction.
+const NETWORK_READABLE: &[&str] = &[
+    "/etc",
+    "/usr",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/run/systemd/resolve",
+    "/run/resolvconf",
+];
 const SCOPE_ABSTRACT_UNIX_SOCKET_ABI_V6: u64 = 1 << 0;
 const SCOPE_SIGNAL_ABI_V6: u64 = 1 << 1;
 
@@ -40,14 +64,20 @@ struct RulesetAttr {
     scoped: u64,
 }
 
-/// Restrict the calling process, failing closed if Landlock ABI v3 or the
-/// seccomp filter is unavailable.
-pub(super) fn restrict() -> Result<(), String> {
-    restrict_with_landlock()?;
-    restrict_system_calls()
+#[repr(C, packed)]
+struct PathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: i32,
 }
 
-fn restrict_with_landlock() -> Result<(), String> {
+/// Restrict the calling process for `role`, failing closed if Landlock ABI
+/// v3 or the seccomp filter is unavailable.
+pub(super) fn restrict(role: Role) -> Result<(), String> {
+    restrict_with_landlock(role)?;
+    restrict_system_calls(role)
+}
+
+fn restrict_with_landlock(role: Role) -> Result<(), String> {
     // Query the kernel ABI first. The VERSION flag ignores the attribute
     // pointer and returns the supported ABI number.
     // SAFETY: the VERSION query accepts a null attribute pointer and zero size.
@@ -71,8 +101,15 @@ fn restrict_with_landlock() -> Result<(), String> {
     // Newer kernels handle more rights; with no rules granting them, handling
     // a right denies it.
     let attributes = RulesetAttr {
-        handled_access_fs: WRITE_RIGHTS_ABI_V3 | if abi >= 5 { IOCTL_DEV_ABI_V5 } else { 0 },
-        handled_access_net: if abi >= 4 { BIND_TCP_ABI_V4 } else { 0 },
+        handled_access_fs: WRITE_RIGHTS_ABI_V3
+            | READ_FILE
+            | READ_DIR
+            | if abi >= 5 { IOCTL_DEV_ABI_V5 } else { 0 },
+        handled_access_net: match (abi >= 4, role) {
+            (false, _) => 0,
+            (true, Role::Tab) => BIND_TCP_ABI_V4 | CONNECT_TCP_ABI_V4,
+            (true, Role::Network) => BIND_TCP_ABI_V4,
+        },
         scoped: if abi >= 6 {
             SCOPE_ABSTRACT_UNIX_SOCKET_ABI_V6 | SCOPE_SIGNAL_ABI_V6
         } else {
@@ -107,6 +144,11 @@ fn restrict_with_landlock() -> Result<(), String> {
         return Err("Landlock returned an invalid ruleset descriptor".into());
     }
     let ruleset = RulesetFd(raw_fd as libc::c_int);
+    if role == Role::Network {
+        for path in network_readable() {
+            allow_reading(&ruleset, &path)?;
+        }
+    }
 
     // Landlock and seccomp require no_new_privs for unprivileged restriction.
     // SAFETY: prctl receives the documented scalar arguments and no pointers.
@@ -132,6 +174,57 @@ fn restrict_with_landlock() -> Result<(), String> {
     };
     if restricted != 0 {
         return Err(last_os_error("Landlock restriction"));
+    }
+    Ok(())
+}
+
+/// The network process's readable directories and configured certificate
+/// paths that exist.
+fn network_readable() -> Vec<PathBuf> {
+    let configured = ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from);
+    NETWORK_READABLE
+        .iter()
+        .map(PathBuf::from)
+        .chain(configured)
+        .filter(|path| path.exists())
+        .collect()
+}
+
+/// Let the process read `path` and, for a directory, everything beneath it.
+fn allow_reading(ruleset: &RulesetFd, path: &Path) -> Result<(), String> {
+    let opened = File::options()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| format!("Landlock rule for {}: {error}", path.display()))?;
+    let directory = opened.metadata().is_ok_and(|metadata| metadata.is_dir());
+    let rule = PathBeneathAttr {
+        allowed_access: if directory {
+            READ_FILE | READ_DIR
+        } else {
+            READ_FILE
+        },
+        parent_fd: opened.as_raw_fd(),
+    };
+    // SAFETY: the ruleset descriptor is live; rule points to a live, packed
+    // path-beneath structure whose descriptor stays open for the call.
+    let added = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset.0 as libc::c_long,
+            RULE_PATH_BENEATH,
+            &rule as *const PathBeneathAttr,
+            0 as libc::c_long,
+        )
+    };
+    if added != 0 {
+        return Err(last_os_error(&format!(
+            "Landlock rule for {}",
+            path.display()
+        )));
     }
     Ok(())
 }
@@ -238,10 +331,10 @@ fn give(action: u32) -> libc::sock_filter {
     }
 }
 
-/// The filter for process `pid`. Each check either returns or leaves the
-/// system call number loaded for the next.
+/// The filter for process `pid` in `role`. Each check either returns or
+/// leaves the system call number loaded for the next.
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-fn filter(pid: u32) -> Vec<libc::sock_filter> {
+fn filter(pid: u32, role: Role) -> Vec<libc::sock_filter> {
     let allow = libc::SECCOMP_RET_ALLOW;
     let deny = libc::SECCOMP_RET_ERRNO | libc::EPERM as u32;
     let mut program = vec![
@@ -280,15 +373,24 @@ fn filter(pid: u32) -> Vec<libc::sock_filter> {
             give(deny),
         ]);
     }
-    // No Unix sockets, which reach agents and session services such as
-    // D-Bus, SSH and Docker.
-    program.extend([
-        jump(libc::BPF_JEQ, libc::SYS_socket as u32, 0, 4),
-        load(argument(0)),
-        jump(libc::BPF_JEQ, libc::AF_UNIX as u32, 0, 1),
-        give(deny),
-        give(allow),
-    ]);
+    match role {
+        // Tab processes ask the browser for everything they load.
+        Role::Tab => {
+            program.extend([
+                jump(libc::BPF_JEQ, libc::SYS_socket as u32, 0, 1),
+                give(deny),
+            ]);
+        }
+        // No Unix sockets, which reach agents and session services such as
+        // D-Bus, SSH and Docker.
+        Role::Network => program.extend([
+            jump(libc::BPF_JEQ, libc::SYS_socket as u32, 0, 4),
+            load(argument(0)),
+            jump(libc::BPF_JEQ, libc::AF_UNIX as u32, 0, 1),
+            give(deny),
+            give(allow),
+        ]),
+    }
     // No typing into a terminal or console.
     program.extend([
         jump(libc::BPF_JEQ, libc::SYS_ioctl as u32, 0, 5),
@@ -303,8 +405,8 @@ fn filter(pid: u32) -> Vec<libc::sock_filter> {
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-fn restrict_system_calls() -> Result<(), String> {
-    let mut program = filter(std::process::id());
+fn restrict_system_calls(role: Role) -> Result<(), String> {
+    let mut program = filter(std::process::id(), role);
     let program = libc::sock_fprog {
         len: program.len() as libc::c_ushort,
         filter: program.as_mut_ptr(),
@@ -327,7 +429,7 @@ fn restrict_system_calls() -> Result<(), String> {
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-fn restrict_system_calls() -> Result<(), String> {
+fn restrict_system_calls(_role: Role) -> Result<(), String> {
     Err("the tab system call filter supports x86_64 and aarch64".into())
 }
 
@@ -350,8 +452,8 @@ mod tests {
     use super::*;
 
     /// Run the classic BPF subset the filter uses over one system call.
-    fn verdict(arch: u32, number: libc::c_long, arguments: [u64; 6]) -> u32 {
-        let program = filter(1234);
+    fn verdict(role: Role, arch: u32, number: libc::c_long, arguments: [u64; 6]) -> u32 {
+        let program = filter(1234, role);
         let mut data = [0_u8; 64];
         data[0..4].copy_from_slice(&(number as u32).to_le_bytes());
         data[4..8].copy_from_slice(&arch.to_le_bytes());
@@ -388,7 +490,7 @@ mod tests {
     }
 
     fn call(number: libc::c_long, arguments: [u64; 6]) -> u32 {
-        verdict(AUDIT_ARCH, number, arguments)
+        verdict(Role::Network, AUDIT_ARCH, number, arguments)
     }
 
     #[test]
@@ -397,7 +499,7 @@ mod tests {
         let deny = libc::SECCOMP_RET_ERRNO | libc::EPERM as u32;
         let thread = (libc::CLONE_VM | libc::CLONE_THREAD | libc::CLONE_SIGHAND) as u64;
         assert_eq!(
-            verdict(0x4000_0003, libc::SYS_read, [0; 6]),
+            verdict(Role::Network, 0x4000_0003, libc::SYS_read, [0; 6]),
             libc::SECCOMP_RET_KILL_PROCESS
         );
         assert_eq!(call(libc::SYS_read, [0; 6]), allow);
@@ -423,6 +525,11 @@ mod tests {
         assert_eq!(call(libc::SYS_socket, [inet, 1, 0, 0, 0, 0]), allow);
         let unix = libc::AF_UNIX as u64;
         assert_eq!(call(libc::SYS_socket, [unix, 1, 0, 0, 0, 0]), deny);
+        // Tab processes open no sockets at all.
+        let tab = |number, arguments| verdict(Role::Tab, AUDIT_ARCH, number, arguments);
+        assert_eq!(tab(libc::SYS_socket, [inet, 1, 0, 0, 0, 0]), deny);
+        assert_eq!(tab(libc::SYS_read, [0; 6]), allow);
+        assert_eq!(tab(libc::SYS_execve, [0; 6]), deny);
         // Ioctl request numbers are already 64-bit on these architectures.
         let inject = libc::TIOCSTI;
         assert_eq!(call(libc::SYS_ioctl, [0, inject, 0, 0, 0, 0]), deny);
