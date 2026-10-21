@@ -352,7 +352,7 @@ mod tests {
     /// Run the classic BPF subset the filter uses over one system call.
     fn verdict(arch: u32, number: libc::c_long, arguments: [u64; 6]) -> u32 {
         let program = filter(1234);
-        let mut data = vec![0_u8; 64];
+        let mut data = [0_u8; 64];
         data[0..4].copy_from_slice(&(number as u32).to_le_bytes());
         data[4..8].copy_from_slice(&arch.to_le_bytes());
         for (index, value) in arguments.iter().enumerate() {
@@ -423,11 +423,12 @@ mod tests {
         assert_eq!(call(libc::SYS_socket, [inet, 1, 0, 0, 0, 0]), allow);
         let unix = libc::AF_UNIX as u64;
         assert_eq!(call(libc::SYS_socket, [unix, 1, 0, 0, 0, 0]), deny);
-        let inject = libc::TIOCSTI as u64;
+        // Ioctl request numbers are already 64-bit on these architectures.
+        let inject = libc::TIOCSTI;
         assert_eq!(call(libc::SYS_ioctl, [0, inject, 0, 0, 0, 0]), deny);
-        let console = libc::TIOCLINUX as u64;
+        let console = libc::TIOCLINUX;
         assert_eq!(call(libc::SYS_ioctl, [0, console, 0, 0, 0, 0]), deny);
-        let readable = libc::FIONREAD as u64;
+        let readable = libc::FIONREAD;
         assert_eq!(call(libc::SYS_ioctl, [0, readable, 0, 0, 0, 0]), allow);
         #[cfg(target_arch = "x86_64")]
         {
