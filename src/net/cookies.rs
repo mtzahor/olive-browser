@@ -88,9 +88,49 @@ impl CookieUpdate {
         }
         updates.push(self);
     }
+
+    /// Keep an update from the tab process rendering `document` only when it
+    /// is for that document's own site, received no earlier than `since` (when
+    /// the process started) and no later than now.
+    pub fn confine(mut self, document: &Location, since: SystemTime) -> Option<Self> {
+        if !same_cookie_site(document, &self.location) {
+            return None;
+        }
+        let now = now_seconds();
+        let since = since
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64)
+            .min(now);
+        self.received_at = self.received_at.clamp(since, now);
+        Some(self)
+    }
 }
 
 impl CookieJar {
+    /// The cookies a tab process rendering `document` may hold: those of the
+    /// document's own site, and on an HTTP page only those without `Secure`.
+    /// Other sites' cookies, and every cookie for a local document, stay in
+    /// the browser.
+    pub fn for_document(&self, document: &Location) -> Self {
+        let url = document.url();
+        let site = match url.scheme() {
+            "http" | "https" => url.host_str().map(cookie_site),
+            _ => None,
+        };
+        let https = url.scheme() == "https";
+        Self {
+            cookies: self
+                .cookies
+                .iter()
+                .filter(|cookie| {
+                    site == Some(cookie_site(&cookie.domain)) && (https || !cookie.secure)
+                })
+                .cloned()
+                .collect(),
+            next_creation: self.next_creation,
+        }
+    }
+
     pub fn cookie_header(&mut self, location: &Location) -> Option<String> {
         self.cookie_header_for(location, true, true, true)
     }
@@ -421,6 +461,15 @@ fn domain_matches(host: &str, domain: &str) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
+/// The registrable domain whose cookies `host` shares, or an IP address itself.
+fn cookie_site(host: &str) -> &str {
+    if host.starts_with('[') || host.parse::<std::net::Ipv4Addr>().is_ok() {
+        host
+    } else {
+        psl::domain_str(host).unwrap_or(host)
+    }
+}
+
 pub(super) fn same_cookie_site(left: &Location, right: &Location) -> bool {
     let (left, right) = (left.url(), right.url());
     match (left.host(), right.host()) {
@@ -609,5 +658,75 @@ mod tests {
             jar.cookie_header(&site).as_deref(),
             Some("strict=1; lax=1; none=1")
         );
+    }
+
+    #[test]
+    fn tab_processes_hold_only_their_own_sites_cookies() {
+        let page = Location::from_input("https://www.example.com/page").unwrap();
+        let sibling = Location::from_input("https://cdn.example.com/").unwrap();
+        let insecure = Location::from_input("http://www.example.com/").unwrap();
+        let other = Location::from_input("https://example.net/").unwrap();
+        let tenant = Location::from_input("https://alice.surge.sh/").unwrap();
+        let loopback = Location::from_input("http://127.0.0.1:8000/").unwrap();
+        let mut jar = CookieJar::default();
+        assert!(jar.absorb(&page, "session=1; Secure; HttpOnly; SameSite=None"));
+        assert!(jar.absorb(&sibling, "wide=2; Domain=example.com"));
+        assert!(jar.absorb(&other, "tracker=3; Secure; SameSite=None"));
+        assert!(jar.absorb(&tenant, "tenant=4"));
+        assert!(jar.absorb(&loopback, "local=5"));
+
+        let names = |jar: &mut CookieJar, location: &Location| {
+            let mut header = jar.cookie_header(location).unwrap_or_default();
+            header.retain(|c| c != ' ');
+            header
+        };
+        let mut scoped = jar.for_document(&page);
+        assert_eq!(names(&mut scoped, &page), "session=1;wide=2");
+        assert_eq!(names(&mut scoped, &sibling), "wide=2");
+        assert_eq!(scoped.cookie_header(&other), None);
+        // HTTP pages never receive the site's Secure cookies.
+        let mut scoped = jar.for_document(&insecure);
+        assert_eq!(names(&mut scoped, &page), "wide=2");
+        let mut scoped = jar.for_document(&other);
+        assert_eq!(scoped.cookie_header(&page), None);
+        assert_eq!(names(&mut scoped, &other), "tracker=3");
+        let mut scoped = jar.for_document(&loopback);
+        assert_eq!(names(&mut scoped, &loopback), "local=5");
+        assert_eq!(
+            jar.for_document(&Location::from_input("https://bob.surge.sh/").unwrap())
+                .cookies
+                .len(),
+            0
+        );
+        let local = Location::from_path(std::env::current_dir().unwrap().join("a.html")).unwrap();
+        assert!(jar.for_document(&local).cookies.is_empty());
+    }
+
+    #[test]
+    fn tab_process_updates_are_confined_to_their_site_and_lifetime() {
+        let page = Location::from_input("https://www.example.com/page").unwrap();
+        let since = SystemTime::now() - std::time::Duration::from_secs(60);
+        let started = now_seconds() - 60;
+        let update = |location: &str, received_at| CookieUpdate {
+            location: Location::from_input(location).unwrap(),
+            set_cookie: "a=1".into(),
+            from_script: false,
+            received_at,
+        };
+        let kept = update("https://cdn.example.com/", started + 1)
+            .confine(&page, since)
+            .unwrap();
+        assert_eq!(kept.received_at, started + 1);
+        for rejected in [
+            "https://example.net/",
+            "http://www.example.com/",
+            "https://example.com.evil/",
+        ] {
+            assert!(update(rejected, started).confine(&page, since).is_none());
+        }
+        let early = update("https://www.example.com/", 0).confine(&page, since);
+        assert!(early.unwrap().received_at >= started);
+        let late = update("https://www.example.com/", i64::MAX).confine(&page, since);
+        assert!(late.unwrap().received_at <= now_seconds());
     }
 }

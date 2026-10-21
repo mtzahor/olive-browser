@@ -15,20 +15,27 @@ use std::{
     process::{Child, Command as ProcessCommand, Stdio},
     time::{Duration, Instant},
 };
-use worker::{Command, Event, ScriptPolicy, Worker};
+use worker::{Command, Event, Request, ScriptPolicy, Target, Worker};
 
 const HTML: &str = "<!doctype html><title>Before</title><script>let count=1; document.title='Loaded '+count; function increment(){count++; document.title='Clicked '+count; alert(count)}</script><button id=increment onclick='increment(); return false'>Increment</button><p>A readable article.</p>";
 
+fn request(target: Target, scripting: ScriptPolicy, cookies: CookieJar) -> Request {
+    Request {
+        target,
+        scripting,
+        cookies,
+        initiator: None,
+        viewport: None,
+    }
+}
 fn spawn(path: &Path) -> Worker {
-    Worker::spawn_command_at(
+    Worker::spawn_at(
         Path::new(env!("CARGO_BIN_EXE_olive-gui")),
-        Command::Load {
-            location: Location::from_path(path).unwrap(),
-            scripting: ScriptPolicy::Page,
-            cookies: CookieJar::default(),
-            initiator: None,
-            viewport: None,
-        },
+        request(
+            Target::Load(Location::from_path(path).unwrap()),
+            ScriptPolicy::Page,
+            CookieJar::default(),
+        ),
         &egui::Context::default(),
     )
     .unwrap()
@@ -62,6 +69,8 @@ fn reply(worker: &mut Worker) -> Result<Event, String> {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
+                // Report a tab's error rather than an unexpected reply.
+                Event::Error(error) => return Err(error),
                 event => return Ok(event),
             }
         }
@@ -80,7 +89,8 @@ fn merge_resources(page: &mut LoadedPage, update: document::PageUpdate) {
     page.base = update.base;
     page.scripts = update.scripts;
     page.resources = update.resources;
-    page.cookie_updates = update.cookie_updates;
+    // The browser applies each event's cookie changes in turn.
+    page.cookie_updates.extend(update.cookie_updates);
 }
 fn target() -> NodeId {
     let doc = olive_html::parse(HTML).unwrap().document;
@@ -237,9 +247,11 @@ impl Drop for ChildGuard {
     }
 }
 #[test]
-fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_document() {
+fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_resource() {
+    use olive_html::net::LoadedDocument;
     use std::net::TcpListener;
     let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}/", server.local_addr().unwrap());
     let mut child = ChildGuard(
         ProcessCommand::new(env!("CARGO_BIN_EXE_olive-gui"))
             .arg(worker::WORKER_ARG)
@@ -252,12 +264,15 @@ fn parent_pipe_closure_terminates_even_a_worker_blocked_loading_a_document() {
     let mut input = child.0.stdin.take().unwrap();
     worker::write_frame(
         &mut input,
-        &Command::Load {
-            location: Location::from_input(&format!("http://{}/", server.local_addr().unwrap()))
-                .unwrap(),
-            scripting: ScriptPolicy::Disabled,
+        &Command::Render {
+            document: LoadedDocument {
+                location: Location::from_input(&address).unwrap(),
+                bytes: b"<link rel=stylesheet href=/stalled.css><p>Waiting</p>".to_vec(),
+                status: Some(200),
+                plain_text: false,
+            },
+            scripting: false,
             cookies: CookieJar::default(),
-            initiator: None,
             viewport: None,
         },
         32768,
@@ -380,29 +395,17 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
                     }
                 }
             });
-            let command = if form {
-                Command::Submit {
-                    request: FormRequest {
-                        location: start,
-                        body: Some(String::new()),
-                    },
-                    scripting: policy,
-                    cookies: CookieJar::default(),
-                    initiator: None,
-                    viewport: None,
-                }
-            } else {
-                Command::Load {
+            let target = if form {
+                Target::Submit(FormRequest {
                     location: start,
-                    scripting: policy,
-                    cookies: CookieJar::default(),
-                    initiator: None,
-                    viewport: None,
-                }
+                    body: Some(String::new()),
+                })
+            } else {
+                Target::Load(start)
             };
-            let mut worker = Worker::spawn_command_at(
+            let mut worker = Worker::spawn_at(
                 Path::new(env!("CARGO_BIN_EXE_olive-gui")),
-                command,
+                request(target, policy, CookieJar::default()),
                 &egui::Context::default(),
             )
             .unwrap();
@@ -425,7 +428,6 @@ fn javascript_opt_in_reaches_page_and_form_redirect_destinations() {
 
 #[test]
 fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
-    use olive_html::net::FormRequest;
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let action = format!("http://{}/submit", listener.local_addr().unwrap());
@@ -490,14 +492,15 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
     let mut cookies = CookieJar::default();
     cookies.set_document_cookie(&request.location, "session=one; Path=/");
     let initiator = Some(request.location.clone());
-    let mut submitted = Worker::spawn_command_at(
+    let mut submitted = Worker::spawn_at(
         executable,
-        Command::Submit {
-            request,
-            scripting: ScriptPolicy::Disabled,
-            cookies: cookies.clone(),
+        Request {
             initiator,
-            viewport: None,
+            ..self::request(
+                Target::Submit(request),
+                ScriptPolicy::Disabled,
+                cookies.clone(),
+            )
         },
         &ctx,
     )
@@ -521,15 +524,13 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
             .document_cookie(&loaded.location)
             .contains("response=two")
     );
-    let mut reloaded = Worker::spawn_command_at(
+    let mut reloaded = Worker::spawn_at(
         executable,
-        Command::Load {
-            location: loaded.location,
-            scripting: ScriptPolicy::Disabled,
+        self::request(
+            Target::Load(loaded.location),
+            ScriptPolicy::Disabled,
             cookies,
-            initiator: None,
-            viewport: None,
-        },
+        ),
         &ctx,
     )
     .unwrap();
@@ -540,20 +541,66 @@ fn form_submission_crosses_a_fresh_worker_and_reload_uses_get() {
         ("POST /submit HTTP/1.1".into(), body.into_bytes())
     );
     assert_eq!(requests[1], ("GET /submit HTTP/1.1".into(), Vec::new()));
-    // The command wire payload preserves ordinary URL-encoded bytes, including Unicode.
-    let encoded = serde_json::to_vec(&Command::Submit {
-        request: FormRequest {
+    // The fetched document crosses to the worker as text, including Unicode.
+    let encoded = serde_json::to_vec(&Command::Render {
+        document: olive_html::net::LoadedDocument {
             location: Location::from_input(&action).unwrap(),
-            body: Some("q=%D7%A9".into()),
+            bytes: "<p>שלום \u{0}\"</p>".as_bytes().to_vec(),
+            status: Some(200),
+            plain_text: false,
         },
-        scripting: ScriptPolicy::Disabled,
+        scripting: false,
         cookies: CookieJar::default(),
-        initiator: None,
         viewport: None,
     })
     .unwrap();
-    assert!(matches!(
-        serde_json::from_slice::<Command>(&encoded).unwrap(),
-        Command::Submit { .. }
-    ));
+    match serde_json::from_slice::<Command>(&encoded).unwrap() {
+        Command::Render { document, .. } => {
+            assert_eq!(document.bytes, "<p>שלום \u{0}\"</p>".as_bytes())
+        }
+        _ => panic!("expected a document"),
+    }
+}
+
+#[test]
+fn a_page_cannot_allocate_past_the_tab_heap_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.html");
+    // A native call allocates without spending VM instructions. The buffer is
+    // within the engine's own size limit but past the heap limit.
+    std::fs::write(
+        &path,
+        "<title>Before</title><script>let held = new ArrayBuffer(1.5 * 2 ** 30); document.title = 'Allocated ' + held.byteLength</script>",
+    )
+    .unwrap();
+    let mut worker = spawn(&path);
+    let Event::Loaded(page) = reply(&mut worker).unwrap() else {
+        panic!("expected the page");
+    };
+    assert_eq!(page.page.title, "Before");
+    assert!(
+        page.scripts
+            .diagnostics
+            .iter()
+            .any(|error| error.message.contains("allocating data block")),
+        "{:?}",
+        page.scripts.diagnostics
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tab_processes_do_not_inherit_the_browsers_environment() {
+    // Cargo gives test processes CARGO_* variables; none may reach a tab.
+    assert!(std::env::vars_os().any(|(name, _)| name.to_string_lossy().starts_with("CARGO")));
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("counter.html");
+    std::fs::write(&page, HTML).unwrap();
+    let mut worker = spawn(&page);
+    loaded(&mut worker);
+    let environment = std::fs::read(format!("/proc/{}/environ", worker.pid().unwrap())).unwrap();
+    for entry in environment.split(|&byte| byte == 0) {
+        let name = String::from_utf8_lossy(entry.split(|&byte| byte == b'=').next().unwrap());
+        assert!(!name.starts_with("CARGO"), "{name} reached the tab process");
+    }
 }

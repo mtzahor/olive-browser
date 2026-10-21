@@ -17,7 +17,7 @@ use crate::gui::{
     render::{ImageTextureCache, Page},
     theme::{DOCUMENT_PAPER, Palette, Theme},
     ui_icons::{self, Icon, IconButton},
-    worker::{Command, Event, ScriptPolicy, Worker},
+    worker::{Command, Event, Request, ScriptPolicy, Target, Worker},
     zoom,
 };
 use crate::net::{CookieJar, Location};
@@ -329,8 +329,8 @@ impl Tab {
                 let requested = request.location.clone();
                 let viewport = shared.viewport(self.zoom);
                 match Worker::spawn(
-                    Command::Submit {
-                        request,
+                    Request {
+                        target: Target::Submit(request),
                         scripting: ScriptPolicy::for_load(
                             shared.profile.data.settings.javascript_by_default,
                             true,
@@ -464,8 +464,8 @@ impl Tab {
             .or_else(|| self.opener.take());
         let viewport = shared.viewport(self.zoom);
         match Worker::spawn(
-            Command::Load {
-                location,
+            Request {
+                target: Target::Load(location),
                 scripting: ScriptPolicy::for_load(
                     scripting,
                     shared.profile.data.settings.javascript_by_default,
@@ -2871,12 +2871,9 @@ mod tests {
         // Readable HTTP error pages are successful navigations too.
         source.status = Some(404);
         source.bytes = b"<!doctype html><title>Not found</title><p>404</p>".to_vec();
-        let (worker, sender) = Worker::mock();
-        assert!(
-            sender
-                .send(Ok(Event::Loaded(Box::new(prepare_page(source).unwrap()))))
-                .is_ok()
-        );
+        let page = prepare_page(source).unwrap();
+        let (worker, sender) = Worker::mock_rendering(&page);
+        assert!(sender.send(Ok(Event::Loaded(Box::new(page)))).is_ok());
         app.pending = Some(PendingPage {
             viewport: None,
             worker,
@@ -2901,14 +2898,9 @@ mod tests {
             (final_url, Navigation::Reload),
             ("https://example.com/first", Navigation::Traverse(0)),
         ] {
-            let (worker, sender) = Worker::mock();
-            assert!(
-                sender
-                    .send(Ok(Event::Loaded(Box::new(
-                        prepare_page(remote_source(url)).unwrap()
-                    ))))
-                    .is_ok()
-            );
+            let page = prepare_page(remote_source(url)).unwrap();
+            let (worker, sender) = Worker::mock_rendering(&page);
+            assert!(sender.send(Ok(Event::Loaded(Box::new(page)))).is_ok());
             app.pending = Some(PendingPage {
                 viewport: None,
                 worker,
@@ -3285,14 +3277,9 @@ mod tests {
         assert_eq!(shared.viewport(100), Some((1000, 700)));
         assert_eq!(shared.viewport(125), Some((800, 560)));
         // The page arrives laid out for that viewport, so no resize follows.
-        let (worker, sender) = Worker::mock();
-        assert!(
-            sender
-                .send(Ok(Event::Loaded(Box::new(
-                    prepare_page(remote_source("https://example.com/second")).unwrap()
-                ))))
-                .is_ok()
-        );
+        let page = prepare_page(remote_source("https://example.com/second")).unwrap();
+        let (worker, sender) = Worker::mock_rendering(&page);
+        assert!(sender.send(Ok(Event::Loaded(Box::new(page)))).is_ok());
         tab.pending = Some(PendingPage {
             viewport: shared.viewport(125),
             worker,
@@ -3311,7 +3298,7 @@ mod tests {
             prepare_page(remote_source("https://example.com/story")).unwrap(),
         );
         tab.loaded.as_mut().unwrap().resources.pending = true;
-        let (mut worker, sender) = Worker::mock();
+        let (mut worker, sender) = Worker::mock_rendering(tab.loaded.as_ref().unwrap());
         worker.await_resource_update();
         tab.worker = Some(worker);
         let update = |html: &[u8], pending: bool| {
@@ -3348,14 +3335,9 @@ mod tests {
             prepare_page(remote_source("https://example.com/first")).unwrap(),
         );
         let mut second = Tab::new(1);
-        let (worker, sender) = Worker::mock();
-        assert!(
-            sender
-                .send(Ok(Event::Loaded(Box::new(
-                    prepare_page(remote_source("https://example.com/second")).unwrap()
-                ))))
-                .is_ok()
-        );
+        let page = prepare_page(remote_source("https://example.com/second")).unwrap();
+        let (worker, sender) = Worker::mock_rendering(&page);
+        assert!(sender.send(Ok(Event::Loaded(Box::new(page)))).is_ok());
         second.pending = Some(PendingPage {
             viewport: None,
             worker,

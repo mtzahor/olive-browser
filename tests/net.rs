@@ -342,6 +342,62 @@ fn requests_time_out_without_waiting_forever() {
 }
 
 #[test]
+fn a_stopped_load_ends_while_its_response_arrives() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let location =
+        Location::from_input(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server = {
+        let stopped = stopped.clone();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 1000000\r\n\r\n<p>",
+            );
+            // Trickle the body, stopping the load while it arrives, until
+            // the client goes away.
+            for chunk in 0..200 {
+                if chunk == 4 {
+                    stopped.store(true, Ordering::Relaxed);
+                }
+                if stream.write_all(&[b'x'; 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        })
+    };
+    let started = std::time::Instant::now();
+    let error = DocumentLoader::with_timeout(Duration::from_secs(20))
+        .unwrap()
+        .with_stop(stopped.clone())
+        .load(location.clone())
+        .err()
+        .unwrap();
+    assert!(error.contains("stopped"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    server.join().unwrap();
+    // A stopped loader does not connect: the closed server would refuse it.
+    let error = DocumentLoader::new()
+        .unwrap()
+        .with_stop(stopped)
+        .load(location)
+        .err()
+        .unwrap();
+    assert_eq!(error, "Loading stopped.");
+}
+
+#[test]
 fn cli_reads_an_http_url_without_executing_scripts() {
     let (location, server) = server(vec![response(
         "200 OK",
