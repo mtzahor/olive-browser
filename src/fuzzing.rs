@@ -151,6 +151,7 @@ pub fn seeds(name: &str) -> Vec<Vec<u8>> {
             "example.com/docs/index.html\n../about?q=olive tree#one",
             "localhost:8000/test\n//other.example/path",
             "https://[::1]:3000/a\nfile:///etc/passwd",
+            "/notes/c:\n../next.html",
         ]),
         #[cfg(feature = "gui")]
         "tab_message" => {

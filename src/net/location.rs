@@ -114,6 +114,9 @@ impl Location {
     /// Resolve a page link, preventing a web page from navigating into local files.
     pub fn resolve(&self, href: &str) -> Result<Self, String> {
         check_input(href)?;
+        if ends_in_drive_letter(&self.0) {
+            return Err("Links from a file named like a drive letter are not supported.".into());
+        }
         let target = Self::from_url(
             self.0
                 .join(href)
@@ -166,6 +169,18 @@ fn check_input(input: &str) -> Result<(), String> {
         return Err("Addresses cannot contain control characters.".into());
     }
     Ok(())
+}
+
+/// A file URL whose last segment is shaped like a Windows drive letter but
+/// is not the first, as in `file:///notes/c:`. `url` keeps that segment when
+/// resolving against it, so the result is wrong and debug builds panic
+/// (servo/rust-url#1114).
+fn ends_in_drive_letter(url: &Url) -> bool {
+    url.scheme() == "file"
+        && url.path().rsplit_once('/').is_some_and(|(parent, last)| {
+            !parent.is_empty()
+                && matches!(last.as_bytes(), [letter, b':'] if letter.is_ascii_alphabetic())
+        })
 }
 
 #[cfg(test)]
@@ -239,6 +254,31 @@ mod tests {
             "file:///secret.js"
         };
         assert!(Location::from_input(local_file).is_ok());
+    }
+
+    #[test]
+    fn links_from_a_file_named_like_a_drive_letter() {
+        let page = |address| Location(Url::parse(address).unwrap());
+        for (address, href) in [
+            ("file:///notes/c:", ".."),
+            ("file:///notes/c:", "../next.html"),
+            ("file:///p/a:", "..#ncoYl"),
+            ("file:///=n:/t:", ".."),
+        ] {
+            assert!(page(address).resolve(href).is_err(), "{address} {href}");
+        }
+        // A drive letter in drive position is the root it names.
+        assert_eq!(
+            page("file:///c:/notes/a.html")
+                .resolve("../b.html")
+                .unwrap()
+                .as_str(),
+            "file:///c:/b.html"
+        );
+        assert_eq!(
+            page("file:///c:").resolve("next.html").unwrap().as_str(),
+            "file:///c:/next.html"
+        );
     }
 
     #[test]
