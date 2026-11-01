@@ -35,7 +35,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          toolchain: nightly
+          # Later nightlies cannot compile zbus (rust-lang/rust#165263). Return
+          # to the floating nightly once a fixed one ships.
+          toolchain: nightly-2026-10-31
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
       # Ten minutes per target nightly; one when a pull request changes them.
       - run: >-
