@@ -345,7 +345,7 @@ Build a release binary with:
 cargo build --release --locked --features gui --bin olive-gui
 ```
 
-On macOS, `./scripts/build-macos-app.sh` creates a local `Olive Browser.app`.
+On macOS, `./scripts/build-macos-app.sh` creates a local `Olive Browser.app`, increments its build number, and replaces `/Applications/Olive Browser.app` (the install may prompt for administrator access).
 See [scripts/README.md](scripts/README.md) for the other maintenance scripts,
 including how to regenerate the app icon.
 

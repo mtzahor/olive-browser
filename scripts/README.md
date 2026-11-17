@@ -2,7 +2,7 @@
 
 | Script | Purpose |
 | --- | --- |
-| `build-macos-app.sh` | Builds a release `olive-gui`, wraps it in `target/Olive Browser.app` and signs it with the hardened runtime: ad hoc, or with the Developer ID named by `OLIVE_SIGNING_IDENTITY` (macOS only). CI runs it in the `package-macos` job. |
+| `build-macos-app.sh` | Builds a release `olive-gui`, wraps it in `target/Olive Browser.app`, increments its macOS build number, and signs it with the hardened runtime: ad hoc, or with the Developer ID named by `OLIVE_SIGNING_IDENTITY` (macOS only). Local runs replace `/Applications/Olive Browser.app`; CI only packages the app under `target/`. Set `OLIVE_APPLICATIONS_DIR` to use another Applications directory. |
 | `run-compatibility.sh` | Builds the `site-report` example and runs the opt-in live website audit. See *Website compatibility suite* in the main README. |
 | `compatibility-report.py` | Audits each ranked domain in `tests/fixtures/compatibility/sites.tsv` in an isolated, time-bounded process and writes a JSON report. `run-compatibility.sh` calls it. |
 | `render-app-icon.swift` | Draws the 1024×1024 app icon, `assets/olive-browser.png`, with Core Graphics. |
