@@ -2,7 +2,7 @@
 name = "olive-browser"
 version = "1.13.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 description = "A lightweight Rust browser with HTML, CSS and JavaScript"
 license = "Apache-2.0"
 repository = "https://github.com/mtzahor/olive-browser"
