@@ -1,6 +1,6 @@
 [package]
 name = "olive-browser"
-version = "1.13.0"
+version = "1.13.1"
 edition = "2024"
 rust-version = "1.95"
 description = "A lightweight Rust browser with HTML, CSS and JavaScript"

@@ -122,4 +122,4 @@ Manual review/testing before a release:
 - Raised the minimum supported Rust version to 1.95 and updated Linux accessibility dependencies to remove the vulnerable `quick-xml 0.38.4` parser.
 - Replaced yanked transitive dependency releases.
 
-No version was bumped, and no tag or release was created in this pass.
+The manifest and lockfile now declare version `1.13.1`. No tag was created and no release was published.
