@@ -93,6 +93,7 @@ These rules are security-relevant because suffix recognition defines cookie scop
 
 - No open Dependabot PRs or pending major-version PRs were found. No dependency major-version bump was adopted.
 - The baseline is now Rust 1.95, matching the already-selected `eframe 0.37.0`; this is a minimum-toolchain change for downstream builders.
+- Updated the parser/CSS and JavaScript MSRV CI jobs, plus the README's version and toolchain requirements, to match the raised package-wide baseline.
 
 ## Validation and manual follow-up
 
