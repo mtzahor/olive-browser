@@ -140,10 +140,9 @@ fn sniff_html_encoding(bytes: &[u8]) -> Option<String> {
                     .find(|(name, _)| name == "content")
                     .and_then(|(_, value)| charset_parameter(value))
             })
+            && Encoding::for_label(value.trim().as_bytes()).is_some()
         {
-            if Encoding::for_label(value.trim().as_bytes()).is_some() {
-                return Some(value.trim().to_owned());
-            }
+            return Some(value.trim().to_owned());
         }
         cursor = start + tag_end + 1;
     }

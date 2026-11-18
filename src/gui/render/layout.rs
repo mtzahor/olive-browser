@@ -1449,7 +1449,7 @@ impl BoxLayout {
         if self.grid {
             let index = self.grid_child_index;
             self.grid_child_index = self.grid_child_index.saturating_add(1);
-            if index > 0 && index % self.grid_columns == 0 {
+            if index > 0 && index.is_multiple_of(self.grid_columns) {
                 self.grid_y += self.grid_row_height + self.grid_row_gap;
                 self.grid_row_height = 0.0;
             }

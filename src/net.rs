@@ -449,46 +449,45 @@ impl DocumentLoader {
                     .cookies
                     .lock()
                     .is_ok_and(|mut cookies| cookies.absorb(&location, value))
+                    && let Ok(mut updates) = self.cookie_updates.lock()
                 {
-                    if let Ok(mut updates) = self.cookie_updates.lock() {
-                        CookieUpdate {
-                            location: location.clone(),
-                            set_cookie: value.to_owned(),
-                            from_script: false,
-                            received_at: now_seconds(),
-                        }
-                        .record(&mut updates);
+                    CookieUpdate {
+                        location: location.clone(),
+                        set_cookie: value.to_owned(),
+                        from_script: false,
+                        received_at: now_seconds(),
                     }
+                    .record(&mut updates);
                 }
             }
-            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                if let Some(target) = response.headers().get(header::LOCATION) {
-                    if redirects == 10 {
-                        return Err("Too many redirects (maximum 10).".into());
-                    }
-                    let href = target.to_str().map_err(|_| "Invalid redirect address")?;
-                    let mut target = location.resolve(href)?;
-                    if body.is_some()
-                        && location.url().scheme() == "https"
-                        && target.url().scheme() != "https"
-                    {
-                        return Err("HTTPS forms cannot redirect to an insecure address.".into());
-                    }
-                    // Historical POST redirects become GET; 307/308 retain the body.
-                    if matches!(response.status().as_u16(), 301..=303) {
-                        body = None;
-                    }
-                    if target.0.fragment().is_none() {
-                        target.0.set_fragment(location.0.fragment());
-                    }
-                    if let Some(document) = document {
-                        check_resource_target(document, &target)?;
-                    }
-                    same_site &= same_cookie_site(&location, &target);
-                    location = target;
-                    redirects += 1;
-                    continue;
+            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308)
+                && let Some(target) = response.headers().get(header::LOCATION)
+            {
+                if redirects == 10 {
+                    return Err("Too many redirects (maximum 10).".into());
                 }
+                let href = target.to_str().map_err(|_| "Invalid redirect address")?;
+                let mut target = location.resolve(href)?;
+                if body.is_some()
+                    && location.url().scheme() == "https"
+                    && target.url().scheme() != "https"
+                {
+                    return Err("HTTPS forms cannot redirect to an insecure address.".into());
+                }
+                // Historical POST redirects become GET; 307/308 retain the body.
+                if matches!(response.status().as_u16(), 301..=303) {
+                    body = None;
+                }
+                if target.0.fragment().is_none() {
+                    target.0.set_fragment(location.0.fragment());
+                }
+                if let Some(document) = document {
+                    check_resource_target(document, &target)?;
+                }
+                same_site &= same_cookie_site(&location, &target);
+                location = target;
+                redirects += 1;
+                continue;
             }
             break response;
         };

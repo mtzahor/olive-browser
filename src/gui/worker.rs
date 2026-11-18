@@ -464,12 +464,12 @@ impl Worker {
                 match event.and_then(|event| self.confine(event)) {
                     Ok(event) => return Some(Ok(event)),
                     Err(error) => {
-                        if let Some(child) = &mut self.child {
-                            if let Ok(Some(status)) = child.try_wait() {
-                                return Some(Err(format!(
-                                    "{error}; worker launcher exited ({status})"
-                                )));
-                            }
+                        if let Some(child) = &mut self.child
+                            && let Ok(Some(status)) = child.try_wait()
+                        {
+                            return Some(Err(format!(
+                                "{error}; worker launcher exited ({status})"
+                            )));
                         }
                         return Some(Err(error));
                     }
@@ -1278,7 +1278,12 @@ pub mod wire_image {
         buffer.write_all(&(height as u32).to_le_bytes())?;
         let start = buffer.bytes.len();
         buffer.bytes.resize(start + image.pixels.len() * 4, 0);
-        for (bytes, pixel) in buffer.bytes[start..].chunks_exact_mut(4).zip(&image.pixels) {
+        for (bytes, pixel) in buffer.bytes[start..]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(&image.pixels)
+        {
             bytes.copy_from_slice(&pixel.to_array());
         }
         Ok(())
@@ -1307,7 +1312,9 @@ pub mod wire_image {
             bytes = rest;
             pictures.push(Arc::new(ColorImage::new(
                 size,
-                data.chunks_exact(4)
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
                     .collect(),
             )));

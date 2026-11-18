@@ -1,6 +1,6 @@
 # Olive Browser 🫒
 
-Olive is a small browser and HTML parser written in Rust. Version **1.13.0** opens
+Olive is a small browser and HTML parser written in Rust. Version **1.13.1** opens
 HTTP/HTTPS websites and local HTML files. It parses HTML
 into an owned DOM, renders bounded PNG, JPEG and WebP images, applies a bounded CSS subset, and
 can run a bounded JavaScript subset, including external classic scripts. Linked
@@ -351,7 +351,7 @@ including how to regenerate the app icon.
 
 ## Parser and command line tools
 
-The parser-only build supports Rust 1.85 and includes the `olive` DOM inspector:
+The parser-only build supports Rust 1.95 and includes the `olive` DOM inspector:
 
 ```sh
 cargo run --locked --bin olive -- examples/hello.html
@@ -371,7 +371,7 @@ cargo run --locked --features net --bin olive -- https://example.com
 The default parser-only build remains offline and lightweight. Networking is
 included automatically in GUI builds and does not change the inert parser API.
 
-The optional JavaScript CLI requires Rust 1.91:
+The optional JavaScript CLI requires Rust 1.95:
 
 ```sh
 cargo run --locked --features js --bin olive-js -- examples/hello.js

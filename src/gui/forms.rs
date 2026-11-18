@@ -118,10 +118,11 @@ impl Forms {
                 if let Some(key) = e.attribute("id") {
                     ids.entry(key).or_insert(id);
                 }
-                if e.name.local.as_str() == "label" && labels.len() < MAX_CONTROLS {
-                    if let Some(key) = e.attribute("for") {
-                        labels.entry(key).or_insert(id);
-                    }
+                if e.name.local.as_str() == "label"
+                    && labels.len() < MAX_CONTROLS
+                    && let Some(key) = e.attribute("for")
+                {
+                    labels.entry(key).or_insert(id);
                 }
             }
         }
