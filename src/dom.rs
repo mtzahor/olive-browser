@@ -209,10 +209,10 @@ impl Document {
                 pending.push((id, depth + 1));
                 child = self.nodes[id.index()].previous_sibling;
             }
-            if let NodeKind::Element(element) = &node.kind {
-                if let Some(fragment) = element.template_contents {
-                    pending.push((fragment, depth + 1));
-                }
+            if let NodeKind::Element(element) = &node.kind
+                && let Some(fragment) = element.template_contents
+            {
+                pending.push((fragment, depth + 1));
             }
         }
         Ok(())

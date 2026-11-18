@@ -507,10 +507,10 @@ fn set_cookie(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<
     let mut host = host(context).borrow_mut();
     host.spend(1, value.len(), 0)?;
     let location = host.cookie_location.clone();
-    if let (Some(cookies), Some(location)) = (host.cookies.as_mut(), location) {
-        if cookies.set_document_cookie(&location, &value) {
-            CookieUpdate::from_script(location, value).record(&mut host.cookie_updates);
-        }
+    if let (Some(cookies), Some(location)) = (host.cookies.as_mut(), location)
+        && cookies.set_document_cookie(&location, &value)
+    {
+        CookieUpdate::from_script(location, value).record(&mut host.cookie_updates);
     }
     Ok(JsValue::undefined())
 }

@@ -104,19 +104,20 @@ impl Page {
             let command_index = position;
             position += 1;
             let command = self.commands[command_index];
-            if let Command::Open(index) = command {
-                if !in_deferred && self.boxes[index].position == Position::Fixed {
-                    let close = matching_close(&self.commands, command_index);
-                    let parent = stack.last().unwrap();
-                    deferred.push((
-                        command_index,
-                        close,
-                        egui::pos2(parent.content_left, parent.cursor),
-                        parent.width,
-                    ));
-                    position = close + 1;
-                    continue;
-                }
+            if let Command::Open(index) = command
+                && !in_deferred
+                && self.boxes[index].position == Position::Fixed
+            {
+                let close = matching_close(&self.commands, command_index);
+                let parent = stack.last().unwrap();
+                deferred.push((
+                    command_index,
+                    close,
+                    egui::pos2(parent.content_left, parent.cursor),
+                    parent.width,
+                ));
+                position = close + 1;
+                continue;
             }
             match command {
                 Command::Anchor(index) => {
@@ -350,27 +351,24 @@ impl Page {
                             WidgetInfo::labeled(Role::Link, ui.is_enabled(), &block.job.text)
                         });
                     }
-                    if response.hovered() {
-                        if let Some(action) = response
+                    if response.hovered()
+                        && let Some(action) = response
                             .hover_pos()
                             .and_then(|pos| action_at(block, &galley, pos - galley_origin))
-                        {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            let href = action.link.and_then(|id| self.links.get(&id)).cloned();
-                            if response.clicked()
-                                || response.clicked_by(egui::PointerButton::Middle)
-                            {
-                                clicked = Some(PageClick {
-                                    form: None,
-                                    new_tab: response.clicked_by(egui::PointerButton::Middle)
-                                        || ui.input(|input| input.modifiers.command),
-                                    target: action.target,
-                                    href: href.clone(),
-                                });
-                            }
-                            if let Some(href) = href {
-                                response.on_hover_text(href);
-                            }
+                    {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        let href = action.link.and_then(|id| self.links.get(&id)).cloned();
+                        if response.clicked() || response.clicked_by(egui::PointerButton::Middle) {
+                            clicked = Some(PageClick {
+                                form: None,
+                                new_tab: response.clicked_by(egui::PointerButton::Middle)
+                                    || ui.input(|input| input.modifiers.command),
+                                target: action.target,
+                                href: href.clone(),
+                            });
+                        }
+                        if let Some(href) = href {
+                            response.on_hover_text(href);
                         }
                     }
                     if let Some(matches) = self.find.blocks.get(index) {
@@ -378,11 +376,10 @@ impl Page {
                         let visual_matches = visual_match_ranges(block, matches);
                         if let Some(target) =
                             paint_matches(ui, &galley, galley_origin, &visual_matches, active)
+                            && self.find_scroll
                         {
-                            if self.find_scroll {
-                                ui.scroll_to_rect(target, Some(egui::Align::Center));
-                                self.find_scroll = false;
-                            }
+                            ui.scroll_to_rect(target, Some(egui::Align::Center));
+                            self.find_scroll = false;
                         }
                     }
                     parent.cursor += rect.height();

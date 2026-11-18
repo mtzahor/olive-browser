@@ -129,11 +129,9 @@ pub(super) fn layout_bidi(block: &mut Block, ui: &egui::Ui, width: f32) -> Arc<e
             && chars
                 .get(end)
                 .is_some_and(|&(_, character)| character == '\n');
-        if has_source_newline {
-            if let Some(format) = formats.get(end) {
-                append_character(&mut visual_job, '\n', format);
-                block.visual_to_logical.push(end);
-            }
+        if has_source_newline && let Some(format) = formats.get(end) {
+            append_character(&mut visual_job, '\n', format);
+            block.visual_to_logical.push(end);
         }
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(line));
         lines.push(galley);

@@ -44,11 +44,11 @@ impl Favicons {
         let Some(host) = Self::host(url) else {
             return;
         };
-        if let Some(path) = self.path(&host) {
-            if let Some(png) = encode(&icon.0) {
-                // A missing icon file only costs the icon after a restart.
-                let _ = storage::write_state(&path, &png);
-            }
+        if let Some(path) = self.path(&host)
+            && let Some(png) = encode(&icon.0)
+        {
+            // A missing icon file only costs the icon after a restart.
+            let _ = storage::write_state(&path, &png);
         }
         let texture = texture(ctx, &host, icon.0.clone());
         self.insert(host, Some(texture));

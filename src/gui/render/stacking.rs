@@ -75,19 +75,19 @@ impl Stacking {
     pub(super) fn opened(&mut self, ui: &egui::Ui, style: &ComputedStyle) {
         let painted = shape_count(ui.ctx(), self.layer);
         self.backdrop.get_or_insert(painted);
-        if style.position != Position::Static {
-            if let Some(&index) = self.open.last() {
-                self.layers[index].background_end = painted;
-            }
+        if style.position != Position::Static
+            && let Some(&index) = self.open.last()
+        {
+            self.layers[index].background_end = painted;
         }
     }
 
     /// Call after a box and its contents have painted.
     pub(super) fn close(&mut self, ui: &egui::Ui, style: &ComputedStyle) {
-        if style.position != Position::Static {
-            if let Some(index) = self.open.pop() {
-                self.layers[index].end = shape_count(ui.ctx(), self.layer);
-            }
+        if style.position != Position::Static
+            && let Some(index) = self.open.pop()
+        {
+            self.layers[index].end = shape_count(ui.ctx(), self.layer);
         }
     }
 

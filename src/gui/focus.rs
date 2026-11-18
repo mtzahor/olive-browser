@@ -163,11 +163,11 @@ impl Content {
         }
         for &id in order.iter().rev() {
             let score = scores[&id];
-            if let Some(parent) = doc.node(id).and_then(|node| node.parent()) {
-                if let Some(total) = scores.get_mut(&parent) {
-                    total.text = total.text.saturating_add(score.text);
-                    total.linked = total.linked.saturating_add(score.linked);
-                }
+            if let Some(parent) = doc.node(id).and_then(|node| node.parent())
+                && let Some(total) = scores.get_mut(&parent)
+            {
+                total.text = total.text.saturating_add(score.text);
+                total.linked = total.linked.saturating_add(score.linked);
             }
         }
         let mut semantic = None;

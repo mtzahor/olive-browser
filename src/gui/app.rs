@@ -177,33 +177,31 @@ impl Tab {
                                         )
                                         .on_hover_text(reason)
                                         .clicked()
-                                    {
-                                        if let Some(path) = rfd::FileDialog::new()
+                                        && let Some(path) = rfd::FileDialog::new()
                                             .add_filter("HTML documents", &["html"])
                                             .set_file_name("olive-reading.html")
                                             .save_file()
-                                        {
-                                            let saved = self
-                                                .loaded
-                                                .as_ref()
-                                                .and_then(|loaded| loaded.reading.export_document())
-                                                .unwrap_or_else(|| Err("Nothing to export".into()))
-                                                .and_then(|html| {
-                                                    crate::gui::focus_export::save(&path, &html)
-                                                        .map_err(|error| error.to_string())
-                                                });
-                                            match saved {
-                                                Ok(()) => {
-                                                    self.alert = Some(format!(
-                                                        "Focus view exported to {}",
-                                                        path.display()
-                                                    ))
-                                                }
-                                                Err(error) => {
-                                                    self.error = Some(format!(
-                                                        "Could not export Focus view: {error}"
-                                                    ))
-                                                }
+                                    {
+                                        let saved = self
+                                            .loaded
+                                            .as_ref()
+                                            .and_then(|loaded| loaded.reading.export_document())
+                                            .unwrap_or_else(|| Err("Nothing to export".into()))
+                                            .and_then(|html| {
+                                                crate::gui::focus_export::save(&path, &html)
+                                                    .map_err(|error| error.to_string())
+                                            });
+                                        match saved {
+                                            Ok(()) => {
+                                                self.alert = Some(format!(
+                                                    "Focus view exported to {}",
+                                                    path.display()
+                                                ))
+                                            }
+                                            Err(error) => {
+                                                self.error = Some(format!(
+                                                    "Could not export Focus view: {error}"
+                                                ))
                                             }
                                         }
                                     }
@@ -368,10 +366,9 @@ impl Tab {
             .loaded
             .as_ref()
             .and_then(|loaded| loaded.location.file_path())
+            && let Some(parent) = path.parent()
         {
-            if let Some(parent) = path.parent() {
-                dialog = dialog.set_directory(parent);
-            }
+            dialog = dialog.set_directory(parent);
         }
         if let Some(path) = dialog.pick_file() {
             self.open_result(Location::from_path(path), Navigation::New, ctx, shared);
@@ -411,14 +408,13 @@ impl Tab {
         if !location.is_remote() || shared.profile.data.settings.javascript_by_default {
             return true;
         }
-        if matches!(navigation, Navigation::Reload) {
-            if let Some(loaded) = self
+        if matches!(navigation, Navigation::Reload)
+            && let Some(loaded) = self
                 .loaded
                 .as_ref()
                 .filter(|page| page.location.same_document(location))
-            {
-                return loaded.scripting_enabled;
-            }
+        {
+            return loaded.scripting_enabled;
         }
         false
     }
@@ -438,25 +434,26 @@ impl Tab {
         self.error = None;
         self.alert = None;
         self.address = location.as_str().to_owned();
-        if !self.crashed && !matches!(navigation, Navigation::Reload) {
-            if let Some(loaded) = self.loaded.as_mut().filter(|loaded| {
+        if !self.crashed
+            && !matches!(navigation, Navigation::Reload)
+            && let Some(loaded) = self.loaded.as_mut().filter(|loaded| {
                 loaded.location.same_document(&location)
                     && (loaded.location != location
                         || matches!(navigation, Navigation::Traverse(_)))
-            }) {
-                loaded.page.scroll_to_fragment(location.fragment());
-                loaded.reading.scroll_to_fragment(location.fragment());
-                // A base href can be independent of the document URL.
-                if loaded.base.same_document(&loaded.location) {
-                    loaded.base = location.clone();
-                }
-                loaded.location = location.clone();
-                shared
-                    .browsing_history
-                    .record(&location, &loaded.page.title);
-                self.history.commit(location, navigation);
-                return;
+            })
+        {
+            loaded.page.scroll_to_fragment(location.fragment());
+            loaded.reading.scroll_to_fragment(location.fragment());
+            // A base href can be independent of the document URL.
+            if loaded.base.same_document(&loaded.location) {
+                loaded.base = location.clone();
             }
+            loaded.location = location.clone();
+            shared
+                .browsing_history
+                .record(&location, &loaded.page.title);
+            self.history.commit(location, navigation);
+            return;
         }
         let requested = location.clone();
         let initiator = self
@@ -580,11 +577,11 @@ impl Tab {
                         .browsing_history
                         .update_title(&loaded.location, &loaded.page.title);
                     self.alert = update.alert;
-                    if self.pending.is_none() {
-                        if let Some(href) = update.link {
-                            let location = loaded.base.resolve(&href);
-                            self.open_result(location, Navigation::New, ctx, shared);
-                        }
+                    if self.pending.is_none()
+                        && let Some(href) = update.link
+                    {
+                        let location = loaded.base.resolve(&href);
+                        self.open_result(location, Navigation::New, ctx, shared);
                     }
                 }
                 if let Some(activation) = activation {
@@ -1703,40 +1700,41 @@ impl Tab {
                                 actions.link = click.href;
                                 actions.link_new_tab = click.new_tab;
                                 actions.form = click.form;
-                                if !click.new_tab && !busy && !self.crashed && scripting_enabled {
-                                    if let (Some(target), Some(worker)) =
+                                if !click.new_tab
+                                    && !busy
+                                    && !self.crashed
+                                    && scripting_enabled
+                                    && let (Some(target), Some(worker)) =
                                         (click.target, self.worker.as_mut())
-                                    {
-                                        if !worker.busy() {
-                                            self.pending_form = actions.form.take();
-                                            if let Err(error) = worker.send(Command::Click {
-                                                click: ClickRequest {
-                                                    target,
-                                                    href: actions.link.take(),
-                                                },
-                                                cookies: CookieJar::default(),
-                                            }) {
-                                                self.error = Some(error);
-                                                self.pending_form = None;
-                                            }
+                                {
+                                    if !worker.busy() {
+                                        self.pending_form = actions.form.take();
+                                        if let Err(error) = worker.send(Command::Click {
+                                            click: ClickRequest {
+                                                target,
+                                                href: actions.link.take(),
+                                            },
+                                            cookies: CookieJar::default(),
+                                        }) {
+                                            self.error = Some(error);
+                                            self.pending_form = None;
                                         }
-                                        actions.link = None;
                                     }
+                                    actions.link = None;
                                 }
                             }
-                            if !focus && css_viewport != self.css_viewport {
-                                if let Some(worker) = self.worker.as_mut() {
-                                    if !worker.busy()
-                                        && worker
-                                            .send(Command::Resize {
-                                                width: css_viewport.0 as f32,
-                                                height: css_viewport.1 as f32,
-                                            })
-                                            .is_ok()
-                                    {
-                                        self.css_viewport = css_viewport;
-                                    }
-                                }
+                            if !focus
+                                && css_viewport != self.css_viewport
+                                && let Some(worker) = self.worker.as_mut()
+                                && !worker.busy()
+                                && worker
+                                    .send(Command::Resize {
+                                        width: css_viewport.0 as f32,
+                                        height: css_viewport.1 as f32,
+                                    })
+                                    .is_ok()
+                            {
+                                self.css_viewport = css_viewport;
                             }
                             if focus && page.truncated {
                                 ui.label(
@@ -1794,25 +1792,23 @@ impl Tab {
         if actions.show_downloads {
             shared.downloads.open = true;
         }
-        if actions.toggle_bookmark {
-            if let Some(loaded) = &self.loaded {
-                if let Err(error) = shared
-                    .profile
-                    .toggle_bookmark(&loaded.location, &loaded.page.title)
-                {
-                    self.error = Some(error);
-                }
-            }
+        if actions.toggle_bookmark
+            && let Some(loaded) = &self.loaded
+            && let Err(error) = shared
+                .profile
+                .toggle_bookmark(&loaded.location, &loaded.page.title)
+        {
+            self.error = Some(error);
         }
-        if actions.download_current {
-            if let Some(loaded) = &self.loaded {
-                shared.downloads.start(
-                    loaded.location.clone(),
-                    shared.profile.data.settings.download_directory.clone(),
-                    shared.services.network.clone(),
-                );
-                shared.downloads.open = true;
-            }
+        if actions.download_current
+            && let Some(loaded) = &self.loaded
+        {
+            shared.downloads.start(
+                loaded.location.clone(),
+                shared.profile.data.settings.download_directory.clone(),
+                shared.services.network.clone(),
+            );
+            shared.downloads.open = true;
         }
         let daily_location = shared.daily_windows.show(
             ctx,

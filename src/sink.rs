@@ -91,11 +91,11 @@ impl Document {
                     Some(sibling) => self.nodes[sibling.index()].previous_sibling,
                     None => self.nodes[parent.index()].last_child,
                 };
-                if let Some(previous) = previous {
-                    if let NodeKind::Text(contents) = &mut self.nodes[previous.index()].kind {
-                        contents.push_str(&text);
-                        return;
-                    }
+                if let Some(previous) = previous
+                    && let NodeKind::Text(contents) = &mut self.nodes[previous.index()].kind
+                {
+                    contents.push_str(&text);
+                    return;
                 }
                 self.allocate(NodeKind::Text(text.to_string()))
             }

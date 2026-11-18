@@ -202,11 +202,11 @@ impl Page {
                     {
                         style.target = Some(id);
                     }
-                    if tag == "a" {
-                        if let Some(href) = element.attribute("href") {
-                            style.link = Some(id);
-                            builder.page.links.insert(id, href.to_owned());
-                        }
+                    if tag == "a"
+                        && let Some(href) = element.attribute("href")
+                    {
+                        style.link = Some(id);
+                        builder.page.links.insert(id, href.to_owned());
                     }
                     if style.css.display == Display::None {
                         continue;
@@ -266,13 +266,13 @@ impl Page {
                         && matches!(tag, "input" | "textarea" | "select" | "button")
                     {
                         builder.flush();
-                        if let Some(&index) = controls.get(&id) {
-                            if builder.page.forms.controls[index].kind != Kind::Hidden {
-                                builder
-                                    .page
-                                    .commands
-                                    .push(Command::Control(index, style.target));
-                            }
+                        if let Some(&index) = controls.get(&id)
+                            && builder.page.forms.controls[index].kind != Kind::Hidden
+                        {
+                            builder
+                                .page
+                                .commands
+                                .push(Command::Control(index, style.target));
                         }
                         if block {
                             builder.close();

@@ -63,35 +63,34 @@ impl DocumentLoader {
                     .cookies
                     .lock()
                     .is_ok_and(|mut jar| jar.absorb(&location, value))
+                    && let Ok(mut updates) = self.cookie_updates.lock()
                 {
-                    if let Ok(mut updates) = self.cookie_updates.lock() {
-                        CookieUpdate {
-                            location: location.clone(),
-                            set_cookie: value.into(),
-                            from_script: false,
-                            received_at: now_seconds(),
-                        }
-                        .record(&mut updates);
+                    CookieUpdate {
+                        location: location.clone(),
+                        set_cookie: value.into(),
+                        from_script: false,
+                        received_at: now_seconds(),
                     }
+                    .record(&mut updates);
                 }
             }
-            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                if let Some(target) = response.headers().get(header::LOCATION) {
-                    if redirects == 10 {
-                        return Err("Too many download redirects (maximum 10).".into());
-                    }
-                    let target = location
-                        .resolve(target.to_str().map_err(|_| "Invalid redirect address")?)?;
-                    // Validate every hop, including HTTP-to-HTTPS-to-HTTP chains.
-                    check_resource_target(&initial, &target)?;
-                    check_resource_target(&location, &target)?;
-                    if let Some(initiator) = &self.cookie_initiator {
-                        check_resource_target(initiator, &target)?;
-                    }
-                    same_site &= same_cookie_site(&location, &target);
-                    location = target;
-                    continue;
+            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308)
+                && let Some(target) = response.headers().get(header::LOCATION)
+            {
+                if redirects == 10 {
+                    return Err("Too many download redirects (maximum 10).".into());
                 }
+                let target =
+                    location.resolve(target.to_str().map_err(|_| "Invalid redirect address")?)?;
+                // Validate every hop, including HTTP-to-HTTPS-to-HTTP chains.
+                check_resource_target(&initial, &target)?;
+                check_resource_target(&location, &target)?;
+                if let Some(initiator) = &self.cookie_initiator {
+                    check_resource_target(initiator, &target)?;
+                }
+                same_site &= same_cookie_site(&location, &target);
+                location = target;
+                continue;
             }
             if !response.status().is_success() {
                 return Err(format!(

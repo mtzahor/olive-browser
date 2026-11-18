@@ -231,15 +231,15 @@ fn export_with_limit(
                         attrs.push((attr(key), value.to_owned()));
                     }
                 }
-                if tag == "a" {
-                    if let Some(href) = element.attribute("href") {
-                        if href.starts_with('#') {
-                            attrs.push((attr("href"), href.to_owned()));
-                        } else if let Ok(location) = base.resolve(href) {
-                            if location.is_remote() || !base.is_remote() {
-                                attrs.push((attr("href"), location.as_str().to_owned()));
-                            }
-                        }
+                if tag == "a"
+                    && let Some(href) = element.attribute("href")
+                {
+                    if href.starts_with('#') {
+                        attrs.push((attr("href"), href.to_owned()));
+                    } else if let Ok(location) = base.resolve(href)
+                        && (location.is_remote() || !base.is_remote())
+                    {
+                        attrs.push((attr("href"), location.as_str().to_owned()));
                     }
                 }
                 serializer.start_elem(name(tag), attrs.iter().map(|(n, v)| (n, v.as_str())))?;

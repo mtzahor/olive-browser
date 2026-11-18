@@ -453,10 +453,10 @@ impl Selector {
                 return false;
             }
             let Some(node) = doc.node(id) else { continue };
-            if let Some(relation) = search {
-                if let Some(next) = related(doc, id, relation, budget) {
-                    pending.push((next, index, search));
-                }
+            if let Some(relation) = search
+                && let Some(next) = related(doc, id, relation, budget)
+            {
+                pending.push((next, index, search));
             }
             let Some(element) = node.as_element() else {
                 continue;

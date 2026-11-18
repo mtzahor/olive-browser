@@ -1210,23 +1210,23 @@ pub(super) fn parse_values(
         let mut solid = None;
         let mut ink = None;
         for _ in 0..3 {
-            if width.is_none() {
-                if let Ok(v) = input.try_parse(border_width) {
-                    width = Some(v);
-                    continue;
-                }
+            if width.is_none()
+                && let Ok(v) = input.try_parse(border_width)
+            {
+                width = Some(v);
+                continue;
             }
-            if solid.is_none() {
-                if let Ok(v) = input.try_parse(border_style) {
-                    solid = Some(v);
-                    continue;
-                }
+            if solid.is_none()
+                && let Ok(v) = input.try_parse(border_style)
+            {
+                solid = Some(v);
+                continue;
             }
-            if ink.is_none() {
-                if let Ok(v) = input.try_parse(color) {
-                    ink = Some(v);
-                    continue;
-                }
+            if ink.is_none()
+                && let Ok(v) = input.try_parse(color)
+            {
+                ink = Some(v);
+                continue;
             }
             break;
         }
@@ -1279,17 +1279,17 @@ pub(super) fn parse_values(
         let mut direction = None;
         let mut wrap = None;
         for _ in 0..2 {
-            if direction.is_none() {
-                if let Ok(value) = input.try_parse(|input| single(P::FlexDirection, input)) {
-                    direction = Some(value);
-                    continue;
-                }
+            if direction.is_none()
+                && let Ok(value) = input.try_parse(|input| single(P::FlexDirection, input))
+            {
+                direction = Some(value);
+                continue;
             }
-            if wrap.is_none() {
-                if let Ok(value) = input.try_parse(|input| single(P::FlexWrap, input)) {
-                    wrap = Some(value);
-                    continue;
-                }
+            if wrap.is_none()
+                && let Ok(value) = input.try_parse(|input| single(P::FlexWrap, input))
+            {
+                wrap = Some(value);
+                continue;
             }
             break;
         }
@@ -1369,17 +1369,17 @@ fn font(input: &mut Parser<'_>) -> Result<Vec<(Property, Value)>, Error> {
         {
             continue;
         }
-        if italic.is_none() {
-            if let Ok(value) = input.try_parse(|input| single(P::Italic, input)) {
-                italic = Some(value);
-                continue;
-            }
+        if italic.is_none()
+            && let Ok(value) = input.try_parse(|input| single(P::Italic, input))
+        {
+            italic = Some(value);
+            continue;
         }
-        if weight.is_none() {
-            if let Ok(value) = input.try_parse(|input| single(P::FontWeight, input)) {
-                weight = Some(value);
-                continue;
-            }
+        if weight.is_none()
+            && let Ok(value) = input.try_parse(|input| single(P::FontWeight, input))
+        {
+            weight = Some(value);
+            continue;
         }
         // Small caps and font stretching have no effect on the bundled faces.
         if input
